@@ -2,6 +2,12 @@
 
 This repository is designed for projects maintained primarily by autonomous coding agents. Humans own product direction and final merge approval. Agents own implementation and verification inside approved boundaries.
 
+## ChatGPT / orchestration entrypoint
+
+For product brainstorming, GitHub ticket orchestration, `/challenge`, `/build`, `/fix`, workflow-state interpretation, or continuing Red Light RNG from a fresh ChatGPT conversation, read `docs/CHATGPT.md` first, then `docs/WORKFLOW.md` and `AUTOMATIONS.md` as relevant.
+
+The repository and current GitHub state are authoritative. Do not rely on old chat context when the repository can answer the question.
+
 ## Required read order
 
 Before modifying code, read:
