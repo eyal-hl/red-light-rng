@@ -85,7 +85,9 @@ Do not let arbitrary PR comments trigger code edits. Reviewer and QA report find
 
 Fixer only acts on verified findings prefixed `[AI-REVIEW]`, `[AI-QA]`, or `[AI-SECURITY]`.
 
-After two autonomous repair rounds, stop and report `needs-human`.
+Each `/fix` authorizes one repair pass and then stops. There is no fixed lifetime round limit: the trusted human may dispatch another `/fix` whenever another repair pass is warranted. The Fixer must never self-dispatch or recursively continue repairing without another trusted human command.
+
+If a finding cannot be safely repaired, report `needs-human` rather than guessing or pretending missing physical-device evidence is resolved.
 
 ## Trigger hygiene
 
@@ -112,6 +114,6 @@ For the current phase:
 
 1. Human reviews/reconciles proposal feedback from Disagreer.
 2. Human approves the ticket before `/build`.
-3. Human dispatches `/fix` for verified repair findings when necessary.
+3. Human dispatches each `/fix` repair pass when necessary.
 4. Human performs required real-device field validation.
 5. Human merges the final PR.
