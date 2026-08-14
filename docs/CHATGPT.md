@@ -6,7 +6,7 @@ The repository is the durable source of truth. Chat history and model memory are
 
 ## Purpose
 
-ChatGPT owns product conversation, ticket orchestration, and human-facing workflow coordination. Cursor automations own proposal challenge, implementation, independent code review, product QA, and bounded repairs.
+ChatGPT owns product conversation, ticket orchestration, and human-facing workflow coordination. Cursor automations own proposal challenge, implementation, independent code review, product QA, and explicitly dispatched repairs.
 
 The normal flow is:
 
@@ -169,12 +169,12 @@ When the human asks to fix an autonomous PR:
 2. verify there are actionable trusted workflow findings;
 3. verify the PR is open and autonomous;
 4. post an exact top-level `/fix` PR conversation comment;
-5. let the Fixer update the existing PR branch;
+5. let the Fixer perform exactly one repair pass on the existing PR branch;
 6. expect Reviewer and QA to rerun on the push.
 
 Do not translate arbitrary comments into repair instructions. The repo-owned Fixer prompt defines trusted finding prefixes.
 
-Default repair budget is two autonomous rounds, then `needs-human`.
+There is no fixed lifetime repair-round cap. If another repair pass is useful after the new Reviewer/QA results or another physical-device test, the human can explicitly dispatch another `/fix`. Never create an automatic repair loop or let the Fixer self-dispatch. Use `needs-human` when a blocker requires human judgment or device evidence rather than another speculative code pass.
 
 ## `review PR #N`
 
