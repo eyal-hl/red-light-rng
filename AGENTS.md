@@ -8,10 +8,16 @@ Before modifying code, read:
 
 1. `AGENTS.md`
 2. `docs/product/VISION.md`
-3. `docs/product/ARCHITECTURE.md`
-4. `docs/product/DECISIONS.md`
-5. the originating GitHub issue and any linked spec under `docs/specs/`
-6. relevant existing code and tests
+3. `docs/product/CONCEPTS.md`
+4. `docs/product/USER_FLOW.md`
+5. `docs/product/RUN_ANALYSIS.md`
+6. `docs/product/ROADMAP.md`
+7. `docs/product/ARCHITECTURE.md`
+8. `docs/product/DECISIONS.md`
+9. the originating GitHub issue and any linked spec under `docs/specs/`
+10. relevant existing code and tests
+
+The product docs are canonical context, but the approved issue defines the scope of the current implementation. Do not opportunistically implement future-roadmap features merely because they are documented.
 
 If sources conflict, prefer the most specific approved source and surface the conflict instead of inventing product behavior.
 
@@ -26,6 +32,9 @@ If sources conflict, prefer the most specific approved source and surface the co
 - Prefer boring, maintainable solutions over clever ones.
 - Treat lint, typecheck, tests, and build failures as defects.
 - For user-facing changes, verify actual behavior in the running application when practical.
+- Preserve raw run/location source data when changing derived analytics unless an approved decision explicitly changes that policy.
+- Do not introduce accounts, cloud services, social features, or a backend unless an approved ticket explicitly changes the local-first product boundary.
+- Do not turn the active-run experience into an interaction-heavy UI; phone-in-pocket behavior is a product invariant.
 
 ## Completion checklist
 
@@ -36,13 +45,13 @@ Before presenting implementation as complete:
 3. Run the repository validation commands below.
 4. Start relevant application/services when practical.
 5. Exercise primary user-facing flows for UI changes.
-6. Inspect runtime/browser errors where applicable.
+6. Inspect runtime/device errors where applicable.
 7. Explicitly report anything incomplete, blocked, or uncertain.
 8. Ask the `verifier` subagent for an independent final check before opening/updating the PR.
 
 ## Project commands
 
-Replace these in every project created from Agent Foundry:
+These remain intentionally unresolved until the mobile stack is selected in an approved architecture decision:
 
 - Install: `TODO_INSTALL_COMMAND`
 - Lint: `TODO_LINT_COMMAND`
@@ -51,9 +60,9 @@ Replace these in every project created from Agent Foundry:
 - Build: `TODO_BUILD_COMMAND`
 - Start: `TODO_START_COMMAND`
 - Local app URL: `TODO_APP_URL`
-- Test account/data setup: `TODO_TEST_SETUP`
+- Test account/data setup: `N/A` for the current account-free product unless this changes later
 
-If a command does not apply, replace it with `N/A`.
+Once the stack is chosen, replace every applicable `TODO_*` value in the same setup change. If a command does not apply, replace it with `N/A`.
 
 ## Safety boundaries
 
