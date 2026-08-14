@@ -1,65 +1,41 @@
-# Agent Foundry
+# Red Light RNG
 
-Reusable base repository for side projects developed primarily through autonomous coding agents.
+A personal, local-first mobile app that treats repeated real-world routes like speedruns.
 
-The intended workflow is:
+Record a route, repeat it, and compare each attempt against your own history using speedrunning concepts such as Personal Bests, Gold splits, Sum of Best, ghosts, and continuous route deltas.
 
-**brainstorm with ChatGPT → durable GitHub ticket → human approval → Cursor Cloud Agent implementation → independent review/QA → human merge**
+The app is intentionally designed for **phone-in-pocket use**. Before leaving, the user arms a saved route. Red Light RNG detects the actual start, checkpoints, and finish automatically, records the raw GPS trace, and saves the interesting analysis for afterward.
 
-This repository contains no product-specific code. Create a new repository from it for each app idea, then fill in the product documentation and Cloud Agent environment for that project.
+## Why the name?
 
-## Principles
+Because sometimes you are on PB pace and the next traffic light simply decides otherwise.
 
-- Product direction stays human-owned.
-- ChatGPT can act as the product/specification layer and write structured GitHub issues directly.
-- GitHub is the durable source of truth for approved work.
-- Cursor Cloud Agents implement approved tickets and open PRs.
-- Review and QA are independent from the implementing agent.
-- Autonomous agents never merge to the default branch.
-- Every project created from this base should remain understandable without access to the chat where it was designed.
+## Product principles
 
-## Repository layout
+- **Personal-use first.** No accounts, social graph, backend, or cloud required initially.
+- **Local-first.** Runs, routes, telemetry, and analytics live on the device.
+- **Phone in pocket.** An active run must not depend on looking at or interacting with the screen.
+- **Preserve raw telemetry.** Historical runs should become more useful as the analysis improves.
+- **Speedrun the course, not the app.** Timing starts and ends on route events, not button presses.
+- **Compare like with like.** Transportation modes and materially different route variants should not share a PB.
+- **Analysis after the run.** The fun is discovering where time was gained or lost.
 
-```text
-AGENTS.md                  Global instructions for all coding agents
-AUTOMATIONS.md             Cursor Automation setup and trigger design
-CLOUD_ENVIRONMENT.md       Cloud Agent environment checklist
+## Canonical product documentation
 
-docs/
-  WORKFLOW.md              End-to-end product → engineering workflow
-  PROJECT_SETUP.md         Checklist for creating a project from this base
-  product/
-    VISION.md              What the product is and is not
-    ARCHITECTURE.md        Technical boundaries and project conventions
-    DECISIONS.md           Durable product/architecture decisions
-  specs/
-    README.md              Guidance for feature specifications
+`docs/product/` is the source of truth for product behavior:
 
-.cursor/
-  agents/                  Reusable specialist agents
-  rules/                   Always-on engineering rules
+- `VISION.md` — product vision, goals, non-goals, and core loop
+- `CONCEPTS.md` — canonical speedrunning/domain terminology
+- `USER_FLOW.md` — user journeys and run lifecycle
+- `RUN_ANALYSIS.md` — timing, splits, ghosts, deltas, and post-run insights
+- `ROADMAP.md` — staged V0.1 → V0.3 roadmap
+- `DECISIONS.md` — durable product decisions
+- `ARCHITECTURE.md` — technical constraints and intentionally undecided choices
 
-automation-prompts/        Source-controlled prompts copied into Cursor Automations
-.github/                   Issue and PR templates
-scripts/create-labels.sh   Optional GitHub label bootstrap
-```
+## Development workflow
 
-## Start a new project
+This project uses the Agent Foundry workflow:
 
-1. Create a new repository from this template/base.
-2. Fill in `docs/product/VISION.md`, `ARCHITECTURE.md`, and `DECISIONS.md`.
-3. Replace every `TODO_*` placeholder in `AGENTS.md`.
-4. Configure and verify the Cursor Cloud Agent environment.
-5. Create the Cursor Automations described in `AUTOMATIONS.md`.
-6. Use a tiny first ticket as an end-to-end dry run before trusting the flow with large changes.
+**brainstorm with ChatGPT → GitHub proposal → human approval → Cursor implementation → independent review/QA → human merge**
 
-See `docs/PROJECT_SETUP.md` for the full checklist.
-
-## Human gates
-
-The default workflow intentionally keeps two human decisions:
-
-1. **Approve implementation** — after reviewing a GitHub ticket/spec.
-2. **Merge the PR** — after implementation, review, and QA.
-
-Everything between those gates can become increasingly autonomous as the project proves reliable.
+Implementation work should begin only from an approved GitHub issue/spec. Product decisions made during brainstorming should be reflected in the canonical docs when they are broader than a single ticket.
