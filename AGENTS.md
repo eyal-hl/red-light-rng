@@ -101,6 +101,6 @@ Use these prefixes only for verified actionable findings:
 
 Style preferences and optional refactors should not block a PR.
 
-## Autonomous repair budget
+## Repair dispatch
 
-Default maximum: **2 autonomous repair rounds per PR**. If further repair is required, stop automation and report `needs-human` with a concise blocker summary.
+There is no fixed lifetime limit on repair passes. Every Fixer pass requires a new explicit trusted `/fix` command from the human owner. The Fixer must perform one pass and stop; it must never self-dispatch or create an autonomous repair loop. If a blocker cannot be repaired safely, report `needs-human` with a concise explanation.
