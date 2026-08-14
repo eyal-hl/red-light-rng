@@ -1,6 +1,6 @@
 import * as TaskManager from 'expo-task-manager';
 
-import { locationSampleStore, trackingSessionService } from '../app-context';
+import { trackingSessionService } from '../app-context';
 import { BACKGROUND_LOCATION_TASK } from './background-location-task';
 
 type LocationTaskLocation = {
@@ -28,12 +28,5 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     return;
   }
 
-  const sessionId =
-    (await locationSampleStore.getActiveSessionId()) ??
-    (await locationSampleStore.getLatestSessionId());
-  if (!sessionId) {
-    return;
-  }
-
-  await trackingSessionService.recordFixes(sessionId, locations);
+  await trackingSessionService.recordActiveSessionFixes(locations);
 });

@@ -18,7 +18,20 @@ export class TrackingSessionService {
     await this.store.stopSession(sessionId, nowMs);
   }
 
+  async recordActiveSessionFixes(fixes: RawLocationFix[]): Promise<number> {
+    const sessionId = await this.store.getActiveSessionId();
+    if (!sessionId) {
+      return 0;
+    }
+    return this.recordFixes(sessionId, fixes);
+  }
+
   async recordFixes(sessionId: string, fixes: RawLocationFix[]): Promise<number> {
+    const activeSessionId = await this.store.getActiveSessionId();
+    if (activeSessionId !== sessionId) {
+      return 0;
+    }
+
     const samples = fixes
       .map((fix) => toLocationSample(sessionId, this.createSampleId(), fix))
       .filter((sample) => sample != null);

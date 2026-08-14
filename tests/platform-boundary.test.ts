@@ -29,4 +29,10 @@ describe('platform boundary', () => {
     assert.match(adapter, /expo-location/);
     assert.match(adapter, /foregroundService/);
   });
+
+  it('records background fixes only onto the active session', () => {
+    const source = readFileSync('src/tracking/register-background-location-task.ts', 'utf8');
+    assert.match(source, /recordActiveSessionFixes/);
+    assert.doesNotMatch(source, /getLatestSessionId/);
+  });
 });

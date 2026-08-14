@@ -71,4 +71,17 @@ export class MemoryLocationSampleStore implements LocationSampleStore {
   async countSamples(sessionId: string): Promise<number> {
     return this.sessions.get(sessionId)?.samples.length ?? 0;
   }
+
+  peekSession(sessionId: string): TrackingSessionRecord | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return undefined;
+    }
+    return {
+      id: session.id,
+      startedAtMs: session.startedAtMs,
+      stoppedAtMs: session.stoppedAtMs,
+      isActive: session.isActive,
+    };
+  }
 }
