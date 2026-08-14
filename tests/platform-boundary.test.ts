@@ -35,4 +35,16 @@ describe('platform boundary', () => {
     assert.match(source, /recordActiveSessionFixes/);
     assert.doesNotMatch(source, /getLatestSessionId/);
   });
+
+  it('declares RECEIVE_BOOT_COMPLETED so Expo TaskManager can schedule persistable jobs', () => {
+    const appConfig = JSON.parse(readFileSync('app.json', 'utf8')) as {
+      expo: { android: { permissions: string[] } };
+    };
+    const permissions = appConfig.expo.android.permissions;
+
+    assert.ok(
+      permissions.includes('android.permission.RECEIVE_BOOT_COMPLETED'),
+      'Android app config must declare RECEIVE_BOOT_COMPLETED. Expo TaskManager schedules persistable JobScheduler work, and Android throws IllegalArgumentException without this permission.',
+    );
+  });
 });
