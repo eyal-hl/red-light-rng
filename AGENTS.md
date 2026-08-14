@@ -54,18 +54,14 @@ Before presenting implementation as complete:
 
 ## Project commands
 
-These remain intentionally unresolved until the first mobile implementation initializes the project tooling:
-
-- Install: `TODO_INSTALL_COMMAND`
-- Lint: `TODO_LINT_COMMAND`
-- Typecheck: `TODO_TYPECHECK_COMMAND`
-- Test: `TODO_TEST_COMMAND`
-- Build: `TODO_BUILD_COMMAND`
-- Start: `TODO_START_COMMAND`
-- Local app URL: `TODO_APP_URL`
-- Test account/data setup: `N/A` for the current account-free product unless this changes later
-
-The first setup/implementation ticket must replace every applicable `TODO_*` value. If a command does not apply, replace it with `N/A` and explain why.
+- Install: `npm install`
+- Lint: `npm run lint`
+- Typecheck: `npm run typecheck`
+- Test: `npm test` (Node test runner via `tsx` for shared TypeScript modules; does not require a device)
+- Build: `npm run build` (JS bundles via `expo export` for Android and iOS). Native development builds: `npx expo run:android` or `npx expo run:ios` (iOS requires macOS + Xcode).
+- Start: `npm start` (Expo Metro bundler)
+- Local app URL: Metro defaults to `http://localhost:8081`. This is a native Expo app, not a web product; open it with an Android/iOS development build rather than a browser. Expo Go is not valid evidence for background location.
+- Test account/data setup: `N/A` — the product is local-first and account-free. The spike stores traces in on-device SQLite (`red-light-rng.db`).
 
 ## Safety boundaries
 
