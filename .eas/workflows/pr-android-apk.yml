@@ -1,0 +1,22 @@
+name: Android PR APK
+
+on:
+  pull_request:
+    branches: ['*']
+
+jobs:
+  build_android:
+    name: Build Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview
+
+  comment:
+    name: Post Android APK to PR
+    needs: [build_android]
+    type: github-comment
+    params:
+      message: '📱 Android APK ready for physical-device testing.'
+      build_ids:
+        - ${{ needs.build_android.outputs.build_id }}
