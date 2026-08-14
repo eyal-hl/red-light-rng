@@ -1,25 +1,158 @@
 # Product & Architecture Decisions
 
-Record durable decisions that future agents should not silently revisit.
+Durable decisions that future work should not silently revisit.
 
-Use this lightweight format:
+## DEC-001 — Local-first initial product
 
-```markdown
-## DEC-001 — Short title
-
-**Status:** Accepted
-**Date:** YYYY-MM-DD
+**Status:** Accepted  
+**Date:** 2026-08-14
 
 ### Decision
-What was decided.
+Initial versions store product data locally on the device and do not require a backend, account system, or cloud synchronization.
 
 ### Why
-Why this choice was made.
+This is a personal-use project. A backend would add complexity without improving the core experiment: whether repeated-route speedrunning is useful and fun.
 
 ### Consequences
-Important tradeoffs / implications.
-```
+- Core recording and analytics must work offline.
+- Multi-device sync, sharing, and remote backups are out of scope initially.
+- The persistence choice should support substantial historical GPS telemetry locally.
 
 ---
 
-No project-specific decisions have been recorded yet.
+## DEC-002 — No meaningful live-run UX
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+The phone is expected to remain in the user's pocket during an attempt. The active-run screen exists primarily for status/cancellation, not for live timing, navigation, or interaction.
+
+### Why
+The initial use case is travel by electric scooter. The product should not require looking at or operating the phone while moving.
+
+### Consequences
+- Start, splits, and finish must be detected automatically after arming.
+- The main product reward happens in post-run analysis.
+- Features must not rely on active-run button presses.
+
+---
+
+## DEC-003 — Armed automatic recording before passive detection
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+V0.1 requires the user to select/arm a route before travel. Arming begins observation but does not begin official timing. Actual start and finish are detected from route/location behavior.
+
+### Why
+This dramatically reduces ambiguity while preserving the important phone-in-pocket experience. Fully passive route recognition can come later after real data exists.
+
+### Consequences
+- Run lifecycle includes an `armed/waiting for start` state.
+- Arming time is not the run start time.
+- Fully automatic route recognition belongs to a later milestone.
+
+---
+
+## DEC-004 — Preserve raw location telemetry
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+Store raw timestamped GPS/location samples for historical runs rather than only storing aggregate timing results.
+
+### Why
+The most valuable analytics have not all been designed yet. Preserving telemetry allows new splits, moved checkpoints, continuous deltas, stop analysis, and future algorithms to be applied to old attempts.
+
+### Consequences
+- Historical derived values may be recalculated.
+- Schema design should treat raw telemetry as durable source data.
+- Storage efficiency matters, but premature deletion of source telemetry is undesirable for this personal project.
+
+---
+
+## DEC-005 — Splits can be retroactive
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+A user may add, remove, or move geographic checkpoints after runs already exist. When enough raw telemetry exists, historical split results should be recalculated for those attempts.
+
+### Why
+Users should not need to perfectly design a course before collecting useful data. Repeated travel should teach the product where interesting splits belong.
+
+### Consequences
+- Checkpoint definitions are separate from immutable raw run samples.
+- Split results are derived data, not the only source of truth.
+
+---
+
+## DEC-006 — Transportation modes have separate competitive histories
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+Scooter, bicycle, walking, running, and other modes must not compete against one shared PB for the same geometry.
+
+### Why
+They are fundamentally different categories, analogous to separate speedrun categories.
+
+### Consequences
+- Transportation mode is part of route/category identity.
+- PBs, Golds, rankings, and Sum of Best are calculated within the relevant category.
+
+---
+
+## DEC-007 — Materially different courses should not share a PB
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+A materially deviated course should not silently count against the same route PB. V0.1 may mark such attempts invalid/unranked; later versions may learn recurring route variants as separate categories.
+
+### Why
+Comparing different courses undermines the speedrun model.
+
+### Consequences
+- Course matching/tolerance is part of run validity.
+- Route variants are explicitly a later product feature.
+
+---
+
+## DEC-008 — Deterministic analytics before AI analytics
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+Initial post-run insights should be computed from deterministic rules/statistics. An LLM is not required for explanations such as biggest time loss, new Golds, or stopped-time effects.
+
+### Why
+The data is structured and the useful first insights are deterministic. AI would add cost and complexity without being necessary for the core experience.
+
+### Consequences
+- Analytics should expose structured facts that could later feed richer narration if desired.
+
+---
+
+## DEC-009 — Human gates remain before build and merge
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+The autonomous development workflow keeps two explicit human gates: approve the product ticket before Cursor implementation begins, and approve/merge the resulting PR after automated review and QA.
+
+### Why
+The goal is autonomous execution, not autonomous product direction or uncontrolled merging.
+
+### Consequences
+- Brainstorming in ChatGPT can become a GitHub proposal without immediately triggering code.
+- An explicit approval action/label/comment is required to start implementation.
+- Automated agents must not merge to the default branch.
