@@ -156,3 +156,43 @@ The goal is autonomous execution, not autonomous product direction or uncontroll
 - Brainstorming in ChatGPT can become a GitHub proposal without immediately triggering code.
 - An explicit approval action/label/comment is required to start implementation.
 - Automated agents must not merge to the default branch.
+
+---
+
+## DEC-010 — React Native + Expo cross-platform foundation
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+Red Light RNG will target both Android and iOS using React Native + Expo + TypeScript. Real background-location work will use Expo Development Builds. Initial local persistence will use `expo-sqlite`; initial background location will use `expo-location` and `expo-task-manager`. Platform-specific gaps may be implemented through Expo Modules API using Kotlin/Swift.
+
+### Why
+The product needs to run on both Android and iOS while sharing the majority of UI, domain, and analytics logic. Expo provides a practical shared foundation for location, task management, and SQLite while preserving an escape hatch to native code for the background-location behavior that is most likely to differ by OS.
+
+### Consequences
+- Android and iOS are both first-class targets from the beginning.
+- Expo Go must not be used as proof that background tracking works; real development builds and physical devices are required.
+- Shared TypeScript should own route/timing/analytics logic where practical.
+- OS-specific tracking behavior should remain behind a narrow adapter/interface.
+- The map renderer remains an independent TBD decision.
+- Replacing this stack should require an explicit architecture decision rather than happening inside unrelated feature work.
+
+---
+
+## DEC-011 — Validate background tracking before building the product around it
+
+**Status:** Accepted  
+**Date:** 2026-08-14
+
+### Decision
+The first engineering implementation will be a minimal technical spike that records raw location points while the phone is locked/backgrounded and validates the behavior on both a real Android device and a real iPhone.
+
+### Why
+Reliable background telemetry is the highest-risk technical assumption in the entire product. Discovering a platform limitation after building route creation, splits, PBs, and analytics would create avoidable rework.
+
+### Consequences
+- The first ticket is intentionally not a polished product feature.
+- It should expose enough raw telemetry to judge quality: timestamp, coordinates, accuracy, speed, and heading/course when available.
+- Success requires real-device evidence from both platforms.
+- Major route/timing UI work should wait until this assumption has been validated.
