@@ -97,7 +97,9 @@ Cloud agents must distinguish between what they actually validated and what stil
 
 ### Repair
 
-Repairs require an explicit trusted `/fix` dispatch. They are bounded to two autonomous rounds. If the PR still cannot pass, stop and request human judgment.
+Repairs require an explicit trusted `/fix` dispatch. Each `/fix` authorizes one repair pass and then stops. There is no fixed lifetime repair limit; the human may dispatch another `/fix` after reviewing the new findings whenever another pass is useful.
+
+The Fixer must never self-dispatch or create a recursive repair loop. If a blocker cannot be repaired safely or requires physical-device evidence, it reports `needs-human` and waits for human judgment/evidence rather than guessing.
 
 ### Physical validation
 
@@ -118,5 +120,5 @@ Convenient conversational commands:
 - `update #12 with ...` → edit the durable ticket.
 - `reconcile #12` → incorporate useful Disagreer feedback into the proposal.
 - `approve #12` → record approval and dispatch `/build`.
-- `fix PR #34` → dispatch a trusted repair after reviewing findings.
+- `fix PR #34` → dispatch one trusted repair pass after reviewing findings; repeat later if another pass is needed.
 - `review PR #34` → independently inspect the PR/diff/discussion before merge.
