@@ -17,7 +17,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.redlightrng.app",
       "infoPlist": {
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location"
+        ]
       }
     },
     "android": {
@@ -53,6 +55,12 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "591e4fd5-40ef-4318-aaa9-d3117cfe828c"
+      }
+    },
+    "owner": "eyalhls-team"
   }
 }
