@@ -13,9 +13,10 @@ Before modifying code, read:
 5. `docs/product/RUN_ANALYSIS.md`
 6. `docs/product/ROADMAP.md`
 7. `docs/product/ARCHITECTURE.md`
-8. `docs/product/DECISIONS.md`
-9. the originating GitHub issue and any linked spec under `docs/specs/`
-10. relevant existing code and tests
+8. `docs/product/PLATFORM_SUPPORT.md`
+9. `docs/product/DECISIONS.md`
+10. the originating GitHub issue and any linked spec under `docs/specs/`
+11. relevant existing code and tests
 
 The product docs are canonical context, but the approved issue defines the scope of the current implementation. Do not opportunistically implement future-roadmap features merely because they are documented.
 
@@ -35,6 +36,8 @@ If sources conflict, prefer the most specific approved source and surface the co
 - Preserve raw run/location source data when changing derived analytics unless an approved decision explicitly changes that policy.
 - Do not introduce accounts, cloud services, social features, or a backend unless an approved ticket explicitly changes the local-first product boundary.
 - Do not turn the active-run experience into an interaction-heavy UI; phone-in-pocket behavior is a product invariant.
+- Keep platform-sensitive background location behind the boundary defined in `docs/product/PLATFORM_SUPPORT.md`; do not leak Android-specific assumptions into shared route/timing/analytics code.
+- Do not claim iOS background tracking is validated until a real iPhone field test has been performed.
 
 ## Completion checklist
 
@@ -51,7 +54,7 @@ Before presenting implementation as complete:
 
 ## Project commands
 
-These remain intentionally unresolved until the mobile stack is selected in an approved architecture decision:
+These remain intentionally unresolved until the first mobile implementation initializes the project tooling:
 
 - Install: `TODO_INSTALL_COMMAND`
 - Lint: `TODO_LINT_COMMAND`
@@ -62,7 +65,7 @@ These remain intentionally unresolved until the mobile stack is selected in an a
 - Local app URL: `TODO_APP_URL`
 - Test account/data setup: `N/A` for the current account-free product unless this changes later
 
-Once the stack is chosen, replace every applicable `TODO_*` value in the same setup change. If a command does not apply, replace it with `N/A`.
+The first setup/implementation ticket must replace every applicable `TODO_*` value. If a command does not apply, replace it with `N/A` and explain why.
 
 ## Safety boundaries
 
