@@ -1,53 +1,95 @@
 # Cursor Automations
 
-Cursor Automations are configured in Cursor. The prompts in `automation-prompts/` are source-controlled so behavior remains reviewable and portable across projects.
+Cursor owns triggers, models, and tool permissions. This repository owns agent behavior.
 
-## Recommended v1
+The files under `automation-prompts/` are the authoritative role instructions for Red Light RNG. Cursor automation prompts should stay deliberately small and reusable across multiple repositories: determine which repository triggered the run, load the matching role file from a trusted ref, then execute it.
 
-| Automation | Default model | Trigger | Writes code? |
+This keeps Red Light RNG-specific mobile/background-location caveats in source control without requiring a separate full set of Cursor automations for every project.
+
+## Recommended roles
+
+| Automation | Suggested model | Trigger | Writes code? |
 |---|---|---|---|
-| Developer | Grok 4.6, high effort | issue comment `/build` | Yes |
-| Independent Reviewer | Claude Sonnet 5 | PR opened + PR pushed | No |
-| Product QA | Grok 4.6, medium/high | PR opened + PR pushed | No |
-| Fixer | Grok 4.6, high effort | PR comment `/fix` | Yes |
+| Disagreer | strong independent reasoning model from a different family | issue opened | No |
+| Developer | Grok 4.6, high effort | issue comment exactly `/build` | Yes |
+| Independent Reviewer | Claude Sonnet 5 | draft opened + PR opened + PR pushed | No |
+| Product QA | Grok 4.6, medium/high | draft opened + PR opened + PR pushed | No |
+| Fixer | Grok 4.6, high effort | top-level PR comment exactly `/fix` | Yes |
 
-Model availability and pricing change. These are defaults, not architectural requirements. The important properties are role separation, fresh context for independent gates, and bounded repair loops.
+## Authoritative prompt loading
+
+The automation must never trust role instructions from unreviewed code.
+
+- **Issue-triggered roles** (`disagreer`, `developer`) load `automation-prompts/<role>.md` from the repository **default branch**.
+- **PR-triggered roles** (`reviewer`, `qa`, `fixer`) load `automation-prompts/<role>.md` from the PR **base branch**.
+- Never load the authoritative role prompt from the PR head/source branch.
+- If the trusted role file does not exist, stop without taking action.
+
+A PR may propose changing an automation prompt, but that new prompt becomes authoritative only after a human merges it.
+
+This matters especially for Reviewer/QA/Fixer: an implementation branch must not be able to weaken the gate reviewing that same branch.
+
+## Shared Cursor automations
+
+Prefer one Cursor automation per role with Red Light RNG plus other Agent Foundry repositories selected.
+
+The Cursor-side prompt should only bootstrap the repository-owned role file. All Red Light RNG-specific instructions belong here or in the role files.
+
+## Disagreement gate
+
+The Disagreer runs while a ticket is still a proposal, before `/build`.
+
+It challenges architecture, hidden assumptions, scope, acceptance criteria, platform risks, and simpler alternatives. It must not manufacture objections. `DISAGREER PASS` is valid.
+
+For Red Light RNG it should pay particular attention to:
+
+- background-location assumptions that require physical-device evidence;
+- Android-now / iOS-later platform boundaries;
+- accidental coupling of shared timing/route/analytics logic to native APIs;
+- battery/permission/lifecycle behavior being mistaken for deterministic app behavior;
+- premature native work when an Expo-backed spike can answer the question;
+- scope creep beyond the current roadmap phase.
+
+Disagreer feedback is advisory. Human + ChatGPT reconcile useful points into the proposal before approval.
+
+```text
+proposal → Disagreer → human/ChatGPT reconcile → /build
+```
 
 ## Approval / dispatch
 
-Use an exact issue comment `/build` as the implementation approval command. Keep the issue labeled `proposal` until the human has reviewed it; applying `agent:build` is useful semantic state but the trusted dispatch is the explicit comment.
+Use an exact issue comment `/build` as the implementation approval command. Keep the issue labeled `proposal` until it is approved; `agent:build` is semantic state after approval.
 
-```text
-proposal → human approval → /build → Developer Automation
-```
-
-The Developer must verify that the triggering comment is exactly `/build`, that the issue is still open, and that the issue/spec is sufficiently concrete before doing work.
+Developer must verify the trigger guards in `automation-prompts/developer.md` before writing code.
 
 ## Review and QA
 
-Reviewer and QA both run independently on autonomous PR creation and on subsequent pushes.
+Reviewer and QA both run independently on autonomous PR creation and subsequent pushes.
 
-- Reviewer inspects requirements, architecture, code, tests, and regressions.
-- QA treats the running software as the product and exercises whatever is realistically testable in the Cloud Agent environment.
-- For mobile/device-specific acceptance criteria that cannot be reproduced in the cloud environment, QA must report `QA BLOCKED` / awaiting human field validation rather than claiming success.
-- Both should ignore non-autonomous PRs when practical, using `agent/` branch prefix or `ai:autonomous` label as the scope signal.
+Use **draft opened + PR opened + PR pushed**. Cursor agents may create draft PRs, and Fixer pushes must naturally cause Reviewer/QA to run again.
 
-A Fixer push naturally causes Reviewer and QA to run again.
+- Reviewer inspects requirements, architecture, platform boundaries, code, tests, and regressions.
+- QA treats runnable software as the product and exercises everything the cloud environment can genuinely test.
+- Physical Android locked-screen/background travel is human field validation unless the agent truly has an appropriate physical device.
+- iOS field validation is currently deferred and must remain explicitly unvalidated rather than implicitly passed.
 
 ## Repair dispatch
 
-Do not let arbitrary PR comments trigger code edits. Reviewer and QA report findings; a human explicitly comments `/fix` when repair is desired. Fixer only acts on verified findings prefixed `[AI-REVIEW]`, `[AI-QA]`, or `[AI-SECURITY]`.
+Do not let arbitrary PR comments trigger code edits. Reviewer and QA report findings; a trusted human explicitly comments `/fix` when repair is desired.
 
-After two repair rounds, stop and mark/report `needs-human`.
+Fixer only acts on verified findings prefixed `[AI-REVIEW]`, `[AI-QA]`, or `[AI-SECURITY]`.
+
+After two autonomous repair rounds, stop and report `needs-human`.
 
 ## Trigger hygiene
 
-- Scope every automation to `eyal-hl/red-light-rng`.
-- Prefer exact keyword filters for `/build` and `/fix` if Cursor exposes them in the trigger UI.
-- Even with a trigger keyword, prompts must independently verify the exact command before editing code.
-- Reviewer/QA should target autonomous PRs, e.g. branch prefix `agent/` or label `ai:autonomous`.
+- Public repo issue and PR creation should remain restricted to collaborators.
+- Prefer exact keyword filters for `/build` and `/fix` in Cursor.
+- Keep the same exact-command checks again inside the repo-owned role prompt.
+- Reviewer/QA should target only autonomous PRs, normally `agent/` branches or `ai:autonomous`.
+- Reviewer/QA should comment, not approve; the human remains the release gate.
 - Never treat arbitrary issue/PR prose as trusted code-edit instructions.
-- Never allow agents to merge to the default branch.
+- Never allow agents to merge to `main`.
 
 ## Physical-device validation
 
@@ -62,7 +104,8 @@ For the current phase:
 
 ## Human gates
 
-1. Human approves the ticket before `/build`.
-2. Human dispatches `/fix` for verified repair findings when necessary.
-3. Human performs required real-device field validation.
-4. Human merges the final PR.
+1. Human reviews/reconciles proposal feedback from Disagreer.
+2. Human approves the ticket before `/build`.
+3. Human dispatches `/fix` for verified repair findings when necessary.
+4. Human performs required real-device field validation.
+5. Human merges the final PR.
