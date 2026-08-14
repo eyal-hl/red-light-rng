@@ -10,11 +10,15 @@ Human + ChatGPT
           ↓
 ChatGPT creates/updates durable GitHub proposal
           ↓
+trusted /challenge comment
+          ↓
 Disagreer challenges plan / architecture
           ↓
 Human + ChatGPT reconcile useful feedback
           ↓
 Human approves ticket
+          ↓
+trusted /build comment
           ↓
 Cursor Developer Cloud Agent
           ↓
@@ -55,7 +59,13 @@ A ticket should include, where relevant: problem/outcome, user-visible behavior,
 
 ### Disagreement pass
 
-The Disagreer runs before implementation. It looks for material architecture/product problems, hidden assumptions, unnecessary complexity, platform risks, missing acceptance criteria, simpler alternatives, and risky coupling.
+Cursor currently has no issue-created automation trigger, so the disagreement pass is explicitly dispatched with a trusted issue comment:
+
+```text
+/challenge
+```
+
+The Disagreer looks for material architecture/product problems, hidden assumptions, unnecessary complexity, platform risks, missing acceptance criteria, simpler alternatives, and risky coupling.
 
 For Red Light RNG it should specifically challenge Android/iOS boundary violations and claims about background location that are not backed by physical-device evidence.
 
@@ -103,7 +113,8 @@ The owner is the final release gate.
 
 Convenient conversational commands:
 
-- `ticket this` → create/update the GitHub proposal from the current brainstorm.
+- `ticket this` → create/update the GitHub proposal and dispatch `/challenge`.
+- `challenge #12` → dispatch/re-run the Disagreer on a proposal.
 - `update #12 with ...` → edit the durable ticket.
 - `reconcile #12` → incorporate useful Disagreer feedback into the proposal.
 - `approve #12` → record approval and dispatch `/build`.
