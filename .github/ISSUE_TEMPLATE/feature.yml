@@ -1,0 +1,38 @@
+name: Product change
+description: Product idea or behavior change to refine before autonomous implementation
+title: "[Feature] "
+labels:
+  - proposal
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / desired outcome
+      description: What should change and why?
+      placeholder: I want...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Desired behavior
+      description: Describe expected user-visible behavior if already known.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete conditions that must be true for this work to be complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: false
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals / constraints
+      description: Anything explicitly outside scope or important implementation/product constraints.
+    validations:
+      required: false

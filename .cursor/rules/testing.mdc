@@ -1,0 +1,14 @@
+---
+description: Testing and verification requirements for implementation and bug-fix work
+alwaysApply: false
+---
+
+# Testing requirements
+
+- Tests should prove behavior rather than implementation trivia.
+- Add regression coverage for bug fixes when practical.
+- Never change an assertion solely because new code made an old test fail; first determine whether product behavior or implementation is wrong.
+- Prefer the narrowest reliable test level that proves behavior while preserving end-to-end coverage for critical journeys.
+- Do not mock the unit under test.
+- Fix sources of nondeterminism instead of blindly increasing retries/timeouts.
+- Explicitly report tests that could not be run and why.
