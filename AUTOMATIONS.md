@@ -10,7 +10,7 @@ This keeps Red Light RNG-specific mobile/background-location caveats in source c
 
 | Automation | Suggested model | Trigger | Writes code? |
 |---|---|---|---|
-| Disagreer | strong independent reasoning model from a different family | issue opened | No |
+| Disagreer | strong independent reasoning model from a different family | issue comment exactly `/challenge` | No |
 | Developer | Grok 4.6, high effort | issue comment exactly `/build` | Yes |
 | Independent Reviewer | Claude Sonnet 5 | draft opened + PR opened + PR pushed | No |
 | Product QA | Grok 4.6, medium/high | draft opened + PR opened + PR pushed | No |
@@ -37,9 +37,15 @@ The Cursor-side prompt should only bootstrap the repository-owned role file. All
 
 ## Disagreement gate
 
-The Disagreer runs while a ticket is still a proposal, before `/build`.
+Cursor does not currently expose an issue-created trigger, so the Disagreer uses an explicit trusted issue comment:
 
-It challenges architecture, hidden assumptions, scope, acceptance criteria, platform risks, and simpler alternatives. It must not manufacture objections. `DISAGREER PASS` is valid.
+```text
+/challenge
+```
+
+When ChatGPT creates a proposal, it may immediately dispatch `/challenge` on behalf of the trusted owner.
+
+The Disagreer challenges architecture, hidden assumptions, scope, acceptance criteria, platform risks, and simpler alternatives. It must not manufacture objections. `DISAGREER PASS` is valid.
 
 For Red Light RNG it should pay particular attention to:
 
@@ -53,7 +59,7 @@ For Red Light RNG it should pay particular attention to:
 Disagreer feedback is advisory. Human + ChatGPT reconcile useful points into the proposal before approval.
 
 ```text
-proposal → Disagreer → human/ChatGPT reconcile → /build
+proposal → /challenge → Disagreer → human/ChatGPT reconcile → /build
 ```
 
 ## Approval / dispatch
@@ -84,7 +90,7 @@ After two autonomous repair rounds, stop and report `needs-human`.
 ## Trigger hygiene
 
 - Public repo issue and PR creation should remain restricted to collaborators.
-- Prefer exact keyword filters for `/build` and `/fix` in Cursor.
+- Prefer exact keyword filters for `/challenge`, `/build`, and `/fix` in Cursor.
 - Keep the same exact-command checks again inside the repo-owned role prompt.
 - Reviewer/QA should target only autonomous PRs, normally `agent/` branches or `ai:autonomous`.
 - Reviewer/QA should comment, not approve; the human remains the release gate.
