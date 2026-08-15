@@ -62,8 +62,9 @@ describe('platform boundary', () => {
     }
 
     const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    const style = readFileSync('src/map/openfreemap-style.ts', 'utf8');
     assert.match(map, /@maplibre\/maplibre-react-native/);
-    assert.match(map, /tiles.openfreemap.org\/styles\/liberty/);
+    assert.match(style, /tiles.openfreemap.org\/styles\/liberty/);
   });
 
   it('records background fixes only onto the active session', () => {

@@ -1,5 +1,5 @@
 import type { LocationSample } from '../domain/location-sample';
-import type { CaptureOutcome, ReviewDisposition, SessionPurpose } from '../domain/session';
+import type { ReviewDisposition, SessionPurpose } from '../domain/session';
 import { ActiveSessionExistsError } from '../domain/session';
 import type {
   CompleteSessionInput,

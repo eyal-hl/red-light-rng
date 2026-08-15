@@ -42,8 +42,8 @@ function isAccurateEnough(sample: LocationSample): boolean {
 }
 
 function isMovingSample(sample: LocationSample, previous: LocationSample | null): boolean {
-  if (sample.speedMetersPerSecond != null && sample.speedMetersPerSecond >= MIN_MOVING_SPEED_MPS) {
-    return true;
+  if (sample.speedMetersPerSecond != null) {
+    return sample.speedMetersPerSecond >= MIN_MOVING_SPEED_MPS;
   }
   if (previous == null) {
     return false;

@@ -91,8 +91,8 @@ describe('deriveRouteGeometry', () => {
     assert.equal(derived.saveable, true);
     assert.ok(derived.startZone);
     assert.ok(derived.finishZone);
-    assert.notEqual(derived.startZone.center.latitude, samples[0]?.latitude);
-    assert.notEqual(derived.finishZone.center.latitude, samples[samples.length - 1]?.latitude);
+    assert.notEqual(derived.startZone.center.longitude, samples[0]?.longitude);
+    assert.notEqual(derived.finishZone.center.longitude, samples[samples.length - 1]?.longitude);
     assert.ok(
       pathDistanceMeters([derived.startZone.center, derived.finishZone.center]) >=
         MIN_START_FINISH_SEPARATION_METERS,

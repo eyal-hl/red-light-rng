@@ -77,7 +77,10 @@ export function AppRoot({ workspace }: AppRootProps) {
   }, [openReview, workspace]);
 
   useEffect(() => {
-    void bootstrap();
+    const timeout = setTimeout(() => {
+      void bootstrap();
+    }, 0);
+    return () => clearTimeout(timeout);
   }, [bootstrap]);
 
   useEffect(() => {

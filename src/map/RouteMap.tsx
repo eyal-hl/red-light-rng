@@ -15,14 +15,14 @@ export type RouteMapProps = {
 
 type FeatureCollection = {
   type: 'FeatureCollection';
-  features: Array<{
+  features: {
     type: 'Feature';
     properties: { kind: string };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
       | { type: 'Polygon'; coordinates: number[][][] }
       | { type: 'Point'; coordinates: number[] };
-  }>;
+  }[];
 };
 
 function circlePolygon(center: LatLng, radiusMeters: number, steps = 32): number[][] {

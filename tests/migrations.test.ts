@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { applyMigrations } from '../../src/persistence/migrations';
-import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../../src/persistence/schema';
-import { SqliteLocationSampleStore } from '../../src/persistence/sqlite-location-sample-store';
+import { applyMigrations } from '../src/persistence/migrations';
+import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../src/persistence/schema';
+import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 
 describe('SQLite migrations', () => {
@@ -44,13 +44,11 @@ describe('SQLite migrations', () => {
     }>('SELECT purpose, capture_outcome, review_disposition, is_active, stopped_at_ms FROM tracking_session WHERE id = ?', [
       'stopped-legacy',
     ]);
-    assert.deepEqual(stopped, {
-      purpose: 'legacy',
-      capture_outcome: 'unknown',
-      review_disposition: 'discarded',
-      is_active: 0,
-      stopped_at_ms: 2000,
-    });
+    assert.equal(stopped?.purpose, 'legacy');
+    assert.equal(stopped?.capture_outcome, 'unknown');
+    assert.equal(stopped?.review_disposition, 'discarded');
+    assert.equal(stopped?.is_active, 0);
+    assert.equal(stopped?.stopped_at_ms, 2000);
 
     const active = await sql.getFirst<{
       purpose: string;

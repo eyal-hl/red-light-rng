@@ -56,7 +56,7 @@ export function HomeScreen({
           <View>
             <Text style={styles.emptyText}>No routes yet.</Text>
             <Text style={styles.subtitle}>
-              Record your regular commute once. We'll use it as the reference course.
+              Record your regular commute once. The app uses it as the reference course.
             </Text>
           </View>
         ) : (

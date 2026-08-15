@@ -117,15 +117,22 @@ describe('RouteWorkspace', () => {
     const { workspace, sessions } = createMemoryWorkspace();
     await workspace.startRouteRecording();
     await sessions.appendSamples(
-      movingTrace({ sessionId: 'id-1', points: 4, stepMeters: 1 }).map((item) => ({
-        ...item,
+      Array.from({ length: 12 }, (_, index) => ({
+        id: `still-${index}`,
+        sessionId: 'id-1',
+        recordedAtMs: 1_700_000_000_000 + index * 1000,
+        latitude: 32.08,
+        longitude: 34.78,
+        horizontalAccuracyMeters: 5,
         speedMetersPerSecond: 0,
+        headingDegrees: 0,
       })),
     );
     await workspace.finishRecording();
+    assert.equal((await sessions.findPendingRouteCreation())?.id, 'id-1');
     const result = await workspace.saveRoute('id-1', 'Too short', 'walk');
     assert.equal(result.ok, false);
-    assert.equal(await sessions.findPendingRouteCreation()?.id, 'id-1');
+    assert.equal((await sessions.findPendingRouteCreation())?.id, 'id-1');
   });
 
   it('persists a saved route through a sqlite reload of the same database', async () => {
