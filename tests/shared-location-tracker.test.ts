@@ -267,4 +267,17 @@ describe('SharedLocationTracker', () => {
     assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
     assert.equal(platform.updating, false);
   });
+
+  it('interrupts when required background permission is lost even if the OS task still reports updating', async () => {
+    const platform = new FakeLocationPlatform();
+    const { tracker, store } = createTracker(platform);
+    await tracker.startTracking();
+    platform.backgroundGranted = false;
+    assert.equal(platform.updating, true);
+    await tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
+    assert.equal((await store.getSession('id-1'))?.reviewDisposition, 'pending');
+    assert.equal((await store.getSession('id-1'))?.isActive, false);
+    assert.equal(platform.updating, false);
+  });
 });

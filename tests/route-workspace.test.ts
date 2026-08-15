@@ -160,4 +160,45 @@ describe('RouteWorkspace', () => {
     assert.equal(await reloadedSessions.countSamples('sql-session'), 14);
     assert.equal((await reloadedSessions.getSession('sql-session'))?.reviewDisposition, 'saved');
   });
+
+  it('deletes sqlite route rows and cascaded reference points while keeping source samples', async () => {
+    const sql = createMemorySqlExecutor();
+    await applyMigrations(sql, 1);
+    const sessions = new SqliteLocationSampleStore(async () => sql);
+    const routes = new SqliteRouteStore(async () => sql);
+    const platform = new FakeLocationPlatform();
+    const trackingSessions = new TrackingSessionService(sessions, () => 'sql-session');
+    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
+    const workspace = new RouteWorkspace(tracker, sessions, routes, () => 1_700_000_100_000, () => 'sql-route');
+
+    await workspace.startRouteRecording();
+    await sessions.appendSamples(movingTrace({ sessionId: 'sql-session', points: 14, stepMeters: 18 }));
+    await workspace.finishRecording();
+    const saved = await workspace.saveRoute('sql-session', 'Bridge run', 'run');
+    assert.equal(saved.ok, true);
+    if (!saved.ok) {
+      return;
+    }
+
+    const referencePointsBefore = await sql.getAll<{ route_id: string }>(
+      'SELECT route_id FROM route_reference_point WHERE route_id = ?',
+      [saved.route.id],
+    );
+    assert.ok(referencePointsBefore.length >= 3);
+
+    await workspace.deleteRoute(saved.route.id);
+
+    const reloadedRoutes = new SqliteRouteStore(async () => sql);
+    const reloadedSessions = new SqliteLocationSampleStore(async () => sql);
+    assert.equal(await reloadedRoutes.getRoute(saved.route.id), null);
+    assert.equal((await sql.getAll('SELECT id FROM route WHERE id = ?', [saved.route.id])).length, 0);
+    assert.equal(
+      (await sql.getAll('SELECT route_id FROM route_reference_point WHERE route_id = ?', [saved.route.id]))
+        .length,
+      0,
+    );
+    assert.equal(await reloadedSessions.countSamples('sql-session'), 14);
+    assert.equal((await reloadedSessions.getSession('sql-session'))?.id, 'sql-session');
+    assert.equal((await reloadedSessions.getSession('sql-session'))?.reviewDisposition, 'saved');
+  });
 });

@@ -9,6 +9,7 @@ import { styles } from './styles';
 type RecordingScreenProps = {
   state: TrackingState;
   busy: boolean;
+  error: string | null;
   onFinish: () => void;
   onCancel: () => void;
   onEndAndReview: () => void;
@@ -17,6 +18,7 @@ type RecordingScreenProps = {
 export function RecordingScreen({
   state,
   busy,
+  error,
   onFinish,
   onCancel,
   onEndAndReview,
@@ -54,7 +56,9 @@ export function RecordingScreen({
           </Text>
         ) : null}
         {state.lastWarning ? <Text style={styles.warningText}>{state.lastWarning}</Text> : null}
-        {state.lastError ? <Text style={styles.errorText}>{state.lastError}</Text> : null}
+        {error || state.lastError ? (
+          <Text style={styles.errorText}>{error ?? state.lastError}</Text>
+        ) : null}
 
         <View style={styles.actions}>
           <Pressable

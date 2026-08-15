@@ -131,6 +131,7 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const onFinish = useCallback(async () => {
     setBusy(true);
+    setError(null);
     try {
       await workspace.finishRecording();
       const state = await workspace.getTrackingState();
@@ -140,6 +141,9 @@ export function AppRoot({ workspace }: AppRootProps) {
         setScreen({ kind: 'home' });
         await refreshHome();
       }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not finish recording.');
+      setTrackingState(await workspace.getTrackingState());
     } finally {
       setBusy(false);
     }
@@ -147,10 +151,14 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const onCancel = useCallback(async () => {
     setBusy(true);
+    setError(null);
     try {
       await workspace.cancelRecording();
       await refreshHome();
       setScreen({ kind: 'home' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not cancel recording.');
+      setTrackingState(await workspace.getTrackingState());
     } finally {
       setBusy(false);
     }
@@ -158,12 +166,16 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const onEndAndReview = useCallback(async () => {
     setBusy(true);
+    setError(null);
     try {
       await workspace.interruptRecording();
       const state = await workspace.getTrackingState();
       if (state.sessionId) {
         await openReview(state.sessionId);
       }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not end recording.');
+      setTrackingState(await workspace.getTrackingState());
     } finally {
       setBusy(false);
     }
@@ -185,6 +197,8 @@ export function AppRoot({ workspace }: AppRootProps) {
       setSelectedRoute(result.route);
       await refreshHome();
       setScreen({ kind: 'detail', routeId: result.route.id });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not save route.');
     } finally {
       setBusy(false);
     }
@@ -195,11 +209,14 @@ export function AppRoot({ workspace }: AppRootProps) {
       return;
     }
     setBusy(true);
+    setError(null);
     try {
       await workspace.discardRecording(screen.sessionId);
       setRouteName('');
       await refreshHome();
       setScreen({ kind: 'home' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not discard recording.');
     } finally {
       setBusy(false);
     }
@@ -222,11 +239,14 @@ export function AppRoot({ workspace }: AppRootProps) {
       return;
     }
     setBusy(true);
+    setError(null);
     try {
       await workspace.deleteRoute(screen.routeId);
       setSelectedRoute(null);
       await refreshHome();
       setScreen({ kind: 'home' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not delete route.');
     } finally {
       setBusy(false);
     }
@@ -252,10 +272,12 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
           onOpenPending={() => {
             if (pendingRecording) {
+              setError(null);
               void openReview(pendingRecording.id);
             }
           }}
           onOpenRoute={(routeId) => {
+            setError(null);
             void onOpenRoute(routeId);
           }}
         />
@@ -264,6 +286,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         <RecordingScreen
           state={trackingState}
           busy={busy}
+          error={error}
           onFinish={() => {
             void onFinish();
           }}
@@ -298,7 +321,9 @@ export function AppRoot({ workspace }: AppRootProps) {
         <RouteDetailScreen
           route={selectedRoute}
           busy={busy}
+          error={error}
           onBack={() => {
+            setError(null);
             setScreen({ kind: 'home' });
             void refreshHome();
           }}

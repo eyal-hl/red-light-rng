@@ -111,7 +111,9 @@ export class SharedLocationTracker implements LocationTracker {
       const osUpdating = await this.platform.isUpdating();
       const servicesEnabled = await this.platform.hasServicesEnabled();
       const foregroundGranted = await this.platform.hasForegroundPermission();
-      const captureUnavailable = !osUpdating || !servicesEnabled || !foregroundGranted;
+      const backgroundGranted = await this.platform.hasBackgroundPermission();
+      const captureUnavailable =
+        !osUpdating || !servicesEnabled || !foregroundGranted || !backgroundGranted;
       if (!captureUnavailable) {
         return;
       }

@@ -12,11 +12,12 @@ import { styles } from './styles';
 type RouteDetailScreenProps = {
   route: Route;
   busy: boolean;
+  error: string | null;
   onBack: () => void;
   onDelete: () => void;
 };
 
-export function RouteDetailScreen({ route, busy, onBack, onDelete }: RouteDetailScreenProps) {
+export function RouteDetailScreen({ route, busy, error, onBack, onDelete }: RouteDetailScreenProps) {
   const distance = pathDistanceMeters(route.referencePath);
 
   const confirmDelete = () => {
@@ -63,6 +64,7 @@ export function RouteDetailScreen({ route, busy, onBack, onDelete }: RouteDetail
           <Text style={styles.statValue}>0</Text>
         </View>
         <Text style={styles.mutedText}>No attempts yet.</Text>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.actions}>
           <Pressable
