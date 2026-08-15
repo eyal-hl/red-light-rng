@@ -171,11 +171,11 @@ Red Light RNG will target both Android and iOS using React Native + Expo + TypeS
 The product needs to run on both Android and iOS while sharing the majority of UI, domain, and analytics logic. Expo provides a practical shared foundation for location, task management, and SQLite while preserving an escape hatch to native code for the background-location behavior that is most likely to differ by OS.
 
 ### Consequences
-- Android and iOS are both first-class targets from the beginning.
-- Expo Go must not be used as proof that background tracking works; real development builds and physical devices are required.
+- Android and iOS are both first-class product targets.
+- Expo Go must not be used as proof that background tracking works; real development builds and physical devices are required for platform-specific claims.
 - Shared TypeScript should own route/timing/analytics logic where practical.
 - OS-specific tracking behavior should remain behind a narrow adapter/interface.
-- The map renderer remains an independent TBD decision.
+- Mapping is selected separately under DEC-012 and remains isolated from route/timing/domain logic.
 - Replacing this stack should require an explicit architecture decision rather than happening inside unrelated feature work.
 
 ---
@@ -183,16 +183,39 @@ The product needs to run on both Android and iOS while sharing the majority of U
 ## DEC-011 — Validate background tracking before building the product around it
 
 **Status:** Accepted  
-**Date:** 2026-08-14
+**Date:** 2026-08-14  
+**Updated:** 2026-08-15
 
 ### Decision
-The first engineering implementation will be a minimal technical spike that records raw location points while the phone is locked/backgrounded and validates the behavior on both a real Android device and a real iPhone.
+The first engineering implementation is a minimal technical spike that records raw location points while the phone is locked/backgrounded. During the current development phase, real-device validation is Android-first because an iPhone is not available. Android background tracking must be proven on a physical Android device before Android product work builds on it. iOS remains an intended supported platform but stays explicitly unvalidated until a physical iPhone is available.
 
 ### Why
-Reliable background telemetry is the highest-risk technical assumption in the entire product. Discovering a platform limitation after building route creation, splits, PBs, and analytics would create avoidable rework.
+Reliable background telemetry is the highest-risk technical assumption in the product. Requiring evidence on the platform we can actually test prevents avoidable rework without falsely claiming iOS support or blocking all Android progress on unavailable hardware.
 
 ### Consequences
 - The first ticket is intentionally not a polished product feature.
 - It should expose enough raw telemetry to judge quality: timestamp, coordinates, accuracy, speed, and heading/course when available.
-- Success requires real-device evidence from both platforms.
-- Major route/timing UI work should wait until this assumption has been validated.
+- Android background/locked-screen claims require real Android-device evidence.
+- iOS background behavior must remain behind the platform boundary and must be described as unvalidated until a real iPhone test occurs.
+- A dedicated iOS validation/fix ticket should be created when an iPhone becomes available.
+- Android product work may proceed after Android validation succeeds without treating successful shared builds as iOS evidence.
+
+---
+
+## DEC-012 — Use MapLibre behind an isolated route-map boundary
+
+**Status:** Accepted  
+**Date:** 2026-08-15
+
+### Decision
+Use **MapLibre React Native** as the initial map renderer for route review/detail. Map rendering must sit behind a project-owned UI boundary such as `RouteMap` that accepts project-owned route geometry (`LatLng`, paths, zones, later checkpoints). MapLibre-specific types must not become route, timing, course-matching, or persistence domain types.
+
+### Why
+Route review is the first feature that genuinely needs a map. Choosing a renderer now avoids leaving a blocking implementation decision to an agent mid-ticket. MapLibre avoids making the first route-recording slice depend on provisioning a Google Maps API credential/signing-key configuration while preserving a replaceable map boundary.
+
+### Consequences
+- The initial route review/detail UI should use MapLibre React Native.
+- Route recording, persistence, reference-course derivation, and analysis must not depend on map availability or network access.
+- Basemap/style/tile requests may require network access; V0.1 does **not** require an offline basemap/tile-pack system.
+- If basemap tiles/style are unavailable, the app must degrade without losing or blocking route data; saving/persistence must still work and the UI should make map unavailability clear.
+- Replacing MapLibre later is possible behind the `RouteMap` boundary and should not require rewriting domain logic.
