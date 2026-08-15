@@ -202,20 +202,29 @@ Reliable background telemetry is the highest-risk technical assumption in the pr
 
 ---
 
-## DEC-012 — Use MapLibre behind an isolated route-map boundary
+## DEC-012 — Use MapLibre with OpenFreeMap behind an isolated route-map boundary
 
 **Status:** Accepted  
-**Date:** 2026-08-15
+**Date:** 2026-08-15  
+**Updated:** 2026-08-15
 
 ### Decision
-Use **MapLibre React Native** as the initial map renderer for route review/detail. Map rendering must sit behind a project-owned UI boundary such as `RouteMap` that accepts project-owned route geometry (`LatLng`, paths, zones, later checkpoints). MapLibre-specific types must not become route, timing, course-matching, or persistence domain types.
+Use **MapLibre React Native** as the initial map renderer for route review/detail, with the **OpenFreeMap Liberty** hosted style as the initial street-level basemap source:
+
+`https://tiles.openfreemap.org/styles/liberty`
+
+Map rendering must sit behind a project-owned UI boundary such as `RouteMap` that accepts project-owned route geometry (`LatLng`, paths, zones, later checkpoints). MapLibre-specific types must not become route, timing, course-matching, or persistence domain types.
 
 ### Why
-Route review is the first feature that genuinely needs a map. Choosing a renderer now avoids leaving a blocking implementation decision to an agent mid-ticket. MapLibre avoids making the first route-recording slice depend on provisioning a Google Maps API credential/signing-key configuration while preserving a replaceable map boundary.
+Route review is the first feature that genuinely needs a street-level map. Choosing both renderer and initial style source avoids leaving a blocking infrastructure decision to an agent mid-ticket. OpenFreeMap's public instance is keyless and intended for MapLibre/mobile use, so the first route-recording slice does not require provisioning a Google Maps/API-provider credential or signing-key restriction.
 
 ### Consequences
-- The initial route review/detail UI should use MapLibre React Native.
-- Route recording, persistence, reference-course derivation, and analysis must not depend on map availability or network access.
-- Basemap/style/tile requests may require network access; V0.1 does **not** require an offline basemap/tile-pack system.
-- If basemap tiles/style are unavailable, the app must degrade without losing or blocking route data; saving/persistence must still work and the UI should make map unavailability clear.
-- Replacing MapLibre later is possible behind the `RouteMap` boundary and should not require rewriting domain logic.
+- The initial route review/detail UI should use MapLibre React Native with the OpenFreeMap Liberty style URL above.
+- No map API key or EAS map secret is required for the initial provider.
+- Preserve the attribution rendered by MapLibre/OpenFreeMap; do not intentionally hide required OpenStreetMap/OpenMapTiles attribution.
+- OpenFreeMap is an external best-effort basemap service with no SLA; it must remain replaceable behind `RouteMap`.
+- Route recording, persistence, reference-course derivation, save/delete behavior, and analysis must not depend on map availability or network access.
+- V0.1 does **not** require offline basemap/tile-pack management.
+- If the style/tiles are unavailable, the review/detail surface should still render the route path and start/finish-zone geometry in a local fallback/no-basemap presentation when practical, and must still allow saving/deleting route data.
+- Physical validation should include a tiles-unavailable/airplane-mode check proving that route data and local geometry remain usable even when the street basemap cannot load.
+- Replacing MapLibre or the hosted style source later should not require rewriting domain logic.
