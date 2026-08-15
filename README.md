@@ -39,3 +39,36 @@ This project uses the Agent Foundry workflow:
 **brainstorm with ChatGPT → GitHub proposal → human approval → Cursor implementation → independent review/QA → human merge**
 
 Implementation work should begin only from an approved GitHub issue/spec. Product decisions made during brainstorming should be reflected in the canonical docs when they are broader than a single ticket.
+
+## Development
+
+Stack: React Native + Expo SDK 57 + TypeScript. Background location is not valid in Expo Go; use a development build.
+
+```text
+npm install
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm start
+```
+
+Android development build (physical device or emulator with Play services):
+
+```text
+npx expo run:android
+```
+
+iOS development build requires macOS and Xcode and is currently **unvalidated** on a real iPhone:
+
+```text
+npx expo run:ios
+```
+
+The first implementation is a background-location spike (`Background Location Spike` screen): start/stop tracking, persist raw points in SQLite, and inspect them after stop or app restart.
+
+### Platform validation status
+
+- **Android locked-screen / background recording:** implementation is in place behind a shared `LocationTracker` / `LocationPlatform` boundary. Physical-device field validation is still required before treating the spike as successful.
+- **iOS:** project config includes background location modes and Always permission copy, but iOS background behavior is **unvalidated**. Do not treat a successful compile as evidence that locked-screen tracking works on iPhone. Follow-up when a device is available: confirm Always permission, background indicator, and locked-screen samples; if Expo is insufficient, replace only `src/tracking/expo-location-platform.ts` (and the task registration) with a Swift Expo Module.
+
