@@ -1,8 +1,6 @@
-import { locationSampleStore, locationTracker } from './src/app-context';
-import { BackgroundLocationSpikeScreen } from './src/ui/BackgroundLocationSpikeScreen';
+import { routeWorkspace } from './src/app-context';
+import { AppRoot } from './src/ui/AppRoot';
 
 export default function App() {
-  return (
-    <BackgroundLocationSpikeScreen tracker={locationTracker} store={locationSampleStore} />
-  );
+  return <AppRoot workspace={routeWorkspace} />;
 }

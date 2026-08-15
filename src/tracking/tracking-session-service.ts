@@ -1,6 +1,7 @@
 import { createId } from '../domain/ids';
 import { toLocationSample, type RawLocationFix } from '../domain/location-sample';
-import type { LocationSampleStore } from '../persistence/location-sample-store';
+import type { SessionPurpose } from '../domain/session';
+import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 
 export class TrackingSessionService {
   constructor(
@@ -8,14 +9,14 @@ export class TrackingSessionService {
     private readonly createSampleId: () => string = createId,
   ) {}
 
-  async startSession(nowMs: number): Promise<string> {
+  async startSession(nowMs: number, purpose: SessionPurpose = 'route_creation'): Promise<string> {
     const sessionId = this.createSampleId();
-    await this.store.createSession(sessionId, nowMs);
+    await this.store.createSession(sessionId, nowMs, purpose);
     return sessionId;
   }
 
-  async stopSession(sessionId: string, nowMs: number): Promise<void> {
-    await this.store.stopSession(sessionId, nowMs);
+  async completeSession(sessionId: string, input: CompleteSessionInput): Promise<void> {
+    await this.store.completeSession(sessionId, input);
   }
 
   async recordActiveSessionFixes(fixes: RawLocationFix[]): Promise<number> {

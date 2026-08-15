@@ -1,7 +1,34 @@
+import { PendingRouteRecordingError, resolveGpsHealth } from '../domain/session';
 import { IDLE_TRACKING_STATE, resolveTrackingStatus, type TrackingState } from '../domain/tracking-state';
-import type { LocationSampleStore } from '../persistence/location-sample-store';
+import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { LocationPlatform, LocationTracker } from './location-tracker';
 import type { TrackingSessionService } from './tracking-session-service';
+
+function sessionFields(session: TrackingSessionRecord | null): Pick<
+  TrackingState,
+  | 'sessionId'
+  | 'purpose'
+  | 'captureOutcome'
+  | 'reviewDisposition'
+  | 'startedAtMs'
+  | 'stoppedAtMs'
+  | 'lastSampleAtMs'
+  | 'status'
+> {
+  return {
+    sessionId: session?.id ?? null,
+    purpose: session?.purpose ?? null,
+    captureOutcome: session?.captureOutcome ?? null,
+    reviewDisposition: session?.reviewDisposition ?? null,
+    startedAtMs: session?.startedAtMs ?? null,
+    stoppedAtMs: session?.stoppedAtMs ?? null,
+    lastSampleAtMs: session?.lastSampleAtMs ?? null,
+    status: resolveTrackingStatus({
+      isActive: session?.isActive ?? false,
+      captureOutcome: session?.captureOutcome ?? null,
+    }),
+  };
+}
 
 export class SharedLocationTracker implements LocationTracker {
   private lastError: string | null = null;
@@ -38,20 +65,105 @@ export class SharedLocationTracker implements LocationTracker {
     }
 
     await this.enqueue(async () => {
-      const sessionId = await this.sessions.startSession(this.now());
+      const active = await this.store.getActiveSession();
+      if (active) {
+        return;
+      }
+      const pending = await this.store.findPendingRouteCreation();
+      if (pending) {
+        throw new PendingRouteRecordingError(pending.id);
+      }
+
+      const sessionId = await this.sessions.startSession(this.now(), 'route_creation');
       try {
         await this.platform.startUpdates();
       } catch (error) {
-        await this.sessions.stopSession(sessionId, this.now());
+        await this.sessions.completeSession(sessionId, {
+          stoppedAtMs: this.now(),
+          captureOutcome: 'cancelled',
+          reviewDisposition: 'discarded',
+        });
         this.lastError = error instanceof Error ? error.message : 'Failed to start location updates.';
         throw error;
       }
     });
   }
 
-  async stopTracking(): Promise<void> {
+  async finishTracking(): Promise<void> {
+    await this.endActiveSession('finished', 'pending');
+  }
+
+  async cancelTracking(): Promise<void> {
+    await this.endActiveSession('cancelled', 'discarded');
+  }
+
+  async interruptTracking(): Promise<void> {
+    await this.endActiveSession('interrupted', 'pending');
+  }
+
+  async recover(): Promise<void> {
+    await this.enqueue(async () => {
+      const active = await this.store.getActiveSession();
+      if (!active || active.purpose !== 'route_creation') {
+        return;
+      }
+
+      const osUpdating = await this.platform.isUpdating();
+      const servicesEnabled = await this.platform.hasServicesEnabled();
+      const foregroundGranted = await this.platform.hasForegroundPermission();
+      const captureUnavailable = !osUpdating || !servicesEnabled || !foregroundGranted;
+      if (!captureUnavailable) {
+        return;
+      }
+
+      try {
+        await this.platform.stopUpdates();
+      } catch {
+        // Still terminalize the session so recovery is durable.
+      }
+      await this.sessions.completeSession(active.id, {
+        stoppedAtMs: this.now(),
+        captureOutcome: 'interrupted',
+        reviewDisposition: 'pending',
+      });
+    });
+  }
+
+  async getState(): Promise<TrackingState> {
+    return this.enqueue(async () => {
+      const active = await this.store.getActiveSession();
+      const pending = active ? null : await this.store.findPendingRouteCreation();
+      const latestId = await this.store.getLatestSessionId();
+      const session =
+        active ??
+        pending ??
+        (latestId ? await this.store.getSession(latestId) : null);
+      const pointCount = session ? await this.store.countSamples(session.id) : 0;
+      const nowMs = this.now();
+      const gpsHealth =
+        session?.isActive && session.captureOutcome === 'active'
+          ? resolveGpsHealth(session.lastSampleAtMs, nowMs)
+          : null;
+
+      return {
+        ...IDLE_TRACKING_STATE,
+        ...sessionFields(session),
+        pointCount,
+        gpsHealth,
+        lastError: this.lastError,
+        lastWarning: this.lastWarning,
+      };
+    });
+  }
+
+  private async endActiveSession(
+    captureOutcome: 'finished' | 'cancelled' | 'interrupted',
+    reviewDisposition: 'pending' | 'discarded',
+  ): Promise<void> {
     this.lastError = null;
-    this.lastWarning = null;
+    if (captureOutcome !== 'interrupted') {
+      this.lastWarning = null;
+    }
     await this.enqueue(async () => {
       const sessionId = await this.store.getActiveSessionId();
       try {
@@ -61,32 +173,12 @@ export class SharedLocationTracker implements LocationTracker {
         throw error;
       }
       if (sessionId) {
-        await this.sessions.stopSession(sessionId, this.now());
+        await this.sessions.completeSession(sessionId, {
+          stoppedAtMs: this.now(),
+          captureOutcome,
+          reviewDisposition,
+        });
       }
-    });
-  }
-
-  async getState(): Promise<TrackingState> {
-    return this.enqueue(async () => {
-      const osUpdating = await this.platform.isUpdating();
-      let activeSessionId = await this.store.getActiveSessionId();
-
-      if (!osUpdating && activeSessionId) {
-        await this.store.stopSession(activeSessionId, this.now());
-        activeSessionId = null;
-      }
-
-      const sessionId = activeSessionId ?? (await this.store.getLatestSessionId());
-      const pointCount = sessionId ? await this.store.countSamples(sessionId) : 0;
-
-      return {
-        ...IDLE_TRACKING_STATE,
-        status: resolveTrackingStatus({ osUpdating, activeSessionId }),
-        sessionId,
-        pointCount,
-        lastError: this.lastError,
-        lastWarning: this.lastWarning,
-      };
     });
   }
 

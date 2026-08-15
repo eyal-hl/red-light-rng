@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { STALE_FIX_THRESHOLD_MS } from '../src/domain/session';
 import { MemoryLocationSampleStore } from '../src/persistence/memory-location-sample-store';
 import type { LocationPlatform } from '../src/tracking/location-tracker';
 import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
@@ -17,15 +18,18 @@ class FakeLocationPlatform implements LocationPlatform {
   async hasServicesEnabled() {
     return this.servicesEnabled;
   }
-
+  async hasForegroundPermission() {
+    return this.foregroundGranted;
+  }
+  async hasBackgroundPermission() {
+    return this.backgroundGranted;
+  }
   async requestForegroundPermission() {
     return this.foregroundGranted;
   }
-
   async requestBackgroundPermission() {
     return { granted: this.backgroundGranted };
   }
-
   async startUpdates() {
     if (this.startError) {
       throw this.startError;
@@ -35,11 +39,9 @@ class FakeLocationPlatform implements LocationPlatform {
     }
     this.updating = true;
   }
-
   async stopUpdates() {
     this.updating = false;
   }
-
   async isUpdating() {
     return this.updating;
   }
@@ -68,10 +70,14 @@ async function waitForActiveSession(store: MemoryLocationSampleStore, timeoutMs 
   throw new Error('Timed out waiting for an active tracking session');
 }
 
-function createTracker(platform: FakeLocationPlatform, store = new MemoryLocationSampleStore()) {
+function createTracker(
+  platform: FakeLocationPlatform,
+  store = new MemoryLocationSampleStore(),
+  now: () => number = () => 1_700_000_000_000,
+) {
   let nextId = 0;
   const sessions = new TrackingSessionService(store, () => `id-${++nextId}`);
-  const tracker = new SharedLocationTracker(platform, sessions, store, () => 1_700_000_000_000);
+  const tracker = new SharedLocationTracker(platform, sessions, store, now);
   return { tracker, store, sessions };
 }
 
@@ -87,20 +93,23 @@ describe('SharedLocationTracker', () => {
     assert.equal(state.status, 'tracking');
     assert.equal(state.sessionId, 'id-1');
     assert.equal(state.pointCount, 1);
+    assert.equal(state.startedAtMs, 1_700_000_000_000);
     assert.equal(state.lastError, null);
     assert.equal(await store.getActiveSessionId(), 'id-1');
   });
 
-  it('keeps recorded points after stop so they can be inspected later', async () => {
+  it('keeps recorded points after a deliberate finish so they can be reviewed later', async () => {
     const platform = new FakeLocationPlatform();
     const { tracker, store, sessions } = createTracker(platform);
 
     await tracker.startTracking();
     await sessions.recordFixes('id-1', [SAMPLE_FIX]);
-    await tracker.stopTracking();
+    await tracker.finishTracking();
 
     const state = await tracker.getState();
     assert.equal(state.status, 'idle');
+    assert.equal(state.captureOutcome, 'finished');
+    assert.equal(state.reviewDisposition, 'pending');
     assert.equal(state.pointCount, 1);
     assert.equal(await store.countSamples('id-1'), 1);
     assert.equal(platform.updating, false);
@@ -136,19 +145,22 @@ describe('SharedLocationTracker', () => {
 
     await assert.rejects(() => tracker.startTracking(), /native start failed/);
     assert.equal(await store.getActiveSessionId(), null);
+    const session = await store.getSession('id-1');
+    assert.equal(session?.captureOutcome, 'cancelled');
+    assert.equal(session?.reviewDisposition, 'discarded');
     const state = await tracker.getState();
     assert.equal(state.status, 'idle');
     assert.equal(state.lastError, 'native start failed');
   });
 
-  it('marks a stale active session idle when the OS is no longer updating', async () => {
+  it('does not mutate lifecycle state when getState observes OS tracking as stopped', async () => {
     const platform = new FakeLocationPlatform();
     const { tracker, store } = createTracker(platform);
     await store.createSession('stale-session', 1);
     const state = await tracker.getState();
-    assert.equal(state.status, 'idle');
-    assert.equal(await store.getActiveSessionId(), null);
-    assert.equal(state.sessionId, 'stale-session');
+    assert.equal(state.status, 'tracking');
+    assert.equal(await store.getActiveSessionId(), 'stale-session');
+    assert.equal(store.peekSession('stale-session')?.isActive, true);
   });
 
   it('does not treat an in-flight start as a stale session when getState overlaps startUpdates', async () => {
@@ -177,9 +189,82 @@ describe('SharedLocationTracker', () => {
     assert.equal(store.peekSession('id-1')?.stoppedAtMs, null);
     assert.equal(platform.updating, true);
 
-    await tracker.stopTracking();
+    await tracker.finishTracking();
     assert.equal(await store.getActiveSessionId(), null);
     assert.equal(store.peekSession('id-1')?.isActive, false);
     assert.equal(store.peekSession('id-1')?.stoppedAtMs, 1_700_000_000_000);
+  });
+
+  it('reuses an already-active session instead of starting a second recording', async () => {
+    const platform = new FakeLocationPlatform();
+    const { tracker, store } = createTracker(platform);
+    await tracker.startTracking();
+    await tracker.startTracking();
+    assert.equal(await store.getActiveSessionId(), 'id-1');
+    assert.equal(await store.getSession('id-2'), null);
+  });
+
+  it('refuses to start while a pending route recording exists', async () => {
+    const platform = new FakeLocationPlatform();
+    const { tracker, store } = createTracker(platform);
+    await tracker.startTracking();
+    await tracker.finishTracking();
+    await assert.rejects(() => tracker.startTracking(), /pending route recording/i);
+    assert.equal((await store.findPendingRouteCreation())?.id, 'id-1');
+  });
+
+  it('exposes waiting-for-first-fix without terminalizing after the stale interval', async () => {
+    let now = 1_700_000_000_000;
+    const platform = new FakeLocationPlatform();
+    const { tracker } = createTracker(platform, new MemoryLocationSampleStore(), () => now);
+    await tracker.startTracking();
+    now += STALE_FIX_THRESHOLD_MS + 5_000;
+    const state = await tracker.getState();
+    assert.equal(state.status, 'tracking');
+    assert.equal(state.gpsHealth, 'waiting_for_first_fix');
+    assert.equal(platform.updating, true);
+  });
+
+  it('marks GPS stale without interrupting when samples are old but capture is still available', async () => {
+    let now = 1_700_000_000_000;
+    const platform = new FakeLocationPlatform();
+    const { tracker, store, sessions } = createTracker(platform, new MemoryLocationSampleStore(), () => now);
+    await tracker.startTracking();
+    await sessions.recordFixes('id-1', [SAMPLE_FIX]);
+    now += STALE_FIX_THRESHOLD_MS + 1_000;
+    await tracker.recover();
+    const state = await tracker.getState();
+    assert.equal(state.status, 'tracking');
+    assert.equal(state.gpsHealth, 'stale');
+    assert.equal(await store.getActiveSessionId(), 'id-1');
+    assert.equal(platform.updating, true);
+  });
+
+  it('interrupts and unregisters tracking when recovery sees corroborating capture failure', async () => {
+    const platform = new FakeLocationPlatform();
+    const { tracker, store, sessions } = createTracker(platform);
+    await tracker.startTracking();
+    await sessions.recordFixes('id-1', [SAMPLE_FIX]);
+    platform.updating = false;
+    platform.servicesEnabled = false;
+    await tracker.recover();
+
+    const session = await store.getSession('id-1');
+    assert.equal(session?.captureOutcome, 'interrupted');
+    assert.equal(session?.reviewDisposition, 'pending');
+    assert.equal(session?.isActive, false);
+    assert.equal(platform.updating, false);
+    const state = await tracker.getState();
+    assert.equal(state.status, 'interrupted');
+  });
+
+  it('interrupts when required foreground permission is lost', async () => {
+    const platform = new FakeLocationPlatform();
+    const { tracker, store } = createTracker(platform);
+    await tracker.startTracking();
+    platform.foregroundGranted = false;
+    await tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
+    assert.equal(platform.updating, false);
   });
 });

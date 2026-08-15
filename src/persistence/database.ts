@@ -1,21 +1,23 @@
 import * as SQLite from 'expo-sqlite';
 
-import { LOCATION_SPIKE_SCHEMA } from './schema';
+import { createExpoSqlExecutor } from './expo-sql-executor';
+import { applyMigrations } from './migrations';
+import type { SqlExecutor } from './sql-executor';
 
 const DATABASE_NAME = 'red-light-rng.db';
 
-let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let executorPromise: Promise<SqlExecutor> | null = null;
 
-async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
+async function openSqlExecutor(): Promise<SqlExecutor> {
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
-  await database.execAsync('PRAGMA foreign_keys = ON;');
-  await database.execAsync(LOCATION_SPIKE_SCHEMA);
-  return database;
+  const sql = createExpoSqlExecutor(database);
+  await applyMigrations(sql);
+  return sql;
 }
 
-export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (!databasePromise) {
-    databasePromise = openDatabase();
+export function getSqlExecutor(): Promise<SqlExecutor> {
+  if (!executorPromise) {
+    executorPromise = openSqlExecutor();
   }
-  return databasePromise;
+  return executorPromise;
 }

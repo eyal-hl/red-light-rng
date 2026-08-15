@@ -63,7 +63,7 @@ Before presenting implementation as complete:
 - Install: `npm install`
 - Lint: `npm run lint`
 - Typecheck: `npm run typecheck`
-- Test: `npm test` (Node test runner via `tsx` for shared TypeScript modules; does not require a device)
+- Test: `npm test` (Node test runner via `tsx` for shared TypeScript modules; does not require a device). Requires Node **>=22.13** because migration tests execute real SQL through `node:sqlite`.
 - Build: `npm run build` (JS bundles via `expo export` for Android and iOS). Native development builds: `npx expo run:android` or `npx expo run:ios` (iOS requires macOS + Xcode).
 - Start: `npm start` (Expo Metro bundler)
 - Local app URL: Metro defaults to `http://localhost:8081`. This is a native Expo app, not a web product; open it with an Android/iOS development build rather than a browser. Expo Go is not valid evidence for background location.

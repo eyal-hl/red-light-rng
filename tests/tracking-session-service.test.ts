@@ -37,7 +37,11 @@ describe('TrackingSessionService', () => {
     const { store, sessions } = createSessions();
     const sessionId = await sessions.startSession(1000);
     await sessions.recordActiveSessionFixes([SAMPLE_FIX]);
-    await sessions.stopSession(sessionId, 2000);
+    await sessions.completeSession(sessionId, {
+      stoppedAtMs: 2000,
+      captureOutcome: 'finished',
+      reviewDisposition: 'pending',
+    });
 
     const lateFix: RawLocationFix = {
       ...SAMPLE_FIX,
@@ -53,7 +57,11 @@ describe('TrackingSessionService', () => {
   it('does not re-attribute late fixes to the latest stopped session', async () => {
     const { store, sessions } = createSessions();
     const sessionId = await sessions.startSession(1000);
-    await sessions.stopSession(sessionId, 2000);
+    await sessions.completeSession(sessionId, {
+      stoppedAtMs: 2000,
+      captureOutcome: 'cancelled',
+      reviewDisposition: 'discarded',
+    });
 
     assert.equal(await store.getActiveSessionId(), null);
     assert.equal(await store.getLatestSessionId(), sessionId);

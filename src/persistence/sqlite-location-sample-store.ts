@@ -1,95 +1,166 @@
 import type { LocationSample } from '../domain/location-sample';
-import { getDatabase } from './database';
-import type { LocationSampleStore } from './location-sample-store';
-import { mapLocationSampleRow, type LocationSampleRow } from './schema';
+import type { CaptureOutcome, ReviewDisposition, SessionPurpose } from '../domain/session';
+import { ActiveSessionExistsError } from '../domain/session';
+import type {
+  CompleteSessionInput,
+  LocationSampleStore,
+  TrackingSessionRecord,
+} from './location-sample-store';
+import { mapLocationSampleRow, SESSION_SELECT, type LocationSampleRow, type TrackingSessionRow } from './schema';
+import type { SqlExecutor } from './sql-executor';
+
+function mapSessionRow(row: TrackingSessionRow): TrackingSessionRecord {
+  return {
+    id: row.id,
+    startedAtMs: row.started_at_ms,
+    stoppedAtMs: row.stopped_at_ms,
+    isActive: row.is_active === 1,
+    purpose: row.purpose as SessionPurpose,
+    captureOutcome: row.capture_outcome as CaptureOutcome,
+    reviewDisposition: row.review_disposition as ReviewDisposition,
+    lastSampleAtMs: row.last_sample_at_ms,
+  };
+}
 
 export class SqliteLocationSampleStore implements LocationSampleStore {
-  async createSession(sessionId: string, startedAtMs: number): Promise<void> {
-    const database = await getDatabase();
-    await database.withTransactionAsync(async () => {
-      await database.runAsync(
-        'UPDATE tracking_session SET is_active = 0, stopped_at_ms = COALESCE(stopped_at_ms, ?) WHERE is_active = 1',
-        startedAtMs,
+  constructor(private readonly getSql: () => Promise<SqlExecutor>) {}
+
+  async createSession(
+    sessionId: string,
+    startedAtMs: number,
+    purpose: SessionPurpose = 'route_creation',
+  ): Promise<void> {
+    const sql = await this.getSql();
+    await sql.withTransaction(async () => {
+      const active = await sql.getFirst<{ id: string }>(
+        'SELECT id FROM tracking_session WHERE is_active = 1 LIMIT 1',
       );
-      await database.runAsync(
-        'INSERT INTO tracking_session (id, started_at_ms, stopped_at_ms, is_active) VALUES (?, ?, NULL, 1)',
-        sessionId,
-        startedAtMs,
+      if (active) {
+        throw new ActiveSessionExistsError(active.id);
+      }
+      await sql.run(
+        `INSERT INTO tracking_session (
+           id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition
+         ) VALUES (?, ?, NULL, 1, ?, 'active', 'pending')`,
+        [sessionId, startedAtMs, purpose],
       );
     });
   }
 
-  async stopSession(sessionId: string, stoppedAtMs: number): Promise<void> {
-    const database = await getDatabase();
-    await database.runAsync(
-      'UPDATE tracking_session SET is_active = 0, stopped_at_ms = ? WHERE id = ?',
-      stoppedAtMs,
-      sessionId,
+  async completeSession(sessionId: string, input: CompleteSessionInput): Promise<void> {
+    const sql = await this.getSql();
+    await sql.run(
+      `UPDATE tracking_session
+       SET is_active = 0,
+           stopped_at_ms = ?,
+           capture_outcome = ?,
+           review_disposition = ?
+       WHERE id = ?`,
+      [input.stoppedAtMs, input.captureOutcome, input.reviewDisposition, sessionId],
     );
+  }
+
+  async setReviewDisposition(sessionId: string, disposition: ReviewDisposition): Promise<void> {
+    const sql = await this.getSql();
+    await sql.run('UPDATE tracking_session SET review_disposition = ? WHERE id = ?', [
+      disposition,
+      sessionId,
+    ]);
+  }
+
+  async getSession(sessionId: string): Promise<TrackingSessionRecord | null> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<TrackingSessionRow>(`${SESSION_SELECT} WHERE s.id = ?`, [
+      sessionId,
+    ]);
+    return row ? mapSessionRow(row) : null;
+  }
+
+  async getActiveSession(): Promise<TrackingSessionRecord | null> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<TrackingSessionRow>(
+      `${SESSION_SELECT} WHERE s.is_active = 1 ORDER BY s.started_at_ms DESC LIMIT 1`,
+    );
+    return row ? mapSessionRow(row) : null;
   }
 
   async getActiveSessionId(): Promise<string | null> {
-    const database = await getDatabase();
-    const row = await database.getFirstAsync<{ id: string }>(
-      'SELECT id FROM tracking_session WHERE is_active = 1 ORDER BY started_at_ms DESC LIMIT 1',
+    return (await this.getActiveSession())?.id ?? null;
+  }
+
+  async getLatestSessionId(): Promise<string | null> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<{ id: string }>(
+      'SELECT id FROM tracking_session ORDER BY started_at_ms DESC LIMIT 1',
     );
     return row?.id ?? null;
   }
 
-  async getLatestSessionId(): Promise<string | null> {
-    const database = await getDatabase();
-    const row = await database.getFirstAsync<{ id: string }>(
-      'SELECT id FROM tracking_session ORDER BY started_at_ms DESC LIMIT 1',
+  async findPendingRouteCreation(): Promise<TrackingSessionRecord | null> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<TrackingSessionRow>(
+      `${SESSION_SELECT}
+       WHERE s.purpose = 'route_creation'
+         AND s.capture_outcome IN ('finished', 'interrupted')
+         AND s.review_disposition = 'pending'
+       ORDER BY s.started_at_ms DESC
+       LIMIT 1`,
     );
-    return row?.id ?? null;
+    return row ? mapSessionRow(row) : null;
   }
 
   async appendSamples(samples: LocationSample[]): Promise<void> {
     if (samples.length === 0) {
       return;
     }
-    const database = await getDatabase();
-    await database.withTransactionAsync(async () => {
+    const sql = await this.getSql();
+    await sql.withTransaction(async () => {
+      const active = await sql.getFirst<{ id: string }>(
+        'SELECT id FROM tracking_session WHERE is_active = 1 LIMIT 1',
+      );
       for (const sample of samples) {
-        await database.runAsync(
+        if (!active || sample.sessionId !== active.id) {
+          continue;
+        }
+        await sql.run(
           `INSERT OR REPLACE INTO location_sample (
             id, session_id, recorded_at_ms, latitude, longitude,
             horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          sample.id,
-          sample.sessionId,
-          sample.recordedAtMs,
-          sample.latitude,
-          sample.longitude,
-          sample.horizontalAccuracyMeters,
-          sample.speedMetersPerSecond,
-          sample.headingDegrees,
+          [
+            sample.id,
+            sample.sessionId,
+            sample.recordedAtMs,
+            sample.latitude,
+            sample.longitude,
+            sample.horizontalAccuracyMeters,
+            sample.speedMetersPerSecond,
+            sample.headingDegrees,
+          ],
         );
       }
     });
   }
 
   async listSamples(sessionId: string): Promise<LocationSample[]> {
-    const database = await getDatabase();
-    const rows = await database.getAllAsync<LocationSampleRow>(
+    const sql = await this.getSql();
+    const rows = await sql.getAll<LocationSampleRow>(
       `SELECT id, session_id, recorded_at_ms, latitude, longitude,
               horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
        FROM location_sample
        WHERE session_id = ?
        ORDER BY recorded_at_ms ASC`,
-      sessionId,
+      [sessionId],
     );
     return rows.map(mapLocationSampleRow);
   }
 
   async countSamples(sessionId: string): Promise<number> {
-    const database = await getDatabase();
-    const row = await database.getFirstAsync<{ count: number }>(
+    const sql = await this.getSql();
+    const row = await sql.getFirst<{ count: number }>(
       'SELECT COUNT(*) as count FROM location_sample WHERE session_id = ?',
-      sessionId,
+      [sessionId],
     );
     return row?.count ?? 0;
   }
 }
-
-export const sqliteLocationSampleStore = new SqliteLocationSampleStore();

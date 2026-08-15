@@ -8,6 +8,14 @@ export function createExpoLocationPlatform(): LocationPlatform {
     async hasServicesEnabled() {
       return Location.hasServicesEnabledAsync();
     },
+    async hasForegroundPermission() {
+      const result = await Location.getForegroundPermissionsAsync();
+      return result.granted;
+    },
+    async hasBackgroundPermission() {
+      const result = await Location.getBackgroundPermissionsAsync();
+      return result.granted;
+    },
     async requestForegroundPermission() {
       const result = await Location.requestForegroundPermissionsAsync();
       return result.granted;
@@ -28,7 +36,7 @@ export function createExpoLocationPlatform(): LocationPlatform {
         activityType: Location.ActivityType.OtherNavigation,
         foregroundService: {
           notificationTitle: 'Red Light RNG',
-          notificationBody: 'Recording a background location spike. This is not a live run screen.',
+          notificationBody: 'Recording your route. You can lock your phone and keep traveling.',
           killServiceOnDestroy: false,
         },
       });

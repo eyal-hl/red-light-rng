@@ -14,6 +14,7 @@
     "build": "expo export --platform android --platform ios --output-dir dist"
   },
   "dependencies": {
+    "@maplibre/maplibre-react-native": "^11.3.6",
     "expo": "~57.0.12",
     "expo-dev-client": "~57.0.11",
     "expo-location": "~57.0.9",
@@ -29,5 +30,8 @@
     "eslint-config-expo": "~57.0.1",
     "tsx": "^4.23.12",
     "typescript": "~6.0.3"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

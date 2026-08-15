@@ -7,13 +7,25 @@ describe('platform boundary', () => {
     const sharedFiles = [
       'src/domain/location-sample.ts',
       'src/domain/tracking-state.ts',
+      'src/domain/route.ts',
+      'src/domain/route-derivation.ts',
+      'src/domain/session.ts',
       'src/persistence/location-sample-store.ts',
       'src/persistence/memory-location-sample-store.ts',
+      'src/persistence/sqlite-location-sample-store.ts',
       'src/persistence/schema.ts',
+      'src/persistence/migrations.ts',
+      'src/persistence/route-store.ts',
+      'src/persistence/sqlite-route-store.ts',
+      'src/product/route-workspace.ts',
       'src/tracking/location-tracker.ts',
       'src/tracking/shared-location-tracker.ts',
       'src/tracking/tracking-session-service.ts',
-      'src/ui/BackgroundLocationSpikeScreen.tsx',
+      'src/ui/AppRoot.tsx',
+      'src/ui/HomeScreen.tsx',
+      'src/ui/RecordingScreen.tsx',
+      'src/ui/ReviewScreen.tsx',
+      'src/ui/RouteDetailScreen.tsx',
     ];
 
     for (const file of sharedFiles) {
@@ -28,6 +40,30 @@ describe('platform boundary', () => {
     const adapter = readFileSync('src/tracking/expo-location-platform.ts', 'utf8');
     assert.match(adapter, /expo-location/);
     assert.match(adapter, /foregroundService/);
+    assert.match(adapter, /Recording your route/);
+  });
+
+  it('keeps MapLibre types inside the map boundary', () => {
+    const domainFiles = [
+      'src/domain/geo.ts',
+      'src/domain/route.ts',
+      'src/domain/route-derivation.ts',
+      'src/persistence/schema.ts',
+      'src/persistence/sqlite-route-store.ts',
+      'src/product/route-workspace.ts',
+    ];
+    for (const file of domainFiles) {
+      const source = readFileSync(file, 'utf8');
+      assert.doesNotMatch(
+        source,
+        /@maplibre\/maplibre-react-native|maplibre/,
+        `${file} should not import MapLibre`,
+      );
+    }
+
+    const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    assert.match(map, /@maplibre\/maplibre-react-native/);
+    assert.match(map, /tiles.openfreemap.org\/styles\/liberty/);
   });
 
   it('records background fixes only onto the active session', () => {
