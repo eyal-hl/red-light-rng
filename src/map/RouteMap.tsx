@@ -3,6 +3,7 @@ import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from 're
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { GeoZone, LatLng } from '../domain/geo';
+import { COURSE_CAMERA_PADDING, courseCameraBounds } from './course-camera-bounds';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
 import { OPENFREEMAP_LIBERTY_STYLE_URL } from './openfreemap-style';
 
@@ -109,40 +110,6 @@ function toGeoJson(
   return { type: 'FeatureCollection', features };
 }
 
-function boundsFor(
-  path: LatLng[],
-  startZone?: GeoZone | null,
-  finishZone?: GeoZone | null,
-  checkpoints: RouteMapCheckpoint[] = [],
-  previewPoint?: LatLng | null,
-): [number, number, number, number] {
-  const coords = [...path];
-  if (startZone) {
-    coords.push(startZone.center);
-  }
-  if (finishZone) {
-    coords.push(finishZone.center);
-  }
-  for (const checkpoint of checkpoints) {
-    coords.push(checkpoint.point);
-  }
-  if (previewPoint) {
-    coords.push(previewPoint);
-  }
-  if (coords.length === 0) {
-    return [34.75, 32.05, 34.82, 32.12];
-  }
-  const lats = coords.map((item) => item.latitude);
-  const lngs = coords.map((item) => item.longitude);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const latPad = Math.max((maxLat - minLat) * 0.15, 0.001);
-  const lngPad = Math.max((maxLng - minLng) * 0.15, 0.001);
-  return [minLng - lngPad, minLat - latPad, maxLng + lngPad, maxLat + latPad];
-}
-
 class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
@@ -176,9 +143,9 @@ function MapLibreRouteMap({
     () => toGeoJson(path, startZone, finishZone, checkpoints, previewPoint, selectedMarkerId),
     [checkpoints, finishZone, path, previewPoint, selectedMarkerId, startZone],
   );
-  const bounds = useMemo(
-    () => boundsFor(path, startZone, finishZone, checkpoints, previewPoint),
-    [checkpoints, finishZone, path, previewPoint, startZone],
+  const initialBounds = useMemo(
+    () => courseCameraBounds(path, startZone, finishZone, checkpoints),
+    [checkpoints, finishZone, path, startZone],
   );
 
   return (
@@ -187,6 +154,8 @@ function MapLibreRouteMap({
       style={StyleSheet.absoluteFill}
       attribution
       logo
+      dragPan
+      touchZoom
       onDidFailLoadingMap={onBasemapFailed}
       onPress={(event) => {
         if (!onMapPress) {
@@ -206,12 +175,9 @@ function MapLibreRouteMap({
     >
       <Camera
         initialViewState={{
-          bounds,
-          padding: { top: 48, right: 48, bottom: 48, left: 48 },
+          bounds: initialBounds,
+          padding: COURSE_CAMERA_PADDING,
         }}
-        bounds={bounds}
-        padding={{ top: 48, right: 48, bottom: 48, left: 48 }}
-        duration={0}
       />
       <GeoJSONSource id="route-geometry" data={data}>
         <Layer
