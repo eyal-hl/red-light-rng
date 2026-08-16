@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export type LocationSampleRow = {
   id: string;
@@ -59,6 +59,15 @@ export type RouteRow = {
   finish_latitude: number;
   finish_longitude: number;
   finish_radius_meters: number;
+  start_progress_m: number;
+  finish_progress_m: number;
+};
+
+export type RouteCheckpointRow = {
+  id: string;
+  route_id: string;
+  name: string;
+  progress_m: number;
 };
 
 export type RouteReferencePointRow = {
