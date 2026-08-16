@@ -23,6 +23,7 @@ function cloneSession(session: MemorySession): TrackingSessionRecord {
     captureOutcome: session.captureOutcome,
     reviewDisposition: session.reviewDisposition,
     lastSampleAtMs,
+    backgroundPermissionConfirmed: session.backgroundPermissionConfirmed,
   };
 }
 
@@ -48,8 +49,17 @@ export class MemoryLocationSampleStore implements LocationSampleStore {
       captureOutcome: 'active',
       reviewDisposition: 'pending',
       lastSampleAtMs: null,
+      backgroundPermissionConfirmed: false,
       samples: [],
     });
+  }
+
+  async confirmBackgroundPermission(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.backgroundPermissionConfirmed = true;
   }
 
   async completeSession(sessionId: string, input: CompleteSessionInput): Promise<void> {

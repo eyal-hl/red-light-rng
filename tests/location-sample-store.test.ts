@@ -56,6 +56,15 @@ describe('LocationSampleStore', () => {
         assert.equal((await store.listSamples('session-1'))[0]?.id, 'p1');
       });
 
+      it('persists a confirmed background permission across a reload of the same store', async () => {
+        const store = await create();
+        await store.createSession('session-1', 1000);
+        assert.equal((await store.getSession('session-1'))?.backgroundPermissionConfirmed, false);
+
+        await store.confirmBackgroundPermission('session-1');
+        assert.equal((await store.getSession('session-1'))?.backgroundPermissionConfirmed, true);
+      });
+
       it('refuses to create a second active session and does not truncate the first', async () => {
         const store = await create();
         await store.createSession('session-1', 1000);

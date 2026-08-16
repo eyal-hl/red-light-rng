@@ -3,9 +3,12 @@ import { describe, it } from 'node:test';
 
 import { STALE_FIX_THRESHOLD_MS } from '../src/domain/session';
 import { MemoryLocationSampleStore } from '../src/persistence/memory-location-sample-store';
+import { applyMigrations } from '../src/persistence/migrations';
+import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import type { LocationPlatform } from '../src/tracking/location-tracker';
 import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
 import { TrackingSessionService } from '../src/tracking/tracking-session-service';
+import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 
 class FakeLocationPlatform implements LocationPlatform {
   servicesEnabled = true;
@@ -327,6 +330,93 @@ describe('SharedLocationTracker', () => {
     await tracker.recover();
     assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
     assert.equal((await store.getSession('id-1'))?.reviewDisposition, 'pending');
+    assert.equal(platform.updating, false);
+  });
+
+  it('persists a confirmed background grant so a new tracker process can detect later revocation', async () => {
+    const platform = new FakeLocationPlatform();
+    const store = new MemoryLocationSampleStore();
+    const first = createTracker(platform, store);
+    await first.tracker.startTracking();
+    assert.equal((await store.getSession('id-1'))?.backgroundPermissionConfirmed, true);
+
+    platform.backgroundGranted = false;
+    assert.equal(platform.updating, true);
+
+    const relaunched = createTracker(platform, store);
+    await relaunched.tracker.recover();
+
+    const session = await store.getSession('id-1');
+    assert.equal(session?.captureOutcome, 'interrupted');
+    assert.equal(session?.reviewDisposition, 'pending');
+    assert.equal(session?.isActive, false);
+    assert.equal(platform.updating, false);
+  });
+
+  it('does not interrupt a foreground-only recording after a new tracker process recovers', async () => {
+    const platform = new FakeLocationPlatform();
+    platform.backgroundGranted = false;
+    const store = new MemoryLocationSampleStore();
+    const first = createTracker(platform, store);
+    await first.tracker.startTracking();
+    assert.equal((await store.getSession('id-1'))?.backgroundPermissionConfirmed, false);
+
+    const relaunched = createTracker(platform, store);
+    await relaunched.tracker.recover();
+
+    const session = await store.getSession('id-1');
+    assert.equal(session?.captureOutcome, 'active');
+    assert.equal(session?.isActive, true);
+    assert.equal(session?.backgroundPermissionConfirmed, false);
+    assert.equal(platform.updating, true);
+  });
+
+  it('persists a later background grant so revocation after process relaunch still interrupts', async () => {
+    const platform = new FakeLocationPlatform();
+    platform.backgroundGranted = false;
+    const store = new MemoryLocationSampleStore();
+    const first = createTracker(platform, store);
+    await first.tracker.startTracking();
+
+    platform.backgroundGranted = true;
+    await first.tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.backgroundPermissionConfirmed, true);
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'active');
+
+    platform.backgroundGranted = false;
+    const relaunched = createTracker(platform, store);
+    await relaunched.tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
+    assert.equal(platform.updating, false);
+  });
+
+  it('interrupts after a sqlite-backed process relaunch when a persisted background grant is revoked', async () => {
+    const sql = createMemorySqlExecutor();
+    await applyMigrations(sql, 1);
+    const store = new SqliteLocationSampleStore(async () => sql);
+    const platform = new FakeLocationPlatform();
+    const sessions = new TrackingSessionService(store, () => 'sql-session');
+    const tracker = new SharedLocationTracker(platform, sessions, store, () => 1_700_000_000_000);
+    await tracker.startTracking();
+    assert.equal((await store.getSession('sql-session'))?.backgroundPermissionConfirmed, true);
+
+    platform.backgroundGranted = false;
+    assert.equal(platform.updating, true);
+
+    const reloadedStore = new SqliteLocationSampleStore(async () => sql);
+    const reloadedSessions = new TrackingSessionService(reloadedStore, () => 'unused');
+    const relaunched = new SharedLocationTracker(
+      platform,
+      reloadedSessions,
+      reloadedStore,
+      () => 1_700_000_000_000,
+    );
+    await relaunched.recover();
+
+    const session = await reloadedStore.getSession('sql-session');
+    assert.equal(session?.captureOutcome, 'interrupted');
+    assert.equal(session?.reviewDisposition, 'pending');
+    assert.equal(session?.isActive, false);
     assert.equal(platform.updating, false);
   });
 });

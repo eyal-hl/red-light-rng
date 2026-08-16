@@ -19,6 +19,7 @@ function mapSessionRow(row: TrackingSessionRow): TrackingSessionRecord {
     captureOutcome: row.capture_outcome as CaptureOutcome,
     reviewDisposition: row.review_disposition as ReviewDisposition,
     lastSampleAtMs: row.last_sample_at_ms,
+    backgroundPermissionConfirmed: row.background_permission_confirmed === 1,
   };
 }
 
@@ -40,11 +41,19 @@ export class SqliteLocationSampleStore implements LocationSampleStore {
       }
       await sql.run(
         `INSERT INTO tracking_session (
-           id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition
-         ) VALUES (?, ?, NULL, 1, ?, 'active', 'pending')`,
+           id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+           background_permission_confirmed
+         ) VALUES (?, ?, NULL, 1, ?, 'active', 'pending', 0)`,
         [sessionId, startedAtMs, purpose],
       );
     });
+  }
+
+  async confirmBackgroundPermission(sessionId: string): Promise<void> {
+    const sql = await this.getSql();
+    await sql.run('UPDATE tracking_session SET background_permission_confirmed = 1 WHERE id = ?', [
+      sessionId,
+    ]);
   }
 
   async completeSession(sessionId: string, input: CompleteSessionInput): Promise<void> {

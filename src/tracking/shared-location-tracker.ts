@@ -33,7 +33,6 @@ function sessionFields(session: TrackingSessionRecord | null): Pick<
 export class SharedLocationTracker implements LocationTracker {
   private lastError: string | null = null;
   private lastWarning: string | null = null;
-  private backgroundPermissionConfirmed = false;
   private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -69,7 +68,7 @@ export class SharedLocationTracker implements LocationTracker {
       const active = await this.store.getActiveSession();
       if (active) {
         if (background.granted) {
-          this.backgroundPermissionConfirmed = true;
+          await this.store.confirmBackgroundPermission(active.id);
         }
         return;
       }
@@ -79,11 +78,9 @@ export class SharedLocationTracker implements LocationTracker {
       }
 
       const sessionId = await this.sessions.startSession(this.now(), 'route_creation');
-      this.backgroundPermissionConfirmed = background.granted;
       try {
         await this.platform.startUpdates();
       } catch (error) {
-        this.backgroundPermissionConfirmed = false;
         await this.sessions.completeSession(sessionId, {
           stoppedAtMs: this.now(),
           captureOutcome: 'cancelled',
@@ -91,6 +88,9 @@ export class SharedLocationTracker implements LocationTracker {
         });
         this.lastError = error instanceof Error ? error.message : 'Failed to start location updates.';
         throw error;
+      }
+      if (background.granted) {
+        await this.store.confirmBackgroundPermission(sessionId);
       }
     });
   }
@@ -118,10 +118,11 @@ export class SharedLocationTracker implements LocationTracker {
       const servicesEnabled = await this.platform.hasServicesEnabled();
       const foregroundGranted = await this.platform.hasForegroundPermission();
       const backgroundGranted = await this.platform.hasBackgroundPermission();
-      if (backgroundGranted) {
-        this.backgroundPermissionConfirmed = true;
+      if (backgroundGranted && !active.backgroundPermissionConfirmed) {
+        await this.store.confirmBackgroundPermission(active.id);
       }
-      const backgroundLost = this.backgroundPermissionConfirmed && !backgroundGranted;
+      const backgroundConfirmed = active.backgroundPermissionConfirmed || backgroundGranted;
+      const backgroundLost = backgroundConfirmed && !backgroundGranted;
       const captureUnavailable =
         !osUpdating || !servicesEnabled || !foregroundGranted || backgroundLost;
       if (!captureUnavailable) {

@@ -55,6 +55,14 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    async up(sql) {
+      await sql.exec(
+        `ALTER TABLE tracking_session ADD COLUMN background_permission_confirmed INTEGER NOT NULL DEFAULT 0`,
+      );
+    },
+  },
 ];
 
 async function tableExists(sql: SqlExecutor, name: string): Promise<boolean> {

@@ -10,6 +10,7 @@ export type TrackingSessionRecord = {
   captureOutcome: CaptureOutcome;
   reviewDisposition: ReviewDisposition;
   lastSampleAtMs: number | null;
+  backgroundPermissionConfirmed: boolean;
 };
 
 export type CompleteSessionInput = {
@@ -21,6 +22,7 @@ export type CompleteSessionInput = {
 export interface LocationSampleStore {
   createSession(sessionId: string, startedAtMs: number, purpose?: SessionPurpose): Promise<void>;
   completeSession(sessionId: string, input: CompleteSessionInput): Promise<void>;
+  confirmBackgroundPermission(sessionId: string): Promise<void>;
   setReviewDisposition(sessionId: string, disposition: ReviewDisposition): Promise<void>;
   getSession(sessionId: string): Promise<TrackingSessionRecord | null>;
   getActiveSession(): Promise<TrackingSessionRecord | null>;

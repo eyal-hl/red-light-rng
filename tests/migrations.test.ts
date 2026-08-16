@@ -76,6 +76,43 @@ describe('SQLite migrations', () => {
     assert.equal(routeTable?.name, 'route');
   });
 
+  it('adds a persisted background-permission flag when upgrading from schema v1', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    await sql.exec(`ALTER TABLE tracking_session ADD COLUMN purpose TEXT NOT NULL DEFAULT 'legacy'`);
+    await sql.exec(
+      `ALTER TABLE tracking_session ADD COLUMN capture_outcome TEXT NOT NULL DEFAULT 'unknown'`,
+    );
+    await sql.exec(
+      `ALTER TABLE tracking_session ADD COLUMN review_disposition TEXT NOT NULL DEFAULT 'discarded'`,
+    );
+    await sql.exec('PRAGMA user_version = 1');
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition
+       ) VALUES (?, ?, NULL, 1, ?, ?, ?)`,
+      ['v1-active', 1000, 'route_creation', 'active', 'pending'],
+    );
+
+    await applyMigrations(sql, 2000);
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const row = await sql.getFirst<{
+      is_active: number;
+      background_permission_confirmed: number;
+      purpose: string;
+    }>(
+      'SELECT is_active, background_permission_confirmed, purpose FROM tracking_session WHERE id = ?',
+      ['v1-active'],
+    );
+    assert.equal(row?.is_active, 1);
+    assert.equal(row?.purpose, 'route_creation');
+    assert.equal(row?.background_permission_confirmed, 0);
+  });
+
   it('is idempotent when the current schema version is already applied', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1000);

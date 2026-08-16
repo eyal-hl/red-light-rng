@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export type LocationSampleRow = {
   id: string;
@@ -44,6 +44,7 @@ export type TrackingSessionRow = {
   capture_outcome: string;
   review_disposition: string;
   last_sample_at_ms: number | null;
+  background_permission_confirmed: number;
 };
 
 export type RouteRow = {
@@ -89,6 +90,7 @@ SELECT
   s.purpose,
   s.capture_outcome,
   s.review_disposition,
+  s.background_permission_confirmed,
   (
     SELECT MAX(p.recorded_at_ms)
     FROM location_sample p
