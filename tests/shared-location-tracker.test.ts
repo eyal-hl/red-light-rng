@@ -280,4 +280,53 @@ describe('SharedLocationTracker', () => {
     assert.equal((await store.getSession('id-1'))?.isActive, false);
     assert.equal(platform.updating, false);
   });
+
+  it('does not interrupt a recording that started without background permission', async () => {
+    const platform = new FakeLocationPlatform();
+    platform.backgroundGranted = false;
+    const { tracker, store } = createTracker(platform);
+
+    await tracker.startTracking();
+    assert.equal(platform.updating, true);
+    await tracker.recover();
+
+    const session = await store.getSession('id-1');
+    assert.equal(session?.captureOutcome, 'active');
+    assert.equal(session?.isActive, true);
+    assert.equal(platform.updating, true);
+    const state = await tracker.getState();
+    assert.equal(state.status, 'tracking');
+    assert.match(state.lastWarning ?? '', /Background location permission was denied/);
+  });
+
+  it('interrupts after background permission is later granted and then revoked', async () => {
+    const platform = new FakeLocationPlatform();
+    platform.backgroundGranted = false;
+    const { tracker, store } = createTracker(platform);
+
+    await tracker.startTracking();
+    platform.backgroundGranted = true;
+    await tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'active');
+    assert.equal(platform.updating, true);
+
+    platform.backgroundGranted = false;
+    await tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
+    assert.equal((await store.getSession('id-1'))?.reviewDisposition, 'pending');
+    assert.equal(platform.updating, false);
+  });
+
+  it('still interrupts a foreground-only recording when the OS task is gone', async () => {
+    const platform = new FakeLocationPlatform();
+    platform.backgroundGranted = false;
+    const { tracker, store } = createTracker(platform);
+
+    await tracker.startTracking();
+    platform.updating = false;
+    await tracker.recover();
+    assert.equal((await store.getSession('id-1'))?.captureOutcome, 'interrupted');
+    assert.equal((await store.getSession('id-1'))?.reviewDisposition, 'pending');
+    assert.equal(platform.updating, false);
+  });
 });
