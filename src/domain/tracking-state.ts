@@ -1,9 +1,18 @@
-export type TrackingStatus = 'idle' | 'tracking';
+import type { GpsHealth, CaptureOutcome, ReviewDisposition, SessionPurpose } from './session';
+
+export type TrackingStatus = 'idle' | 'tracking' | 'interrupted';
 
 export type TrackingState = {
   status: TrackingStatus;
   sessionId: string | null;
+  purpose: SessionPurpose | null;
+  captureOutcome: CaptureOutcome | null;
+  reviewDisposition: ReviewDisposition | null;
+  startedAtMs: number | null;
+  stoppedAtMs: number | null;
+  lastSampleAtMs: number | null;
   pointCount: number;
+  gpsHealth: GpsHealth | null;
   lastError: string | null;
   lastWarning: string | null;
 };
@@ -11,14 +20,27 @@ export type TrackingState = {
 export const IDLE_TRACKING_STATE: TrackingState = {
   status: 'idle',
   sessionId: null,
+  purpose: null,
+  captureOutcome: null,
+  reviewDisposition: null,
+  startedAtMs: null,
+  stoppedAtMs: null,
+  lastSampleAtMs: null,
   pointCount: 0,
+  gpsHealth: null,
   lastError: null,
   lastWarning: null,
 };
 
 export function resolveTrackingStatus(params: {
-  osUpdating: boolean;
-  activeSessionId: string | null;
+  isActive: boolean;
+  captureOutcome: CaptureOutcome | null;
 }): TrackingStatus {
-  return params.osUpdating || params.activeSessionId != null ? 'tracking' : 'idle';
+  if (params.captureOutcome === 'interrupted') {
+    return 'interrupted';
+  }
+  if (params.isActive && params.captureOutcome === 'active') {
+    return 'tracking';
+  }
+  return 'idle';
 }

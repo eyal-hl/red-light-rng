@@ -65,10 +65,10 @@ iOS development build requires macOS and Xcode and is currently **unvalidated** 
 npx expo run:ios
 ```
 
-The first implementation is a background-location spike (`Background Location Spike` screen): start/stop tracking, persist raw points in SQLite, and inspect them after stop or app restart.
+The current product slice is local route creation: record a commute with the phone in a pocket, review the captured path on a map, name it, choose a transportation mode, and save it as a reusable route. Official timed attempts, checkpoints, and ARM RUN are not part of this slice.
 
 ### Platform validation status
 
-- **Android locked-screen / background recording:** implementation is in place behind a shared `LocationTracker` / `LocationPlatform` boundary. Physical-device field validation is still required before treating the spike as successful.
+- **Android locked-screen / background recording:** implementation is in place behind a shared `LocationTracker` / `LocationPlatform` boundary. Physical-device field validation of the V0.1 route-creation flow is still required.
 - **iOS:** project config includes background location modes and Always permission copy, but iOS background behavior is **unvalidated**. Do not treat a successful compile as evidence that locked-screen tracking works on iPhone. Follow-up when a device is available: confirm Always permission, background indicator, and locked-screen samples; if Expo is insufficient, replace only `src/tracking/expo-location-platform.ts` (and the task registration) with a Swift Expo Module.
 

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { formatElapsed, recordingElapsedMs, reviewDurationMs } from '../src/domain/duration';
 import { formatSampleLine } from '../src/domain/format-sample';
+import { resolveGpsHealth, STALE_FIX_THRESHOLD_MS } from '../src/domain/session';
 import { resolveTrackingStatus } from '../src/domain/tracking-state';
 
 describe('formatSampleLine', () => {
@@ -25,9 +27,47 @@ describe('formatSampleLine', () => {
 });
 
 describe('resolveTrackingStatus', () => {
-  it('is tracking when either the OS or an active session says so', () => {
-    assert.equal(resolveTrackingStatus({ osUpdating: true, activeSessionId: null }), 'tracking');
-    assert.equal(resolveTrackingStatus({ osUpdating: false, activeSessionId: 's1' }), 'tracking');
-    assert.equal(resolveTrackingStatus({ osUpdating: false, activeSessionId: null }), 'idle');
+  it('distinguishes tracking, interrupted, and idle from persisted capture outcome', () => {
+    assert.equal(resolveTrackingStatus({ isActive: true, captureOutcome: 'active' }), 'tracking');
+    assert.equal(resolveTrackingStatus({ isActive: false, captureOutcome: 'interrupted' }), 'interrupted');
+    assert.equal(resolveTrackingStatus({ isActive: false, captureOutcome: 'finished' }), 'idle');
+    assert.equal(resolveTrackingStatus({ isActive: false, captureOutcome: null }), 'idle');
+  });
+});
+
+describe('recording and review durations', () => {
+  it('derives elapsed recording time from persisted started_at_ms', () => {
+    assert.equal(recordingElapsedMs(1_000, 4_000), 3_000);
+    assert.equal(formatElapsed(3_000), '0:03');
+    assert.equal(formatElapsed(62_000), '1:02');
+  });
+
+  it('uses stop time for a finished recording and last sample time for an interrupted one', () => {
+    assert.equal(
+      reviewDurationMs({
+        captureOutcome: 'finished',
+        startedAtMs: 1_000,
+        stoppedAtMs: 5_000,
+        lastSampleAtMs: 3_000,
+      }),
+      4_000,
+    );
+    assert.equal(
+      reviewDurationMs({
+        captureOutcome: 'interrupted',
+        startedAtMs: 1_000,
+        stoppedAtMs: 80_000,
+        lastSampleAtMs: 4_000,
+      }),
+      3_000,
+    );
+  });
+});
+
+describe('resolveGpsHealth', () => {
+  it('keeps pre-first-fix distinct from stale samples', () => {
+    assert.equal(resolveGpsHealth(null, STALE_FIX_THRESHOLD_MS + 1), 'waiting_for_first_fix');
+    assert.equal(resolveGpsHealth(1, 1 + STALE_FIX_THRESHOLD_MS), 'stale');
+    assert.equal(resolveGpsHealth(1, 2), 'healthy');
   });
 });

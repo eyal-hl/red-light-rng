@@ -22,6 +22,8 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
+export const CURRENT_SCHEMA_VERSION = 2;
+
 export type LocationSampleRow = {
   id: string;
   session_id: string;
@@ -31,6 +33,39 @@ export type LocationSampleRow = {
   horizontal_accuracy_meters: number | null;
   speed_meters_per_second: number | null;
   heading_degrees: number | null;
+};
+
+export type TrackingSessionRow = {
+  id: string;
+  started_at_ms: number;
+  stopped_at_ms: number | null;
+  is_active: number;
+  purpose: string;
+  capture_outcome: string;
+  review_disposition: string;
+  last_sample_at_ms: number | null;
+  background_permission_confirmed: number;
+};
+
+export type RouteRow = {
+  id: string;
+  name: string;
+  transportation_mode: string;
+  created_at_ms: number;
+  source_recording_id: string;
+  start_latitude: number;
+  start_longitude: number;
+  start_radius_meters: number;
+  finish_latitude: number;
+  finish_longitude: number;
+  finish_radius_meters: number;
+};
+
+export type RouteReferencePointRow = {
+  route_id: string;
+  seq: number;
+  latitude: number;
+  longitude: number;
 };
 
 export function mapLocationSampleRow(row: LocationSampleRow) {
@@ -45,3 +80,21 @@ export function mapLocationSampleRow(row: LocationSampleRow) {
     headingDegrees: row.heading_degrees,
   };
 }
+
+export const SESSION_SELECT = `
+SELECT
+  s.id,
+  s.started_at_ms,
+  s.stopped_at_ms,
+  s.is_active,
+  s.purpose,
+  s.capture_outcome,
+  s.review_disposition,
+  s.background_permission_confirmed,
+  (
+    SELECT MAX(p.recorded_at_ms)
+    FROM location_sample p
+    WHERE p.session_id = s.id
+  ) AS last_sample_at_ms
+FROM tracking_session s
+`;
