@@ -89,6 +89,32 @@ describe('SQLite migrations', () => {
     await sql.exec(
       `ALTER TABLE tracking_session ADD COLUMN review_disposition TEXT NOT NULL DEFAULT 'discarded'`,
     );
+    await sql.exec(`
+      CREATE TABLE IF NOT EXISTS route (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        transportation_mode TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        source_recording_id TEXT NOT NULL UNIQUE,
+        start_latitude REAL NOT NULL,
+        start_longitude REAL NOT NULL,
+        start_radius_meters REAL NOT NULL,
+        finish_latitude REAL NOT NULL,
+        finish_longitude REAL NOT NULL,
+        finish_radius_meters REAL NOT NULL,
+        FOREIGN KEY (source_recording_id) REFERENCES tracking_session(id)
+      );
+    `);
+    await sql.exec(`
+      CREATE TABLE IF NOT EXISTS route_reference_point (
+        route_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        PRIMARY KEY (route_id, seq),
+        FOREIGN KEY (route_id) REFERENCES route(id) ON DELETE CASCADE
+      );
+    `);
     await sql.exec('PRAGMA user_version = 1');
     await sql.run(
       `INSERT INTO tracking_session (
