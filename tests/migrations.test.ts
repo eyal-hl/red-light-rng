@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { applyMigrations } from '../src/persistence/migrations';
+import { pathDistanceMeters } from '../src/domain/geo';
+import { applyMigrations, MIGRATIONS } from '../src/persistence/migrations';
 import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../src/persistence/schema';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
@@ -111,6 +112,90 @@ describe('SQLite migrations', () => {
     assert.equal(row?.is_active, 1);
     assert.equal(row?.purpose, 'route_creation');
     assert.equal(row?.background_permission_confirmed, 0);
+  });
+
+  it('migrates v2 routes in place with zero checkpoints and anchored start/finish progress', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    await MIGRATIONS[0]!.up(sql, 1000);
+    await MIGRATIONS[1]!.up(sql, 1000);
+    await sql.exec('PRAGMA user_version = 2');
+
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['issue-3-session', 1000, 2000],
+    );
+    const startLat = 32.08;
+    const startLng = 34.78;
+    const points = [
+      { latitude: startLat, longitude: startLng },
+      { latitude: startLat + 20 / 111_320, longitude: startLng },
+      { latitude: startLat + 40 / 111_320, longitude: startLng },
+      { latitude: startLat + 60 / 111_320, longitude: startLng },
+    ];
+    const finishCenterLat = points[3]!.latitude + 8 / 111_320;
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'issue-3-route',
+        'Home → Work',
+        'scooter',
+        3000,
+        'issue-3-session',
+        points[0]!.latitude,
+        points[0]!.longitude,
+        30,
+        finishCenterLat,
+        startLng,
+        30,
+      ],
+    );
+    for (const [index, point] of points.entries()) {
+      await sql.run(
+        'INSERT INTO route_reference_point (route_id, seq, latitude, longitude) VALUES (?, ?, ?, ?)',
+        ['issue-3-route', index, point.latitude, point.longitude],
+      );
+    }
+
+    await applyMigrations(sql, 4000);
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const route = await sql.getFirst<{
+      start_latitude: number;
+      start_longitude: number;
+      start_radius_meters: number;
+      finish_latitude: number;
+      finish_longitude: number;
+      finish_radius_meters: number;
+      start_progress_m: number;
+      finish_progress_m: number;
+    }>('SELECT * FROM route WHERE id = ?', ['issue-3-route']);
+    assert.equal(route?.start_latitude, points[0]!.latitude);
+    assert.equal(route?.start_longitude, points[0]!.longitude);
+    assert.equal(route?.start_radius_meters, 30);
+    assert.equal(route?.finish_latitude, finishCenterLat);
+    assert.equal(route?.finish_longitude, startLng);
+    assert.equal(route?.finish_radius_meters, 30);
+    assert.equal(route?.start_progress_m, 0);
+    assert.ok(Math.abs((route?.finish_progress_m ?? 0) - pathDistanceMeters(points)) < 0.0001);
+    const checkpoints = await sql.getAll('SELECT id FROM route_checkpoint WHERE route_id = ?', [
+      'issue-3-route',
+    ]);
+    assert.equal(checkpoints.length, 0);
+    const source = await sql.getFirst<{ id: string }>('SELECT id FROM tracking_session WHERE id = ?', [
+      'issue-3-session',
+    ]);
+    assert.equal(source?.id, 'issue-3-session');
   });
 
   it('is idempotent when the current schema version is already applied', async () => {
