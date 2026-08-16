@@ -2,11 +2,17 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, Text, View } from 'react-native';
 
+import {
+  createCourseEditorDraft,
+  toCourseLayout,
+  type CourseEditorDraft,
+} from '../domain/course-editor';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteWorkspace } from '../product/route-workspace';
+import { CourseEditorScreen } from './CourseEditorScreen';
 import { HomeScreen } from './HomeScreen';
 import { RecordingScreen } from './RecordingScreen';
 import { ReviewScreen } from './ReviewScreen';
@@ -18,7 +24,8 @@ type AppScreen =
   | { kind: 'home' }
   | { kind: 'recording' }
   | { kind: 'review'; sessionId: string }
-  | { kind: 'detail'; routeId: string };
+  | { kind: 'detail'; routeId: string }
+  | { kind: 'editor'; routeId: string };
 
 type AppRootProps = {
   workspace: RouteWorkspace;
@@ -36,6 +43,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [routeName, setRouteName] = useState('');
   const [routeMode, setRouteMode] = useState<TransportationMode>('scooter');
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+  const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -252,6 +260,57 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [refreshHome, screen, workspace]);
 
+  const onEditCourse = useCallback(async () => {
+    if (screen.kind !== 'detail') {
+      return;
+    }
+    const route = await workspace.getRoute(screen.routeId);
+    if (!route) {
+      setError('This route is no longer available.');
+      return;
+    }
+    setSelectedRoute(route);
+    setCourseDraft(createCourseEditorDraft(route));
+    setError(null);
+    setScreen({ kind: 'editor', routeId: route.id });
+  }, [screen, workspace]);
+
+  const onSaveCourse = useCallback(async () => {
+    if (screen.kind !== 'editor' || !courseDraft) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await workspace.saveCourseLayout(screen.routeId, toCourseLayout(courseDraft));
+      if (!result.ok) {
+        setError(result.reason);
+        return;
+      }
+      setSelectedRoute(result.route);
+      setCourseDraft(null);
+      await refreshHome();
+      setScreen({ kind: 'detail', routeId: result.route.id });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not save course.');
+    } finally {
+      setBusy(false);
+    }
+  }, [courseDraft, refreshHome, screen, workspace]);
+
+  const onCancelEditor = useCallback(async () => {
+    if (screen.kind !== 'editor') {
+      return;
+    }
+    setCourseDraft(null);
+    setError(null);
+    const route = await workspace.getRoute(screen.routeId);
+    if (route) {
+      setSelectedRoute(route);
+    }
+    setScreen({ kind: 'detail', routeId: screen.routeId });
+  }, [screen, workspace]);
+
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
@@ -327,8 +386,25 @@ export function AppRoot({ workspace }: AppRootProps) {
             setScreen({ kind: 'home' });
             void refreshHome();
           }}
+          onEditCourse={() => {
+            void onEditCourse();
+          }}
           onDelete={() => {
             void onDeleteRoute();
+          }}
+        />
+      ) : null}
+      {screen.kind === 'editor' && courseDraft ? (
+        <CourseEditorScreen
+          draft={courseDraft}
+          busy={busy}
+          error={error}
+          onChangeDraft={setCourseDraft}
+          onSave={() => {
+            void onSaveCourse();
+          }}
+          onCancel={() => {
+            void onCancelEditor();
           }}
         />
       ) : null}

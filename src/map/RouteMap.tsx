@@ -6,10 +6,20 @@ import type { GeoZone, LatLng } from '../domain/geo';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
 import { OPENFREEMAP_LIBERTY_STYLE_URL } from './openfreemap-style';
 
+export type RouteMapCheckpoint = {
+  id: string;
+  name: string;
+  point: LatLng;
+};
+
 export type RouteMapProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
+  checkpoints?: RouteMapCheckpoint[];
+  previewPoint?: LatLng | null;
+  selectedMarkerId?: string | null;
+  onMapPress?: (point: LatLng) => void;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -17,7 +27,7 @@ type FeatureCollection = {
   type: 'FeatureCollection';
   features: {
     type: 'Feature';
-    properties: { kind: string };
+    properties: { kind: string; selected: string };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
       | { type: 'Polygon'; coordinates: number[][][] }
@@ -39,12 +49,19 @@ function circlePolygon(center: LatLng, radiusMeters: number, steps = 32): number
   return coordinates;
 }
 
-function toGeoJson(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZone | null): FeatureCollection {
+function toGeoJson(
+  path: LatLng[],
+  startZone?: GeoZone | null,
+  finishZone?: GeoZone | null,
+  checkpoints: RouteMapCheckpoint[] = [],
+  previewPoint?: LatLng | null,
+  selectedMarkerId?: string | null,
+): FeatureCollection {
   const features: FeatureCollection['features'] = [];
   if (path.length >= 2) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'path' },
+      properties: { kind: 'path', selected: 'no' },
       geometry: {
         type: 'LineString',
         coordinates: path.map((point) => [point.longitude, point.latitude]),
@@ -54,37 +71,63 @@ function toGeoJson(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZ
   if (startZone) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'start-zone' },
+      properties: { kind: 'start-zone', selected: 'no' },
       geometry: { type: 'Polygon', coordinates: [circlePolygon(startZone.center, startZone.radiusMeters)] },
     });
     features.push({
       type: 'Feature',
-      properties: { kind: 'start' },
+      properties: { kind: 'start', selected: selectedMarkerId === 'start' ? 'yes' : 'no' },
       geometry: { type: 'Point', coordinates: [startZone.center.longitude, startZone.center.latitude] },
     });
   }
   if (finishZone) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'finish-zone' },
+      properties: { kind: 'finish-zone', selected: 'no' },
       geometry: { type: 'Polygon', coordinates: [circlePolygon(finishZone.center, finishZone.radiusMeters)] },
     });
     features.push({
       type: 'Feature',
-      properties: { kind: 'finish' },
+      properties: { kind: 'finish', selected: selectedMarkerId === 'finish' ? 'yes' : 'no' },
       geometry: { type: 'Point', coordinates: [finishZone.center.longitude, finishZone.center.latitude] },
+    });
+  }
+  for (const checkpoint of checkpoints) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'checkpoint', selected: selectedMarkerId === checkpoint.id ? 'yes' : 'no' },
+      geometry: { type: 'Point', coordinates: [checkpoint.point.longitude, checkpoint.point.latitude] },
+    });
+  }
+  if (previewPoint) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'preview', selected: 'no' },
+      geometry: { type: 'Point', coordinates: [previewPoint.longitude, previewPoint.latitude] },
     });
   }
   return { type: 'FeatureCollection', features };
 }
 
-function boundsFor(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZone | null): [number, number, number, number] {
+function boundsFor(
+  path: LatLng[],
+  startZone?: GeoZone | null,
+  finishZone?: GeoZone | null,
+  checkpoints: RouteMapCheckpoint[] = [],
+  previewPoint?: LatLng | null,
+): [number, number, number, number] {
   const coords = [...path];
   if (startZone) {
     coords.push(startZone.center);
   }
   if (finishZone) {
     coords.push(finishZone.center);
+  }
+  for (const checkpoint of checkpoints) {
+    coords.push(checkpoint.point);
+  }
+  if (previewPoint) {
+    coords.push(previewPoint);
   }
   if (coords.length === 0) {
     return [34.75, 32.05, 34.82, 32.12];
@@ -119,9 +162,24 @@ class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactN
   }
 }
 
-function MapLibreRouteMap({ path, startZone, finishZone, onBasemapFailed }: RouteMapProps & { onBasemapFailed: () => void }) {
-  const data = useMemo(() => toGeoJson(path, startZone, finishZone), [finishZone, path, startZone]);
-  const bounds = useMemo(() => boundsFor(path, startZone, finishZone), [finishZone, path, startZone]);
+function MapLibreRouteMap({
+  path,
+  startZone,
+  finishZone,
+  checkpoints = [],
+  previewPoint,
+  selectedMarkerId,
+  onMapPress,
+  onBasemapFailed,
+}: RouteMapProps & { onBasemapFailed: () => void }) {
+  const data = useMemo(
+    () => toGeoJson(path, startZone, finishZone, checkpoints, previewPoint, selectedMarkerId),
+    [checkpoints, finishZone, path, previewPoint, selectedMarkerId, startZone],
+  );
+  const bounds = useMemo(
+    () => boundsFor(path, startZone, finishZone, checkpoints, previewPoint),
+    [checkpoints, finishZone, path, previewPoint, startZone],
+  );
 
   return (
     <Map
@@ -130,6 +188,21 @@ function MapLibreRouteMap({ path, startZone, finishZone, onBasemapFailed }: Rout
       attribution
       logo
       onDidFailLoadingMap={onBasemapFailed}
+      onPress={(event) => {
+        if (!onMapPress) {
+          return;
+        }
+        const lngLat = event.nativeEvent.lngLat;
+        if (!Array.isArray(lngLat) || lngLat.length < 2) {
+          return;
+        }
+        const longitude = lngLat[0];
+        const latitude = lngLat[1];
+        if (typeof longitude !== 'number' || typeof latitude !== 'number') {
+          return;
+        }
+        onMapPress({ latitude, longitude });
+      }}
     >
       <Camera
         initialViewState={{
@@ -163,25 +236,75 @@ function MapLibreRouteMap({ path, startZone, finishZone, onBasemapFailed }: Rout
           id="start-point"
           type="circle"
           filter={['==', ['get', 'kind'], 'start']}
-          paint={{ 'circle-radius': 7, 'circle-color': '#2e7d4f', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }}
+          paint={{
+            'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 9, 7],
+            'circle-color': '#2e7d4f',
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+          }}
         />
         <Layer
           id="finish-point"
           type="circle"
           filter={['==', ['get', 'kind'], 'finish']}
-          paint={{ 'circle-radius': 7, 'circle-color': '#f5f5f5', 'circle-stroke-width': 3, 'circle-stroke-color': '#8a2f2f' }}
+          paint={{
+            'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 9, 7],
+            'circle-color': '#f5f5f5',
+            'circle-stroke-width': 3,
+            'circle-stroke-color': '#8a2f2f',
+          }}
+        />
+        <Layer
+          id="checkpoint-point"
+          type="circle"
+          filter={['==', ['get', 'kind'], 'checkpoint']}
+          paint={{
+            'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 8, 6],
+            'circle-color': '#f0c040',
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#111111',
+          }}
+        />
+        <Layer
+          id="preview-point"
+          type="circle"
+          filter={['==', ['get', 'kind'], 'preview']}
+          paint={{
+            'circle-radius': 8,
+            'circle-color': '#7ee0ff',
+            'circle-stroke-width': 3,
+            'circle-stroke-color': '#ffffff',
+          }}
         />
       </GeoJSONSource>
     </Map>
   );
 }
 
-export function RouteMap({ path, startZone, finishZone, style }: RouteMapProps) {
+export function RouteMap({
+  path,
+  startZone,
+  finishZone,
+  checkpoints = [],
+  previewPoint = null,
+  selectedMarkerId = null,
+  onMapPress,
+  style,
+}: RouteMapProps) {
   const [useFallback, setUseFallback] = useState(false);
   const fallback = (
     <View style={styles.fallbackWrap}>
-      <FallbackRoutePreview path={path} startZone={startZone} finishZone={finishZone} />
+      <FallbackRoutePreview
+        path={path}
+        startZone={startZone}
+        finishZone={finishZone}
+        checkpoints={checkpoints}
+        previewPoint={previewPoint}
+      />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
+      {onMapPress ? (
+        <Text style={styles.fallbackNote}>Tap-to-place is unavailable without the street map.</Text>
+      ) : null}
       <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
     </View>
   );
@@ -196,6 +319,10 @@ export function RouteMap({ path, startZone, finishZone, style }: RouteMapProps) 
             path={path}
             startZone={startZone}
             finishZone={finishZone}
+            checkpoints={checkpoints}
+            previewPoint={previewPoint}
+            selectedMarkerId={selectedMarkerId}
+            onMapPress={onMapPress}
             onBasemapFailed={() => setUseFallback(true)}
           />
         </MapErrorBoundary>

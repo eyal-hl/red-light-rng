@@ -70,6 +70,8 @@ export const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#1b1b1b',
   },
   cardTitle: {
     color: '#f5f5f5',
@@ -164,6 +166,14 @@ export const styles = StyleSheet.create({
   mapSlot: {
     height: 260,
     marginBottom: 16,
+  },
+  editorMapSlot: {
+    height: 320,
+    marginBottom: 16,
+  },
+  selectedCard: {
+    borderWidth: 1,
+    borderColor: '#4fc3f7',
   },
   recordingDot: {
     color: '#f07178',
