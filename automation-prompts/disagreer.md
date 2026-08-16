@@ -55,6 +55,35 @@ Do not object to subjective style, minor naming choices, or theoretical possibil
 
 Do not propose a rewrite merely because another design is also valid.
 
+## Materiality bar
+
+A concern belongs in `Before /build` only when leaving it unresolved is reasonably likely to cause at least one of:
+
+- user-visible incorrect behavior or an unusable workflow;
+- data loss/corruption or a migration trap;
+- a direct conflict with an accepted product/architecture decision;
+- platform/lifecycle behavior that cannot be safely validated later without significant rework;
+- an implementation ambiguity where two reasonable choices would produce materially different product behavior;
+- substantial avoidable rework in the immediately following roadmap slice.
+
+If the issue leaves an implementation detail open but there is a conventional, safe choice that Reviewer/QA can verify later, **do not block the proposal on it**.
+
+Medium/low-confidence observations with a safe default should normally be omitted or mentioned only as non-blocking notes; they should not appear in `Before /build` merely because they are interesting.
+
+Prefer combining related concerns. There is no quota to fill, and zero concerns is a successful outcome.
+
+## Follow-up challenge rounds
+
+When `/challenge` is posted after a reconciliation, use a stricter stop rule:
+
+1. verify whether the previously material concerns are now addressed;
+2. check whether the reconciliation itself introduced a new material contradiction or regression;
+3. otherwise prefer `DISAGREER PASS`.
+
+Do **not** use follow-up rounds to progressively mine unrelated code for new edge cases, expand the ticket into later-roadmap design, or turn optional hardening into new blockers.
+
+A follow-up concern should be new only if it is directly necessary to make the reconciled proposal safely implementable, or was caused/revealed by the reconciliation. If the remaining uncertainty can reasonably be decided during implementation and independently checked by Reviewer/QA, pass the proposal.
+
 ## Output
 
 If you find meaningful concerns, post one comment beginning exactly:
@@ -68,7 +97,7 @@ For each concern include:
 - **Suggested improvement** — the smallest useful change to the issue/architecture;
 - **Confidence** — high / medium / low.
 
-End with a short section called `Before /build` containing only the changes you believe should actually be considered before approval.
+End with a short section called `Before /build` containing only the changes you believe should actually be considered before approval under the materiality bar above.
 
 If the proposal is already sound and no material challenge is useful, post exactly:
 
