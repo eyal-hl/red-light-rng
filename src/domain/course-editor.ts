@@ -143,6 +143,29 @@ export function beginMoveSelected(draft: CourseEditorDraft): CourseEditorDraft {
   return next;
 }
 
+export function beginMoveMarker(
+  draft: CourseEditorDraft,
+  markerId: CourseMarkerId,
+): CourseEditorDraft {
+  return beginMoveSelected(selectMarker(draft, markerId));
+}
+
+export function selectedMarkerLabel(draft: CourseEditorDraft): string | null {
+  if (!draft.selectedMarkerId) {
+    return null;
+  }
+  if (draft.selectedMarkerId === START_MARKER_ID) {
+    return 'Start';
+  }
+  if (draft.selectedMarkerId === FINISH_MARKER_ID) {
+    return 'Finish';
+  }
+  return (
+    draft.layout.checkpoints.find((checkpoint) => checkpoint.id === draft.selectedMarkerId)?.name ??
+    'checkpoint'
+  );
+}
+
 export function cancelMove(draft: CourseEditorDraft): CourseEditorDraft {
   const next = cloneDraft(draft);
   next.mode = 'place';

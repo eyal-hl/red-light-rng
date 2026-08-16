@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   addCheckpointFromPending,
+  beginMoveMarker,
   beginMoveSelected,
   commitMoveFromPending,
   createCourseEditorDraft,
@@ -12,6 +13,7 @@ import {
   previewMapTap,
   renameSelectedCheckpoint,
   selectMarker,
+  selectedMarkerLabel,
   START_MARKER_ID,
   FINISH_MARKER_ID,
   toCourseLayout,
@@ -85,15 +87,19 @@ describe('course editor draft', () => {
     const startRadius = route.startZone.radiusMeters;
     const finishRadius = route.finishZone.radiusMeters;
     let draft = createCourseEditorDraft(route);
-    draft = selectMarker(draft, START_MARKER_ID);
-    draft = beginMoveSelected(draft);
+    draft = beginMoveMarker(draft, START_MARKER_ID);
+    assert.equal(draft.selectedMarkerId, START_MARKER_ID);
+    assert.equal(draft.mode, 'move');
+    assert.equal(selectedMarkerLabel(draft), 'Start');
     draft = previewMapTap(draft, tapAtProgress(route.referencePath, 15));
     draft = commitMoveFromPending(draft);
     assert.equal(draft.layout.startZone.radiusMeters, startRadius);
     assert.ok(draft.layout.startProgressMeters > 10);
 
-    draft = selectMarker(draft, FINISH_MARKER_ID);
-    draft = beginMoveSelected(draft);
+    draft = beginMoveMarker(draft, FINISH_MARKER_ID);
+    assert.equal(draft.selectedMarkerId, FINISH_MARKER_ID);
+    assert.equal(draft.mode, 'move');
+    assert.equal(selectedMarkerLabel(draft), 'Finish');
     draft = previewMapTap(draft, tapAtProgress(route.referencePath, 85));
     draft = commitMoveFromPending(draft);
     assert.equal(draft.layout.finishZone.radiusMeters, finishRadius);

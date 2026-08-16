@@ -2,7 +2,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import {
   addCheckpointFromPending,
-  beginMoveSelected,
+  beginMoveMarker,
   cancelMove,
   clearPendingSnap,
   commitMoveFromPending,
@@ -13,8 +13,10 @@ import {
   previewMapTap,
   renameSelectedCheckpoint,
   selectMarker,
+  selectedMarkerLabel,
   START_MARKER_ID,
   type CourseEditorDraft,
+  type CourseMarkerId,
 } from '../domain/course-editor';
 import { checkpointMapPoints } from '../domain/course-layout';
 import { createId } from '../domain/ids';
@@ -29,6 +31,47 @@ type CourseEditorScreenProps = {
   onSave: () => void;
   onCancel: () => void;
 };
+
+function editorStatusCopy(draft: CourseEditorDraft): string {
+  const label = selectedMarkerLabel(draft);
+  if (draft.mode === 'move' && label) {
+    return `Moving ${label}. Tap the route to preview a new place, then PLACE HERE. Pan and pinch still move the map.`;
+  }
+  return 'Tap the route to preview a checkpoint. Use MOVE START or MOVE FINISH to relocate those markers. Pan and pinch to navigate; that does not place a point.';
+}
+
+function MarkerMoveButton({
+  draft,
+  markerId,
+  label,
+  busy,
+  onChangeDraft,
+}: {
+  draft: CourseEditorDraft;
+  markerId: CourseMarkerId;
+  label: string;
+  busy: boolean;
+  onChangeDraft: (next: CourseEditorDraft) => void;
+}) {
+  const movingThis = draft.mode === 'move' && draft.selectedMarkerId === markerId;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={busy}
+      onPress={() =>
+        onChangeDraft(movingThis ? cancelMove(draft) : beginMoveMarker(draft, markerId))
+      }
+      style={[
+        styles.button,
+        styles.secondaryButton,
+        styles.markerAction,
+        busy ? styles.disabledButton : null,
+      ]}
+    >
+      <Text style={styles.buttonText}>{movingThis ? 'CANCEL MOVE' : label}</Text>
+    </Pressable>
+  );
+}
 
 export function CourseEditorScreen({
   draft,
@@ -47,41 +90,44 @@ export function CourseEditorScreen({
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <View style={styles.editorHeader}>
         <Pressable accessibilityRole="button" onPress={onCancel}>
           <Text style={styles.kicker}>← ROUTE DETAIL</Text>
         </Pressable>
         <Text style={styles.title}>Edit course</Text>
-        <Text style={styles.subtitle}>
-          Tap the route to preview a snapped split, then add or move markers. A route with no
+        <Text style={styles.editorSubtitle}>
+          Map pan and pinch stay on the map. Checkpoints snap to the saved route. A route with no
           checkpoints is still valid.
         </Text>
+      </View>
 
-        <View style={styles.editorMapSlot}>
-          <RouteMap
-            path={draft.referencePath}
-            startZone={draft.layout.startZone}
-            finishZone={draft.layout.finishZone}
-            checkpoints={checkpoints}
-            previewPoint={draft.pendingSnap?.snapped ?? null}
-            selectedMarkerId={draft.selectedMarkerId}
-            onMapPress={(point) => {
-              onChangeDraft(previewMapTap(draft, point));
-            }}
-          />
-        </View>
+      <View style={styles.editorMapPane} collapsable={false}>
+        <RouteMap
+          path={draft.referencePath}
+          startZone={draft.layout.startZone}
+          finishZone={draft.layout.finishZone}
+          checkpoints={checkpoints}
+          previewPoint={draft.pendingSnap?.snapped ?? null}
+          selectedMarkerId={draft.selectedMarkerId}
+          onMapPress={(point) => {
+            onChangeDraft(previewMapTap(draft, point));
+          }}
+          style={styles.editorMap}
+        />
+      </View>
 
-        {draft.mode === 'move' ? (
-          <Text style={styles.warningText}>Tap the route to preview a new place for this marker.</Text>
-        ) : (
-          <Text style={styles.mutedText}>Tap the route to choose a checkpoint location.</Text>
-        )}
-
+      <View style={styles.editorStatus}>
+        <Text style={draft.mode === 'move' ? styles.warningText : styles.mutedText}>
+          {editorStatusCopy(draft)}
+        </Text>
         {draft.tapRejection ? <Text style={styles.errorText}>{draft.tapRejection}</Text> : null}
-
         {draft.pendingSnap ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Snapped to the route</Text>
+            <Text style={styles.cardTitle}>
+              {draft.mode === 'move'
+                ? `New place for ${selectedMarkerLabel(draft) ?? 'this marker'}`
+                : 'Snapped to the route'}
+            </Text>
             <Text style={styles.cardMeta}>
               {Math.round(draft.pendingSnap.progressMeters)} m along the course
             </Text>
@@ -123,84 +169,92 @@ export function CourseEditorScreen({
             </View>
           </View>
         ) : null}
+      </View>
 
+      <ScrollView
+        style={styles.editorControls}
+        contentContainerStyle={styles.editorControlsContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.sectionLabel}>COURSE MARKERS</Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => onChangeDraft(selectMarker(draft, START_MARKER_ID))}
+        <View
           style={[styles.card, draft.selectedMarkerId === START_MARKER_ID ? styles.selectedCard : null]}
         >
-          <Text style={styles.cardTitle}>Start</Text>
-          <Text style={styles.cardMeta}>{Math.round(draft.layout.startProgressMeters)} m</Text>
-        </Pressable>
-        {ordered.map((checkpoint) => (
           <Pressable
-            key={checkpoint.id}
             accessibilityRole="button"
-            onPress={() => onChangeDraft(selectMarker(draft, checkpoint.id))}
+            onPress={() => onChangeDraft(selectMarker(draft, START_MARKER_ID))}
+          >
+            <Text style={styles.cardTitle}>Start</Text>
+            <Text style={styles.cardMeta}>{Math.round(draft.layout.startProgressMeters)} m</Text>
+          </Pressable>
+          <MarkerMoveButton
+            draft={draft}
+            markerId={START_MARKER_ID}
+            label="MOVE START"
+            busy={busy}
+            onChangeDraft={onChangeDraft}
+          />
+        </View>
+        {ordered.map((checkpoint) => (
+          <View
+            key={checkpoint.id}
             style={[
               styles.card,
               draft.selectedMarkerId === checkpoint.id ? styles.selectedCard : null,
             ]}
           >
-            <Text style={styles.cardTitle}>{checkpoint.name}</Text>
-            <Text style={styles.cardMeta}>{Math.round(checkpoint.progressMeters)} m</Text>
-          </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onChangeDraft(selectMarker(draft, checkpoint.id))}
+            >
+              <Text style={styles.cardTitle}>{checkpoint.name}</Text>
+              <Text style={styles.cardMeta}>{Math.round(checkpoint.progressMeters)} m</Text>
+            </Pressable>
+            <MarkerMoveButton
+              draft={draft}
+              markerId={checkpoint.id}
+              label="MOVE"
+              busy={busy}
+              onChangeDraft={onChangeDraft}
+            />
+          </View>
         ))}
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => onChangeDraft(selectMarker(draft, FINISH_MARKER_ID))}
+        <View
           style={[styles.card, draft.selectedMarkerId === FINISH_MARKER_ID ? styles.selectedCard : null]}
         >
-          <Text style={styles.cardTitle}>Finish</Text>
-          <Text style={styles.cardMeta}>{Math.round(draft.layout.finishProgressMeters)} m</Text>
-        </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onChangeDraft(selectMarker(draft, FINISH_MARKER_ID))}
+          >
+            <Text style={styles.cardTitle}>Finish</Text>
+            <Text style={styles.cardMeta}>{Math.round(draft.layout.finishProgressMeters)} m</Text>
+          </Pressable>
+          <MarkerMoveButton
+            draft={draft}
+            markerId={FINISH_MARKER_ID}
+            label="MOVE FINISH"
+            busy={busy}
+            onChangeDraft={onChangeDraft}
+          />
+        </View>
 
-        {draft.selectedMarkerId ? (
+        {selectedCheckpoint ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Selected marker</Text>
-            {selectedCheckpoint ? (
-              <TextInput
-                value={selectedCheckpoint.name}
-                onChangeText={(value) => onChangeDraft(renameSelectedCheckpoint(draft, value))}
-                placeholder="Checkpoint name"
-                placeholderTextColor="#6b6f76"
-                style={styles.input}
-              />
-            ) : (
-              <Text style={styles.mutedText}>
-                Start and finish keep their route labels. Moving them keeps the existing zone
-                radius.
-              </Text>
-            )}
-            <View style={styles.actions}>
-              {draft.mode === 'move' ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onChangeDraft(cancelMove(draft))}
-                  style={[styles.button, styles.secondaryButton]}
-                >
-                  <Text style={styles.buttonText}>CANCEL MOVE</Text>
-                </Pressable>
-              ) : (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onChangeDraft(beginMoveSelected(draft))}
-                  style={[styles.button, styles.secondaryButton]}
-                >
-                  <Text style={styles.buttonText}>MOVE</Text>
-                </Pressable>
-              )}
-              {selectedCheckpoint ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onChangeDraft(deleteSelectedCheckpoint(draft))}
-                  style={[styles.button, styles.dangerButton]}
-                >
-                  <Text style={styles.buttonText}>DELETE CHECKPOINT</Text>
-                </Pressable>
-              ) : null}
-            </View>
+            <Text style={styles.cardTitle}>Checkpoint name</Text>
+            <TextInput
+              value={selectedCheckpoint.name}
+              onChangeText={(value) => onChangeDraft(renameSelectedCheckpoint(draft, value))}
+              placeholder="Checkpoint name"
+              placeholderTextColor="#6b6f76"
+              style={styles.input}
+            />
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onChangeDraft(deleteSelectedCheckpoint(draft))}
+              style={[styles.button, styles.dangerButton]}
+            >
+              <Text style={styles.buttonText}>DELETE CHECKPOINT</Text>
+            </Pressable>
           </View>
         ) : null}
 
