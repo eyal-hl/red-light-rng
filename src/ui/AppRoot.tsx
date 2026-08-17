@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, Text, View } from 'react-native';
 
+import type { Attempt } from '../domain/attempt';
 import {
   createCourseEditorDraft,
   toCourseLayout,
@@ -12,6 +13,8 @@ import type { RouteDerivation } from '../domain/route-derivation';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteWorkspace } from '../product/route-workspace';
+import { AttemptResultScreen } from './AttemptResultScreen';
+import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
 import { HomeScreen } from './HomeScreen';
 import { RecordingScreen } from './RecordingScreen';
@@ -25,7 +28,9 @@ type AppScreen =
   | { kind: 'recording' }
   | { kind: 'review'; sessionId: string }
   | { kind: 'detail'; routeId: string }
-  | { kind: 'editor'; routeId: string };
+  | { kind: 'editor'; routeId: string }
+  | { kind: 'attempt' }
+  | { kind: 'attempt-result' };
 
 type AppRootProps = {
   workspace: RouteWorkspace;
@@ -44,6 +49,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [routeMode, setRouteMode] = useState<TransportationMode>('scooter');
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
+  const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
+  const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
+  const [attemptCount, setAttemptCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,11 +74,45 @@ export function AppRoot({ workspace }: AppRootProps) {
     [workspace],
   );
 
+  const showAttempt = useCallback(
+    async (attempt: Attempt) => {
+      const route = await workspace.getRoute(attempt.routeId);
+      if (route) {
+        setSelectedRoute(route);
+      }
+      setActiveAttempt(attempt);
+      setAttemptResult(null);
+      setScreen({ kind: 'attempt' });
+    },
+    [workspace],
+  );
+
+  const showAttemptResult = useCallback(
+    async (attempt: Attempt) => {
+      const route = await workspace.getRoute(attempt.routeId);
+      if (route) {
+        setSelectedRoute(route);
+      }
+      setActiveAttempt(null);
+      setAttemptResult(attempt);
+      setScreen({ kind: 'attempt-result' });
+    },
+    [workspace],
+  );
+
   const bootstrap = useCallback(async () => {
     const snapshot = await workspace.bootstrap();
     setRoutes(snapshot.routes);
     setPendingRecording(snapshot.pendingRecording);
     setCanStartNewRecording(snapshot.canStartNewRecording);
+    if (snapshot.activeAttempt) {
+      await showAttempt(snapshot.activeAttempt);
+      return;
+    }
+    if (snapshot.attemptResult) {
+      await showAttemptResult(snapshot.attemptResult);
+      return;
+    }
     if (snapshot.activeRecording) {
       const state = await workspace.getTrackingState();
       setTrackingState(state);
@@ -82,7 +124,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       return;
     }
     setScreen({ kind: 'home' });
-  }, [openReview, workspace]);
+  }, [openReview, showAttempt, showAttemptResult, workspace]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -102,6 +144,26 @@ export function AppRoot({ workspace }: AppRootProps) {
   }, [screen.kind, workspace]);
 
   useEffect(() => {
+    if (screen.kind !== 'attempt') {
+      return undefined;
+    }
+    const interval = setInterval(() => {
+      void (async () => {
+        const processed = await workspace.processActiveAttempt();
+        if (!processed) {
+          return;
+        }
+        if (processed.lifecycle === 'armed' || processed.lifecycle === 'active') {
+          setActiveAttempt(processed);
+          return;
+        }
+        await showAttemptResult(processed);
+      })();
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [screen.kind, showAttemptResult, workspace]);
+
+  useEffect(() => {
     const sub = AppState.addEventListener('change', (status) => {
       if (status !== 'active') {
         return;
@@ -109,6 +171,14 @@ export function AppRoot({ workspace }: AppRootProps) {
       void (async () => {
         await workspace.recover();
         const snapshot = await refreshHome();
+        if (snapshot.activeAttempt) {
+          await showAttempt(snapshot.activeAttempt);
+          return;
+        }
+        if (snapshot.attemptResult) {
+          await showAttemptResult(snapshot.attemptResult);
+          return;
+        }
         if (snapshot.activeRecording) {
           setTrackingState(await workspace.getTrackingState());
           setScreen({ kind: 'recording' });
@@ -120,7 +190,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       })();
     });
     return () => sub.remove();
-  }, [openReview, refreshHome, workspace]);
+  }, [openReview, refreshHome, showAttempt, showAttemptResult, workspace]);
 
   const onRecordNewRoute = useCallback(async () => {
     setBusy(true);
@@ -203,6 +273,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       setRouteName('');
       setSelectedRoute(result.route);
+      setAttemptCount(0);
       await refreshHome();
       setScreen({ kind: 'detail', routeId: result.route.id });
     } catch (caught) {
@@ -236,11 +307,80 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!route) {
         return;
       }
+      const attempts = await workspace.listAttemptsForRoute(routeId);
       setSelectedRoute(route);
+      setAttemptCount(attempts.length);
       setScreen({ kind: 'detail', routeId });
     },
     [workspace],
   );
+
+  const onArmRun = useCallback(async () => {
+    if (screen.kind !== 'detail') {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await workspace.armRun(screen.routeId);
+      if (!result.ok) {
+        setError(result.reason);
+        return;
+      }
+      await showAttempt(result.attempt);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not arm this run.');
+    } finally {
+      setBusy(false);
+    }
+  }, [screen, showAttempt, workspace]);
+
+  const onCancelAttempt = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await workspace.cancelAttempt();
+      setActiveAttempt(null);
+      await refreshHome();
+      if (selectedRoute) {
+        const attempts = await workspace.listAttemptsForRoute(selectedRoute.id);
+        setAttemptCount(attempts.length);
+        setScreen({ kind: 'detail', routeId: selectedRoute.id });
+      } else {
+        setScreen({ kind: 'home' });
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not cancel this attempt.');
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshHome, selectedRoute, workspace]);
+
+  const onAcknowledgeAttempt = useCallback(async () => {
+    if (!attemptResult) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await workspace.acknowledgeAttemptResult(attemptResult.id);
+      const routeId = attemptResult.routeId;
+      setAttemptResult(null);
+      const route = await workspace.getRoute(routeId);
+      if (route) {
+        setSelectedRoute(route);
+        setAttemptCount((await workspace.listAttemptsForRoute(routeId)).length);
+        setScreen({ kind: 'detail', routeId });
+      } else {
+        await refreshHome();
+        setScreen({ kind: 'home' });
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not close this result.');
+    } finally {
+      setBusy(false);
+    }
+  }, [attemptResult, refreshHome, workspace]);
 
   const onDeleteRoute = useCallback(async () => {
     if (screen.kind !== 'detail') {
@@ -379,6 +519,8 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'detail' && selectedRoute ? (
         <RouteDetailScreen
           route={selectedRoute}
+          attemptCount={attemptCount}
+          canArm={canStartNewRecording}
           busy={busy}
           error={error}
           onBack={() => {
@@ -386,11 +528,36 @@ export function AppRoot({ workspace }: AppRootProps) {
             setScreen({ kind: 'home' });
             void refreshHome();
           }}
+          onArmRun={() => {
+            void onArmRun();
+          }}
           onEditCourse={() => {
             void onEditCourse();
           }}
           onDelete={() => {
             void onDeleteRoute();
+          }}
+        />
+      ) : null}
+      {screen.kind === 'attempt' && activeAttempt ? (
+        <AttemptScreen
+          route={selectedRoute}
+          attempt={activeAttempt}
+          busy={busy}
+          error={error}
+          onCancel={() => {
+            void onCancelAttempt();
+          }}
+        />
+      ) : null}
+      {screen.kind === 'attempt-result' && attemptResult ? (
+        <AttemptResultScreen
+          route={selectedRoute}
+          attempt={attemptResult}
+          busy={busy}
+          error={error}
+          onDone={() => {
+            void onAcknowledgeAttempt();
           }}
         />
       ) : null}

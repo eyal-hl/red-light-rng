@@ -1,4 +1,5 @@
 import type { LocationSample } from '../../src/domain/location-sample';
+import { pointAtProgress } from '../../src/domain/path-projection';
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
@@ -54,6 +55,47 @@ export function movingTrace(options?: {
         recordedAtMs: startMs + index * 1000,
         latitude: coord.latitude,
         longitude: coord.longitude,
+        speedMetersPerSecond: 4,
+        headingDegrees: 0,
+      }),
+    );
+  }
+  return samples;
+}
+
+export function traceAlongPath(
+  path: { latitude: number; longitude: number }[],
+  options: {
+    sessionId?: string;
+    startMs?: number;
+    intervalMs?: number;
+    startProgressMeters?: number;
+    stepMeters?: number;
+    count?: number;
+    eastJitterMeters?: number;
+  },
+): LocationSample[] {
+  const sessionId = options.sessionId ?? 'session';
+  const startMs = options.startMs ?? 1_700_000_000_000;
+  const intervalMs = options.intervalMs ?? 1000;
+  const startProgress = options.startProgressMeters ?? 0;
+  const stepMeters = options.stepMeters ?? 4;
+  const count = options.count ?? 20;
+  const samples: LocationSample[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const progress = startProgress + index * stepMeters;
+    const point = pointAtProgress(path, progress);
+    const jittered =
+      options.eastJitterMeters && options.eastJitterMeters !== 0
+        ? offsetLatLng(point.latitude, point.longitude, 0, options.eastJitterMeters)
+        : point;
+    samples.push(
+      sample({
+        id: `${sessionId}-${startMs + index}`,
+        sessionId,
+        recordedAtMs: startMs + index * intervalMs,
+        latitude: jittered.latitude,
+        longitude: jittered.longitude,
         speedMetersPerSecond: 4,
         headingDegrees: 0,
       }),

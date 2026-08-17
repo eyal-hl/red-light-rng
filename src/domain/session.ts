@@ -1,4 +1,4 @@
-export type SessionPurpose = 'legacy' | 'route_creation';
+export type SessionPurpose = 'legacy' | 'route_creation' | 'attempt';
 
 export type CaptureOutcome = 'active' | 'finished' | 'cancelled' | 'interrupted' | 'unknown';
 

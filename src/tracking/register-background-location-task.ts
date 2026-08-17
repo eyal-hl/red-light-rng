@@ -1,6 +1,6 @@
 import * as TaskManager from 'expo-task-manager';
 
-import { trackingSessionService } from '../app-context';
+import { attemptRuntime, trackingSessionService } from '../app-context';
 import { BACKGROUND_LOCATION_TASK } from './background-location-task';
 
 type LocationTaskLocation = {
@@ -29,4 +29,5 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   }
 
   await trackingSessionService.recordActiveSessionFixes(locations);
+  await attemptRuntime.processActive();
 });

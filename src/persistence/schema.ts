@@ -22,7 +22,28 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
+
+export type AttemptRow = {
+  id: string;
+  route_id: string;
+  session_id: string;
+  lifecycle: string;
+  validity: string;
+  armed_at_ms: number;
+  started_at_ms: number | null;
+  finished_at_ms: number | null;
+  result_acknowledged: number;
+};
+
+export type AttemptCheckpointCrossingRow = {
+  id: string;
+  attempt_id: string;
+  checkpoint_id: string;
+  checkpoint_name: string;
+  checkpoint_progress_m: number;
+  crossed_at_ms: number;
+};
 
 export type LocationSampleRow = {
   id: string;

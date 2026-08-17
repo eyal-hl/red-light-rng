@@ -97,6 +97,49 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 4,
+    async up(sql) {
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS attempt (
+          id TEXT PRIMARY KEY NOT NULL,
+          route_id TEXT NOT NULL,
+          session_id TEXT NOT NULL UNIQUE,
+          lifecycle TEXT NOT NULL,
+          validity TEXT NOT NULL,
+          armed_at_ms INTEGER NOT NULL,
+          started_at_ms INTEGER,
+          finished_at_ms INTEGER,
+          result_acknowledged INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (route_id) REFERENCES route(id) ON DELETE CASCADE,
+          FOREIGN KEY (session_id) REFERENCES tracking_session(id)
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_attempt_route_armed
+        ON attempt(route_id, armed_at_ms);
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_attempt_open
+        ON attempt(lifecycle);
+      `);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS attempt_checkpoint_crossing (
+          id TEXT PRIMARY KEY NOT NULL,
+          attempt_id TEXT NOT NULL,
+          checkpoint_id TEXT NOT NULL,
+          checkpoint_name TEXT NOT NULL,
+          checkpoint_progress_m REAL NOT NULL,
+          crossed_at_ms INTEGER NOT NULL,
+          FOREIGN KEY (attempt_id) REFERENCES attempt(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_attempt_crossing_attempt
+        ON attempt_checkpoint_crossing(attempt_id, crossed_at_ms);
+      `);
+    },
+  },
 ];
 
 async function tableExists(sql: SqlExecutor, name: string): Promise<boolean> {
