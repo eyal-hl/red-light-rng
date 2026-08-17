@@ -45,6 +45,7 @@ export function createMemoryWorkspace(options?: {
   now?: () => number;
   routeId?: string;
   attemptId?: string;
+  createAttemptId?: () => string;
 }) {
   const sessions = new MemoryLocationSampleStore();
   const routes = new MemoryRouteStore();
@@ -61,7 +62,7 @@ export function createMemoryWorkspace(options?: {
     routes,
     attempts,
     now,
-    () => options?.attemptId ?? 'attempt-1',
+    () => options?.createAttemptId?.() ?? options?.attemptId ?? 'attempt-1',
   );
   const workspace = new RouteWorkspace(
     tracker,

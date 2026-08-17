@@ -240,4 +240,72 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 8,
   },
+  goldText: {
+    color: '#e6c07b',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+  },
+  deltaFaster: {
+    color: '#7dcea0',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  deltaSlower: {
+    color: '#f07178',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  deltaNeutral: {
+    color: '#f5f5f5',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  splitHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  splitHeaderText: {
+    color: '#9aa0a6',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+  },
+  splitBlock: {
+    marginBottom: 12,
+  },
+  splitConnector: {
+    color: '#9aa0a6',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  toggleChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#1b1b1b',
+    borderWidth: 1,
+    borderColor: '#444444',
+  },
+  toggleChipSelected: {
+    borderColor: '#4fc3f7',
+    backgroundColor: '#163042',
+  },
+  toggleChipText: {
+    color: '#f5f5f5',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  pbBadge: {
+    color: '#7dcea0',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
 });

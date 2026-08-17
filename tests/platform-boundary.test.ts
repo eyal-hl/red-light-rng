@@ -15,6 +15,7 @@ describe('platform boundary', () => {
       'src/domain/course-matching.ts',
       'src/domain/attempt.ts',
       'src/domain/attempt-timing.ts',
+      'src/domain/attempt-analysis.ts',
       'src/domain/session.ts',
       'src/persistence/location-sample-store.ts',
       'src/persistence/memory-location-sample-store.ts',
@@ -40,6 +41,7 @@ describe('platform boundary', () => {
       'src/ui/CourseEditorScreen.tsx',
       'src/ui/AttemptScreen.tsx',
       'src/ui/AttemptResultScreen.tsx',
+      'src/ui/HistoryScreen.tsx',
     ];
 
     for (const file of sharedFiles) {
@@ -71,6 +73,7 @@ describe('platform boundary', () => {
       'src/domain/course-matching.ts',
       'src/domain/attempt.ts',
       'src/domain/attempt-timing.ts',
+      'src/domain/attempt-analysis.ts',
       'src/persistence/schema.ts',
       'src/persistence/sqlite-route-store.ts',
       'src/persistence/memory-route-store.ts',

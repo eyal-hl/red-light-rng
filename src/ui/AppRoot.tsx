@@ -10,12 +10,14 @@ import {
 } from '../domain/course-editor';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
+import type { FocusAttemptAnalysis, RouteAttemptAnalysis, RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteWorkspace } from '../product/route-workspace';
 import { AttemptResultScreen } from './AttemptResultScreen';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
+import { HistoryScreen } from './HistoryScreen';
 import { HomeScreen } from './HomeScreen';
 import { RecordingScreen } from './RecordingScreen';
 import { ReviewScreen } from './ReviewScreen';
@@ -29,8 +31,10 @@ type AppScreen =
   | { kind: 'review'; sessionId: string }
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
+  | { kind: 'history'; routeId: string }
   | { kind: 'attempt' }
-  | { kind: 'attempt-result' };
+  | { kind: 'attempt-result' }
+  | { kind: 'attempt-detail'; routeId: string; attemptId: string };
 
 type AppRootProps = {
   workspace: RouteWorkspace;
@@ -51,9 +55,22 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
-  const [attemptCount, setAttemptCount] = useState(0);
+  const [attemptAnalysis, setAttemptAnalysis] = useState<FocusAttemptAnalysis | null>(null);
+  const [routeSummary, setRouteSummary] = useState<RouteCompetitiveSummary | null>(null);
+  const [routeAnalysis, setRouteAnalysis] = useState<RouteAttemptAnalysis | null>(null);
+  const [historyMode, setHistoryMode] = useState<'chronological' | 'ranked'>('chronological');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loadRouteStats = useCallback(
+    async (routeId: string) => {
+      const analyzed = await workspace.analyzeRoute(routeId);
+      setRouteSummary(analyzed?.analysis.summary ?? null);
+      setRouteAnalysis(analyzed?.analysis ?? null);
+      return analyzed;
+    },
+    [workspace],
+  );
 
   const refreshHome = useCallback(async () => {
     const snapshot = await workspace.loadHome();
@@ -93,8 +110,10 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (route) {
         setSelectedRoute(route);
       }
+      const analysis = await workspace.analyzeAttempt(attempt.routeId, attempt.id);
       setActiveAttempt(null);
       setAttemptResult(attempt);
+      setAttemptAnalysis(analysis);
       setScreen({ kind: 'attempt-result' });
     },
     [workspace],
@@ -273,7 +292,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       setRouteName('');
       setSelectedRoute(result.route);
-      setAttemptCount(0);
+      await loadRouteStats(result.route.id);
       await refreshHome();
       setScreen({ kind: 'detail', routeId: result.route.id });
     } catch (caught) {
@@ -281,7 +300,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     } finally {
       setBusy(false);
     }
-  }, [refreshHome, routeMode, routeName, screen, workspace]);
+  }, [loadRouteStats, refreshHome, routeMode, routeName, screen, workspace]);
 
   const onDiscard = useCallback(async () => {
     if (screen.kind !== 'review') {
@@ -307,12 +326,11 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!route) {
         return;
       }
-      const attempts = await workspace.listAttemptsForRoute(routeId);
       setSelectedRoute(route);
-      setAttemptCount(attempts.length);
+      await loadRouteStats(routeId);
       setScreen({ kind: 'detail', routeId });
     },
-    [workspace],
+    [loadRouteStats, workspace],
   );
 
   const onArmRun = useCallback(async () => {
@@ -343,8 +361,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(null);
       await refreshHome();
       if (selectedRoute) {
-        const attempts = await workspace.listAttemptsForRoute(selectedRoute.id);
-        setAttemptCount(attempts.length);
+        await loadRouteStats(selectedRoute.id);
         setScreen({ kind: 'detail', routeId: selectedRoute.id });
       } else {
         setScreen({ kind: 'home' });
@@ -354,7 +371,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     } finally {
       setBusy(false);
     }
-  }, [refreshHome, selectedRoute, workspace]);
+  }, [loadRouteStats, refreshHome, selectedRoute, workspace]);
 
   const onAcknowledgeAttempt = useCallback(async () => {
     if (!attemptResult) {
@@ -366,10 +383,11 @@ export function AppRoot({ workspace }: AppRootProps) {
       await workspace.acknowledgeAttemptResult(attemptResult.id);
       const routeId = attemptResult.routeId;
       setAttemptResult(null);
+      setAttemptAnalysis(null);
       const route = await workspace.getRoute(routeId);
       if (route) {
         setSelectedRoute(route);
-        setAttemptCount((await workspace.listAttemptsForRoute(routeId)).length);
+        await loadRouteStats(routeId);
         setScreen({ kind: 'detail', routeId });
       } else {
         await refreshHome();
@@ -380,7 +398,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     } finally {
       setBusy(false);
     }
-  }, [attemptResult, refreshHome, workspace]);
+  }, [attemptResult, loadRouteStats, refreshHome, workspace]);
 
   const onDeleteRoute = useCallback(async () => {
     if (screen.kind !== 'detail') {
@@ -429,14 +447,15 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       setSelectedRoute(result.route);
       setCourseDraft(null);
-      await refreshHome();
       setScreen({ kind: 'detail', routeId: result.route.id });
+      await loadRouteStats(result.route.id);
+      await refreshHome();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not save course.');
     } finally {
       setBusy(false);
     }
-  }, [courseDraft, refreshHome, screen, workspace]);
+  }, [courseDraft, loadRouteStats, refreshHome, screen, workspace]);
 
   const onCancelEditor = useCallback(async () => {
     if (screen.kind !== 'editor') {
@@ -449,7 +468,61 @@ export function AppRoot({ workspace }: AppRootProps) {
       setSelectedRoute(route);
     }
     setScreen({ kind: 'detail', routeId: screen.routeId });
-  }, [screen, workspace]);
+    await loadRouteStats(screen.routeId);
+  }, [loadRouteStats, screen, workspace]);
+
+  const onOpenHistory = useCallback(async () => {
+    if (screen.kind !== 'detail') {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await loadRouteStats(screen.routeId);
+      setHistoryMode('chronological');
+      setScreen({ kind: 'history', routeId: screen.routeId });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not load history.');
+    } finally {
+      setBusy(false);
+    }
+  }, [loadRouteStats, screen]);
+
+  const onOpenHistoryAttempt = useCallback(
+    async (attemptId: string) => {
+      if (screen.kind !== 'history') {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const attempt = await workspace.getAttempt(attemptId);
+        if (!attempt) {
+          setError('This attempt is no longer available.');
+          return;
+        }
+        const analysis = await workspace.analyzeAttempt(screen.routeId, attemptId);
+        setAttemptResult(attempt);
+        setAttemptAnalysis(analysis);
+        setScreen({ kind: 'attempt-detail', routeId: screen.routeId, attemptId });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [screen, workspace],
+  );
+
+  const onBackFromHistoryDetail = useCallback(async () => {
+    if (screen.kind !== 'attempt-detail') {
+      return;
+    }
+    setAttemptResult(null);
+    setAttemptAnalysis(null);
+    await loadRouteStats(screen.routeId);
+    setScreen({ kind: 'history', routeId: screen.routeId });
+  }, [loadRouteStats, screen]);
 
   return (
     <View style={styles.screen}>
@@ -519,7 +592,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'detail' && selectedRoute ? (
         <RouteDetailScreen
           route={selectedRoute}
-          attemptCount={attemptCount}
+          summary={routeSummary}
           canArm={canStartNewRecording}
           busy={busy}
           error={error}
@@ -530,6 +603,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
           onArmRun={() => {
             void onArmRun();
+          }}
+          onHistory={() => {
+            void onOpenHistory();
           }}
           onEditCourse={() => {
             void onEditCourse();
@@ -554,10 +630,42 @@ export function AppRoot({ workspace }: AppRootProps) {
         <AttemptResultScreen
           route={selectedRoute}
           attempt={attemptResult}
+          analysis={attemptAnalysis}
           busy={busy}
           error={error}
           onDone={() => {
             void onAcknowledgeAttempt();
+          }}
+        />
+      ) : null}
+      {screen.kind === 'history' && selectedRoute && routeAnalysis ? (
+        <HistoryScreen
+          route={selectedRoute}
+          analysis={routeAnalysis}
+          mode={historyMode}
+          busy={busy}
+          error={error}
+          onChangeMode={setHistoryMode}
+          onBack={() => {
+            setError(null);
+            setScreen({ kind: 'detail', routeId: selectedRoute.id });
+            void loadRouteStats(selectedRoute.id);
+          }}
+          onOpenAttempt={(attemptId) => {
+            void onOpenHistoryAttempt(attemptId);
+          }}
+        />
+      ) : null}
+      {screen.kind === 'attempt-detail' && attemptResult ? (
+        <AttemptResultScreen
+          route={selectedRoute}
+          attempt={attemptResult}
+          analysis={attemptAnalysis}
+          busy={busy}
+          error={error}
+          doneLabel="BACK"
+          onDone={() => {
+            void onBackFromHistoryDetail();
           }}
         />
       ) : null}
