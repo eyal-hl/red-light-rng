@@ -311,7 +311,8 @@ export function analyzeFocusAttempt(
   const isPb = routeAnalysis.summary.pbAttemptId === focusAttemptId;
   const previous = previousCompetitive(routeAnalysis.competitive, focus);
   const pbBefore = pbBeforeAttempt(ranked, focus);
-  const pbRun = ranked.find((item) => item.attemptId === routeAnalysis.summary.pbAttemptId) ?? null;
+  const currentPbRun = ranked.find((item) => item.attemptId === routeAnalysis.summary.pbAttemptId) ?? null;
+  const comparisonPbRun = isPb ? pbBefore : currentPbRun;
   const golds = goldDurations(segmentSpecsForCourse(course), routeAnalysis.competitive);
   const previousGolds = goldDurations(
     segmentSpecsForCourse(course),
@@ -319,7 +320,7 @@ export function analyzeFocusAttempt(
   );
 
   const segments: AnalyzedSegment[] = focus.segments.map((segment) => {
-    const pbRunDurationMs = durationForSegment(pbRun, segment.spec.id);
+    const pbRunDurationMs = durationForSegment(comparisonPbRun, segment.spec.id);
     const goldDurationMs = golds.get(segment.spec.id) ?? null;
     const previousGold = previousGolds.get(segment.spec.id) ?? null;
     const isNewGold =

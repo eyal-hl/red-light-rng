@@ -112,6 +112,8 @@ describe('attempt analysis', () => {
     assert.equal(summary.sumOfBestMs, focus.focus.officialTimeMs);
     assert.equal(focus.segments.length, 1);
     assert.equal(focus.segments[0]?.isNewGold, true);
+    assert.equal(focus.segments[0]?.deltaVsPbRunMs, null);
+    assert.equal(focus.segments[0]?.pbRunDurationMs, null);
   });
 
   it('replaces PB when a later attempt is faster and keeps previous deltas', () => {
@@ -135,6 +137,8 @@ describe('attempt analysis', () => {
     assert.equal(slowFocus?.rank, 2);
     assert.equal(fastFocus?.rank, 1);
     assert.equal(slowFocus?.deltaVsPbMs != null && slowFocus.deltaVsPbMs > 0, true);
+    assert.equal(fastFocus?.segments[0]?.deltaVsPbRunMs, fastFocus?.deltaVsPbMs);
+    assert.equal(slowFocus?.segments[0]?.deltaVsPbRunMs, slowFocus?.deltaVsPbMs);
   });
 
   it('ranks a slower second attempt behind the PB and reports previous-attempt delta', () => {
@@ -236,6 +240,87 @@ describe('attempt analysis', () => {
     assert.equal(slowerFocus?.isPb, false);
     assert.equal(slowerFocus?.segments.some((segment) => segment.deltaVsPbRunMs != null && segment.deltaVsPbRunMs > 0), true);
     assert.equal(slowerFocus?.segments.every((segment) => segment.isNewGold === false), true);
+  });
+
+  it('compares a new PB segments against the previous PB run instead of itself', () => {
+    const path = longPath();
+    const course = courseFromPath(path, {
+      checkpoints: [{ id: 'cp-mid', name: 'Mid', progressMeters: 400 }],
+    });
+    const previousPb = makeAttempt({
+      id: 'previous-pb',
+      sessionId: 'previous-pb',
+      armedAtMs: 1_000,
+      finishedAtMs: 10_000,
+    });
+    const newPb = makeAttempt({
+      id: 'new-pb',
+      sessionId: 'new-pb',
+      armedAtMs: 2_000,
+      finishedAtMs: 20_000,
+    });
+    const traces = [
+      traceFor(course, previousPb, [
+        ...traceAlongPath(path, {
+          sessionId: 'previous-pb',
+          startMs: 1_000,
+          startProgressMeters: 0,
+          stepMeters: 3,
+          intervalMs: 1000,
+          count: 145,
+        }),
+        ...traceAlongPath(path, {
+          sessionId: 'previous-pb',
+          startMs: 1_000 + 145_000,
+          startProgressMeters: 430,
+          stepMeters: 10,
+          intervalMs: 1000,
+          count: 50,
+        }),
+      ]),
+      traceFor(course, newPb, [
+        ...traceAlongPath(path, {
+          sessionId: 'new-pb',
+          startMs: 200_000,
+          startProgressMeters: 0,
+          stepMeters: 10,
+          intervalMs: 1000,
+          count: 50,
+        }),
+        ...traceAlongPath(path, {
+          sessionId: 'new-pb',
+          startMs: 200_000 + 50_000,
+          startProgressMeters: 430,
+          stepMeters: 5,
+          intervalMs: 1000,
+          count: 90,
+        }),
+      ]),
+    ];
+    const previousFocus = analyzeFocusAttempt(course, traces, 'previous-pb');
+    const newFocus = analyzeFocusAttempt(course, traces, 'new-pb');
+    assert.ok(previousFocus && newFocus);
+    assert.equal(newFocus.isPb, true);
+    assert.equal(previousFocus.isPb, false);
+    assert.ok((newFocus.focus.officialTimeMs ?? 0) < (previousFocus.focus.officialTimeMs ?? 0));
+    assert.equal(newFocus.deltaVsPbMs != null && newFocus.deltaVsPbMs < 0, true);
+
+    const previousFirst = previousFocus.segments[0]?.durationMs;
+    const previousLast = previousFocus.segments[1]?.durationMs;
+    const newFirst = newFocus.segments[0]?.durationMs;
+    const newLast = newFocus.segments[1]?.durationMs;
+    assert.ok(previousFirst != null && previousLast != null && newFirst != null && newLast != null);
+    assert.ok(newFirst < previousFirst);
+    assert.ok(newLast > previousLast);
+
+    assert.equal(newFocus.segments[0]?.pbRunDurationMs, previousFirst);
+    assert.equal(newFocus.segments[1]?.pbRunDurationMs, previousLast);
+    assert.equal(newFocus.segments[0]?.deltaVsPbRunMs, newFirst - previousFirst);
+    assert.equal(newFocus.segments[1]?.deltaVsPbRunMs, newLast - previousLast);
+    assert.equal(newFocus.segments[0]?.deltaVsPbRunMs != null && newFocus.segments[0].deltaVsPbRunMs < 0, true);
+    assert.equal(newFocus.segments[1]?.deltaVsPbRunMs != null && newFocus.segments[1].deltaVsPbRunMs > 0, true);
+    assert.notEqual(newFocus.segments[0]?.deltaVsPbRunMs, 0);
+    assert.notEqual(newFocus.segments[1]?.deltaVsPbRunMs, 0);
   });
 
   it('assembles Sum of Best from independently fastest historical segments', () => {

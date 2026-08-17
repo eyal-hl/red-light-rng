@@ -95,7 +95,7 @@ export function AttemptResultScreen({
                   <Text style={styles.statLabel}>{segmentEndpointLabel(segment.spec.to)}</Text>
                   <Text style={styles.statValue}>
                     {segment.durationMs == null ? '—' : formatElapsed(segment.durationMs)}
-                    {segment.deltaVsPbRunMs == null || analysis?.isPb
+                    {segment.deltaVsPbRunMs == null
                       ? ''
                       : `   ${formatSignedDelta(segment.deltaVsPbRunMs)}`}
                   </Text>
