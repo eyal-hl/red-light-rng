@@ -2,6 +2,8 @@ import { haversineMeters, type LatLng } from './geo';
 
 export const MAX_EDITOR_SNAP_DISTANCE_METERS = 30;
 export const PROJECTION_TIE_EPSILON_METERS = 0.5;
+export const MATCH_PROGRESS_COST_PER_METER = 0.3;
+export const MATCH_BACKWARD_COST_METERS = 8;
 export const TAP_TOO_FAR_REASON = 'Tap closer to the route.';
 
 export type PathProjection = {
@@ -51,6 +53,65 @@ function closestPointOnSegment(
   };
 }
 
+type SegmentProjection = PathProjection & {
+  segmentStartProgressMeters: number;
+  segmentEndProgressMeters: number;
+};
+
+function collectSegmentProjections(path: LatLng[], point: LatLng): SegmentProjection[] {
+  const candidates: SegmentProjection[] = [];
+  let cumulativeMeters = 0;
+
+  for (let index = 1; index < path.length; index += 1) {
+    const start = path[index - 1];
+    const end = path[index];
+    if (!start || !end) {
+      continue;
+    }
+    const segmentLength = haversineMeters(start, end);
+    const closest = closestPointOnSegment(start, end, point);
+    const segmentStartProgressMeters = cumulativeMeters;
+    const segmentEndProgressMeters = cumulativeMeters + segmentLength;
+    candidates.push({
+      snapped: closest.point,
+      progressMeters: cumulativeMeters + closest.t * segmentLength,
+      snapDistanceMeters: haversineMeters(closest.point, point),
+      segmentStartProgressMeters,
+      segmentEndProgressMeters,
+    });
+    cumulativeMeters += segmentLength;
+  }
+
+  return candidates;
+}
+
+function pickNearestProjection(
+  candidates: PathProjection[],
+  score: (candidate: PathProjection) => number,
+): PathProjection | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const ranked = [...candidates].sort((a, b) => {
+    const aScore = score(a);
+    const bScore = score(b);
+    if (aScore !== bScore) {
+      return aScore - bScore;
+    }
+    return b.progressMeters - a.progressMeters;
+  });
+  const winner = ranked[0];
+  if (!winner) {
+    return null;
+  }
+  return {
+    snapped: winner.snapped,
+    progressMeters: winner.progressMeters,
+    snapDistanceMeters: winner.snapDistanceMeters,
+  };
+}
+
 export function projectOntoReferencePath(path: LatLng[], tap: LatLng): PathProjection | null {
   if (path.length === 0) {
     return null;
@@ -67,41 +128,62 @@ export function projectOntoReferencePath(path: LatLng[], tap: LatLng): PathProje
     };
   }
 
-  const candidates: PathProjection[] = [];
-  let cumulativeMeters = 0;
-
-  for (let index = 1; index < path.length; index += 1) {
-    const start = path[index - 1];
-    const end = path[index];
-    if (!start || !end) {
-      continue;
-    }
-    const segmentLength = haversineMeters(start, end);
-    const closest = closestPointOnSegment(start, end, tap);
-    candidates.push({
-      snapped: closest.point,
-      progressMeters: cumulativeMeters + closest.t * segmentLength,
-      snapDistanceMeters: haversineMeters(closest.point, tap),
-    });
-    cumulativeMeters += segmentLength;
-  }
-
+  const candidates = collectSegmentProjections(path, tap);
   if (candidates.length === 0) {
     return null;
   }
-
   let minDistance = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
     if (candidate.snapDistanceMeters < minDistance) {
       minDistance = candidate.snapDistanceMeters;
     }
   }
-
   const tied = candidates.filter(
     (candidate) => candidate.snapDistanceMeters <= minDistance + PROJECTION_TIE_EPSILON_METERS,
   );
   tied.sort((a, b) => a.progressMeters - b.progressMeters);
-  return tied[0] ?? null;
+  const winner = tied[0];
+  if (!winner) {
+    return null;
+  }
+  return {
+    snapped: winner.snapped,
+    progressMeters: winner.progressMeters,
+    snapDistanceMeters: winner.snapDistanceMeters,
+  };
+}
+
+export function projectOntoReferencePathNearProgress(
+  path: LatLng[],
+  point: LatLng,
+  options: {
+    centerProgressMeters: number;
+    forwardWindowMeters: number;
+    backwardWindowMeters: number;
+  },
+): PathProjection | null {
+  if (path.length === 0) {
+    return null;
+  }
+  if (path.length === 1) {
+    return projectOntoReferencePath(path, point);
+  }
+
+  const windowStart = options.centerProgressMeters - options.backwardWindowMeters;
+  const windowEnd = options.centerProgressMeters + options.forwardWindowMeters;
+  const inWindow = collectSegmentProjections(path, point).filter(
+    (candidate) =>
+      candidate.segmentEndProgressMeters >= windowStart && candidate.segmentStartProgressMeters <= windowEnd,
+  );
+
+  return pickNearestProjection(inWindow, (candidate) => {
+    const delta = candidate.progressMeters - options.centerProgressMeters;
+    return (
+      candidate.snapDistanceMeters +
+      MATCH_PROGRESS_COST_PER_METER * Math.abs(delta) +
+      (delta < 0 ? MATCH_BACKWARD_COST_METERS : 0)
+    );
+  });
 }
 
 export function pointAtProgress(path: LatLng[], progressMeters: number): LatLng {

@@ -1,7 +1,12 @@
-import { PendingRouteRecordingError, resolveGpsHealth } from '../domain/session';
+import { PendingRouteRecordingError, resolveGpsHealth, type SessionPurpose } from '../domain/session';
 import { IDLE_TRACKING_STATE, resolveTrackingStatus, type TrackingState } from '../domain/tracking-state';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
-import type { LocationPlatform, LocationTracker } from './location-tracker';
+import {
+  ATTEMPT_NOTIFICATION_BODY,
+  ROUTE_RECORDING_NOTIFICATION_BODY,
+  type LocationPlatform,
+  type LocationTracker,
+} from './location-tracker';
 import type { TrackingSessionService } from './tracking-session-service';
 
 function sessionFields(session: TrackingSessionRecord | null): Pick<
@@ -42,7 +47,7 @@ export class SharedLocationTracker implements LocationTracker {
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  async startTracking(): Promise<void> {
+  async startTracking(purpose: SessionPurpose = 'route_creation'): Promise<void> {
     this.lastError = null;
     this.lastWarning = null;
 
@@ -77,9 +82,12 @@ export class SharedLocationTracker implements LocationTracker {
         throw new PendingRouteRecordingError(pending.id);
       }
 
-      const sessionId = await this.sessions.startSession(this.now(), 'route_creation');
+      const sessionId = await this.sessions.startSession(this.now(), purpose);
       try {
-        await this.platform.startUpdates();
+        await this.platform.startUpdates({
+          notificationBody:
+            purpose === 'attempt' ? ATTEMPT_NOTIFICATION_BODY : ROUTE_RECORDING_NOTIFICATION_BODY,
+        });
       } catch (error) {
         await this.sessions.completeSession(sessionId, {
           stoppedAtMs: this.now(),
@@ -96,7 +104,7 @@ export class SharedLocationTracker implements LocationTracker {
   }
 
   async finishTracking(): Promise<void> {
-    await this.endActiveSession('finished', 'pending');
+    await this.endRouteCreationSession('finished', 'pending');
   }
 
   async cancelTracking(): Promise<void> {
@@ -104,13 +112,32 @@ export class SharedLocationTracker implements LocationTracker {
   }
 
   async interruptTracking(): Promise<void> {
-    await this.endActiveSession('interrupted', 'pending');
+    await this.endRouteCreationSession('interrupted', 'pending');
+  }
+
+  async stopLocationUpdates(): Promise<void> {
+    this.lastError = null;
+    await this.enqueue(async () => {
+      try {
+        await this.platform.stopUpdates();
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : 'Failed to stop location updates.';
+        throw error;
+      }
+    });
   }
 
   async recover(): Promise<void> {
     await this.enqueue(async () => {
       const active = await this.store.getActiveSession();
-      if (!active || active.purpose !== 'route_creation') {
+      if (!active) {
+        return;
+      }
+      if (active.purpose !== 'route_creation') {
+        const backgroundGranted = await this.platform.hasBackgroundPermission();
+        if (backgroundGranted && !active.backgroundPermissionConfirmed) {
+          await this.store.confirmBackgroundPermission(active.id);
+        }
         return;
       }
 
@@ -166,6 +193,31 @@ export class SharedLocationTracker implements LocationTracker {
         lastError: this.lastError,
         lastWarning: this.lastWarning,
       };
+    });
+  }
+
+  private async endRouteCreationSession(
+    captureOutcome: 'finished' | 'interrupted',
+    reviewDisposition: 'pending',
+  ): Promise<void> {
+    this.lastError = null;
+    this.lastWarning = null;
+    await this.enqueue(async () => {
+      const session = await this.store.getActiveSession();
+      if (!session || session.purpose !== 'route_creation') {
+        return;
+      }
+      try {
+        await this.platform.stopUpdates();
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : 'Failed to stop location updates.';
+        throw error;
+      }
+      await this.sessions.completeSession(session.id, {
+        stoppedAtMs: this.now(),
+        captureOutcome,
+        reviewDisposition,
+      });
     });
   }
 

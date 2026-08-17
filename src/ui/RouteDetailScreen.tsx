@@ -12,18 +12,24 @@ import { styles } from './styles';
 
 type RouteDetailScreenProps = {
   route: Route;
+  attemptCount: number;
+  canArm: boolean;
   busy: boolean;
   error: string | null;
   onBack: () => void;
+  onArmRun: () => void;
   onEditCourse: () => void;
   onDelete: () => void;
 };
 
 export function RouteDetailScreen({
   route,
+  attemptCount,
+  canArm,
   busy,
   error,
   onBack,
+  onArmRun,
   onEditCourse,
   onDelete,
 }: RouteDetailScreenProps) {
@@ -76,17 +82,27 @@ export function RouteDetailScreen({
         </View>
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Attempts</Text>
-          <Text style={styles.statValue}>0</Text>
+          <Text style={styles.statValue}>{attemptCount}</Text>
         </View>
-        <Text style={styles.mutedText}>No attempts yet.</Text>
+        <Text style={styles.mutedText}>
+          {attemptCount === 0 ? 'No attempts yet.' : 'Official timing starts after you arm and depart.'}
+        </Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"
+            disabled={busy || !canArm}
+            onPress={onArmRun}
+            style={[styles.button, styles.primaryButton, busy || !canArm ? styles.disabledButton : null]}
+          >
+            <Text style={styles.buttonText}>ARM RUN</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
             disabled={busy}
             onPress={onEditCourse}
-            style={[styles.button, styles.primaryButton, busy ? styles.disabledButton : null]}
+            style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
           >
             <Text style={styles.buttonText}>EDIT COURSE</Text>
           </Pressable>

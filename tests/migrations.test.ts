@@ -224,6 +224,47 @@ describe('SQLite migrations', () => {
     assert.equal(source?.id, 'issue-3-session');
   });
 
+  it('adds attempt tables when upgrading from schema v3 without wiping routes', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    await MIGRATIONS[0]!.up(sql, 1000);
+    await MIGRATIONS[1]!.up(sql, 1000);
+    await MIGRATIONS[2]!.up(sql, 1000);
+    await sql.exec('PRAGMA user_version = 3');
+
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['v3-session', 1000, 2000],
+    );
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters,
+         start_progress_m, finish_progress_m
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['v3-route', 'Keep me', 'scooter', 3000, 'v3-session', 32.08, 34.78, 30, 32.09, 34.78, 30, 0, 100],
+    );
+
+    await applyMigrations(sql, 4000);
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const route = await sql.getFirst<{ name: string; start_progress_m: number }>('SELECT name, start_progress_m FROM route WHERE id = ?', [
+      'v3-route',
+    ]);
+    assert.equal(route?.name, 'Keep me');
+    assert.equal(route?.start_progress_m, 0);
+    const attemptTable = await sql.getFirst<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attempt'`,
+    );
+    assert.equal(attemptTable?.name, 'attempt');
+  });
+
   it('is idempotent when the current schema version is already applied', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1000);

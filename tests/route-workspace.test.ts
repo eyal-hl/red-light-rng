@@ -1,15 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { MemoryLocationSampleStore } from '../src/persistence/memory-location-sample-store';
-import { MemoryRouteStore } from '../src/persistence/memory-route-store';
 import { applyMigrations } from '../src/persistence/migrations';
+import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
+import { AttemptRuntime } from '../src/product/attempt-runtime';
 import { RouteWorkspace } from '../src/product/route-workspace';
 import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
 import { TrackingSessionService } from '../src/tracking/tracking-session-service';
-import type { LocationPlatform } from '../src/tracking/location-tracker';
 import {
   addCheckpointFromPending,
   createCourseEditorDraft,
@@ -19,49 +18,7 @@ import {
 import { pointAtProgress } from '../src/domain/path-projection';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 import { movingTrace } from './helpers/samples';
-
-class FakeLocationPlatform implements LocationPlatform {
-  servicesEnabled = true;
-  foregroundGranted = true;
-  backgroundGranted = true;
-  updating = false;
-
-  async hasServicesEnabled() {
-    return this.servicesEnabled;
-  }
-  async hasForegroundPermission() {
-    return this.foregroundGranted;
-  }
-  async hasBackgroundPermission() {
-    return this.backgroundGranted;
-  }
-  async requestForegroundPermission() {
-    return this.foregroundGranted;
-  }
-  async requestBackgroundPermission() {
-    return { granted: this.backgroundGranted };
-  }
-  async startUpdates() {
-    this.updating = true;
-  }
-  async stopUpdates() {
-    this.updating = false;
-  }
-  async isUpdating() {
-    return this.updating;
-  }
-}
-
-function createMemoryWorkspace() {
-  const sessions = new MemoryLocationSampleStore();
-  const routes = new MemoryRouteStore();
-  const platform = new FakeLocationPlatform();
-  let nextId = 0;
-  const trackingSessions = new TrackingSessionService(sessions, () => `id-${++nextId}`);
-  const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-  const workspace = new RouteWorkspace(tracker, sessions, routes, () => 1_700_000_100_000, () => 'route-1');
-  return { workspace, sessions, routes, platform };
-}
+import { createMemoryWorkspace, FakeLocationPlatform } from './helpers/workspace';
 
 describe('RouteWorkspace', () => {
   it('saves derived route geometry separately from raw telemetry and keeps source samples after delete', async () => {
@@ -150,10 +107,27 @@ describe('RouteWorkspace', () => {
     await applyMigrations(sql, 1);
     const sessions = new SqliteLocationSampleStore(async () => sql);
     const routes = new SqliteRouteStore(async () => sql);
+    const attemptStore = new SqliteAttemptStore(async () => sql);
     const platform = new FakeLocationPlatform();
     const trackingSessions = new TrackingSessionService(sessions, () => 'sql-session');
     const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const workspace = new RouteWorkspace(tracker, sessions, routes, () => 1_700_000_100_000, () => 'sql-route');
+    const attemptRuntime = new AttemptRuntime(
+      tracker,
+      platform,
+      sessions,
+      routes,
+      attemptStore,
+      () => 1_700_000_100_000,
+      () => 'sql-attempt',
+    );
+    const workspace = new RouteWorkspace(
+      tracker,
+      sessions,
+      routes,
+      attemptRuntime,
+      () => 1_700_000_100_000,
+      () => 'sql-route',
+    );
 
     await workspace.startRouteRecording();
     await sessions.appendSamples(movingTrace({ sessionId: 'sql-session', points: 14, stepMeters: 18 }));
@@ -176,10 +150,27 @@ describe('RouteWorkspace', () => {
     await applyMigrations(sql, 1);
     const sessions = new SqliteLocationSampleStore(async () => sql);
     const routes = new SqliteRouteStore(async () => sql);
+    const attemptStore = new SqliteAttemptStore(async () => sql);
     const platform = new FakeLocationPlatform();
     const trackingSessions = new TrackingSessionService(sessions, () => 'sql-session');
     const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const workspace = new RouteWorkspace(tracker, sessions, routes, () => 1_700_000_100_000, () => 'sql-route');
+    const attemptRuntime = new AttemptRuntime(
+      tracker,
+      platform,
+      sessions,
+      routes,
+      attemptStore,
+      () => 1_700_000_100_000,
+      () => 'sql-attempt',
+    );
+    const workspace = new RouteWorkspace(
+      tracker,
+      sessions,
+      routes,
+      attemptRuntime,
+      () => 1_700_000_100_000,
+      () => 'sql-route',
+    );
 
     await workspace.startRouteRecording();
     await sessions.appendSamples(movingTrace({ sessionId: 'sql-session', points: 14, stepMeters: 18 }));

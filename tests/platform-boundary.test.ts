@@ -12,6 +12,9 @@ describe('platform boundary', () => {
       'src/domain/path-projection.ts',
       'src/domain/course-layout.ts',
       'src/domain/course-editor.ts',
+      'src/domain/course-matching.ts',
+      'src/domain/attempt.ts',
+      'src/domain/attempt-timing.ts',
       'src/domain/session.ts',
       'src/persistence/location-sample-store.ts',
       'src/persistence/memory-location-sample-store.ts',
@@ -21,7 +24,11 @@ describe('platform boundary', () => {
       'src/persistence/route-store.ts',
       'src/persistence/sqlite-route-store.ts',
       'src/persistence/memory-route-store.ts',
+      'src/persistence/attempt-store.ts',
+      'src/persistence/sqlite-attempt-store.ts',
+      'src/persistence/memory-attempt-store.ts',
       'src/product/route-workspace.ts',
+      'src/product/attempt-runtime.ts',
       'src/tracking/location-tracker.ts',
       'src/tracking/shared-location-tracker.ts',
       'src/tracking/tracking-session-service.ts',
@@ -31,6 +38,8 @@ describe('platform boundary', () => {
       'src/ui/ReviewScreen.tsx',
       'src/ui/RouteDetailScreen.tsx',
       'src/ui/CourseEditorScreen.tsx',
+      'src/ui/AttemptScreen.tsx',
+      'src/ui/AttemptResultScreen.tsx',
     ];
 
     for (const file of sharedFiles) {
@@ -45,7 +54,10 @@ describe('platform boundary', () => {
     const adapter = readFileSync('src/tracking/expo-location-platform.ts', 'utf8');
     assert.match(adapter, /expo-location/);
     assert.match(adapter, /foregroundService/);
-    assert.match(adapter, /Recording your route/);
+    assert.match(adapter, /notificationBody/);
+    const tracker = readFileSync('src/tracking/shared-location-tracker.ts', 'utf8');
+    assert.match(tracker, /ATTEMPT_NOTIFICATION_BODY/);
+    assert.match(tracker, /ROUTE_RECORDING_NOTIFICATION_BODY/);
   });
 
   it('keeps MapLibre types inside the map boundary', () => {
@@ -56,11 +68,17 @@ describe('platform boundary', () => {
       'src/domain/path-projection.ts',
       'src/domain/course-layout.ts',
       'src/domain/course-editor.ts',
+      'src/domain/course-matching.ts',
+      'src/domain/attempt.ts',
+      'src/domain/attempt-timing.ts',
       'src/persistence/schema.ts',
       'src/persistence/sqlite-route-store.ts',
       'src/persistence/memory-route-store.ts',
+      'src/persistence/sqlite-attempt-store.ts',
+      'src/persistence/memory-attempt-store.ts',
       'src/persistence/migrations.ts',
       'src/product/route-workspace.ts',
+      'src/product/attempt-runtime.ts',
     ];
     for (const file of domainFiles) {
       const source = readFileSync(file, 'utf8');
@@ -80,6 +98,7 @@ describe('platform boundary', () => {
   it('records background fixes only onto the active session', () => {
     const source = readFileSync('src/tracking/register-background-location-task.ts', 'utf8');
     assert.match(source, /recordActiveSessionFixes/);
+    assert.match(source, /processActive/);
     assert.doesNotMatch(source, /getLatestSessionId/);
   });
 

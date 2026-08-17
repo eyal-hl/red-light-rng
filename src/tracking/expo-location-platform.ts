@@ -1,6 +1,10 @@
 import * as Location from 'expo-location';
 
-import type { LocationPlatform } from './location-tracker';
+import {
+  ROUTE_RECORDING_NOTIFICATION_BODY,
+  type LocationPlatform,
+  type LocationUpdateOptions,
+} from './location-tracker';
 import { BACKGROUND_LOCATION_TASK } from './background-location-task';
 
 export function createExpoLocationPlatform(): LocationPlatform {
@@ -24,7 +28,7 @@ export function createExpoLocationPlatform(): LocationPlatform {
       const result = await Location.requestBackgroundPermissionsAsync();
       return { granted: result.granted };
     },
-    async startUpdates() {
+    async startUpdates(options?: LocationUpdateOptions) {
       await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
         accuracy: Location.Accuracy.BestForNavigation,
         timeInterval: 1000,
@@ -36,7 +40,7 @@ export function createExpoLocationPlatform(): LocationPlatform {
         activityType: Location.ActivityType.OtherNavigation,
         foregroundService: {
           notificationTitle: 'Red Light RNG',
-          notificationBody: 'Recording your route. You can lock your phone and keep traveling.',
+          notificationBody: options?.notificationBody ?? ROUTE_RECORDING_NOTIFICATION_BODY,
           killServiceOnDestroy: false,
         },
       });
