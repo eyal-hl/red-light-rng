@@ -13,6 +13,7 @@ jobs:
   build-android-apk:
     name: Build Android APK
     runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout PR
@@ -30,27 +31,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle cache
-        uses: gradle/actions/setup-gradle@v4
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Android project
+      - name: Verify Expo authentication
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Missing repository secret EXPO_TOKEN. Add an Expo access token so local EAS Build can download the existing managed Android signing credentials."
+            exit 1
+          fi
+          npx eas-cli@latest whoami --non-interactive
+
+      - name: Build signed installable preview APK locally
         env:
           CI: '1'
-        run: npx expo prebuild --platform android --no-install
-
-      - name: Build installable debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EAS_LOCAL_BUILD_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+        run: |
+          mkdir -p artifacts
+          npx eas-cli@latest build \
+            --platform android \
+            --profile preview \
+            --local \
+            --non-interactive \
+            --freeze-credentials \
+            --output "${{ github.workspace }}/artifacts/red-light-rng-pr-${{ github.event.pull_request.number }}-android-preview.apk"
 
       - name: Upload APK
-        id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: red-light-rng-pr-${{ github.event.pull_request.number }}-android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: red-light-rng-pr-${{ github.event.pull_request.number }}-android-preview
+          path: artifacts/red-light-rng-pr-${{ github.event.pull_request.number }}-android-preview.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -61,10 +74,12 @@ jobs:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body = [
-              '📱 Android APK ready for physical-device testing.',
+              '📱 Signed Android APK ready for physical-device testing.',
               '',
-              `Download the **red-light-rng-pr-${context.issue.number}-android-debug** artifact from this workflow run:`,
+              `Download the **red-light-rng-pr-${context.issue.number}-android-preview** artifact from this workflow run:`,
               runUrl,
+              '',
+              'This APK is built locally on GitHub Actions but uses the existing EAS-managed Android signing credentials, so it can update the previously installed preview build without wiping app data.',
               '',
               `Built from commit \`${context.sha}\`.`
             ].join('\n');
