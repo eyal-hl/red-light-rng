@@ -111,7 +111,7 @@ export const MIGRATIONS: Migration[] = [
           started_at_ms INTEGER,
           finished_at_ms INTEGER,
           result_acknowledged INTEGER NOT NULL DEFAULT 0,
-          FOREIGN KEY (route_id) REFERENCES route(id),
+          FOREIGN KEY (route_id) REFERENCES route(id) ON DELETE CASCADE,
           FOREIGN KEY (session_id) REFERENCES tracking_session(id)
         );
       `);

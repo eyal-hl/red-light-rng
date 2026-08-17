@@ -99,10 +99,7 @@ describe('attempt timing', () => {
     });
     const result = replayAttemptTrace(course, [...before, ...across]);
     assert.equal(result.lifecycle, 'active');
-    assert.ok(result.startedAtMs != null);
-    const startPoint = pointAtProgress(course.referencePath, 40);
-    assert.ok(startPoint.latitude > 32);
-    assert.ok(result.startedAtMs! >= before[0]!.recordedAtMs);
+    assert.equal(result.startedAtMs, 1_700_000_011_000);
   });
 
   it('stays armed when the rider is already past the start line', () => {
@@ -158,6 +155,22 @@ describe('attempt timing', () => {
     assert.ok(result.finishedAtMs! >= result.startedAtMs!);
     assert.ok(result.finishedAtMs! <= samples[samples.length - 1]!.recordedAtMs);
     assert.equal(result.crossings.length, 0);
+  });
+
+  it('records a checkpoint that sits just after the start line during the departure window', () => {
+    const path = northPath({ points: 16, stepMeters: 20 });
+    const course = courseFromRoute({
+      referencePath: path,
+      startProgressMeters: 0,
+      checkpoints: [{ id: 'cp-early', name: 'Early', progressMeters: 12 }],
+    });
+    const samples = traceAlongPath(path, { startProgressMeters: 0, stepMeters: 4, count: 20 });
+    const result = replayAttemptTrace(course, samples);
+    assert.ok(result.lifecycle === 'active' || result.lifecycle === 'completed');
+    assert.equal(result.crossings.length, 1);
+    assert.equal(result.crossings[0]?.checkpointId, 'cp-early');
+    assert.ok(result.startedAtMs != null);
+    assert.ok(result.crossings[0]!.crossedAtMs >= result.startedAtMs!);
   });
 
   it('detects checkpoints once in route order and ignores jitter around a split', () => {

@@ -213,7 +213,7 @@ function detectQualifyingDeparture(
   if (advance < DEPARTURE_MIN_ADVANCE_METERS) {
     return null;
   }
-  if (latest.progressMeters + START_PROGRESS_NOISE_METERS < startProgressMeters) {
+  if (latest.progressMeters < startProgressMeters) {
     return null;
   }
   return window;
@@ -275,29 +275,41 @@ function detectCheckpointCrossings(state: AttemptEngineState, course: TimingCour
   if (state.startedAtMs == null) {
     return;
   }
-  const previous = state.accepted[state.accepted.length - 2];
-  const current = state.accepted[state.accepted.length - 1];
-  if (!previous || !current) {
+  const pending = orderedCheckpoints(course.checkpoints).filter((checkpoint) => {
+    if (checkpoint.progressMeters <= course.startProgressMeters) {
+      return false;
+    }
+    if (checkpoint.progressMeters >= course.finishProgressMeters) {
+      return false;
+    }
+    return !state.crossings.some((crossing) => crossing.checkpointId === checkpoint.id);
+  });
+  if (pending.length === 0) {
     return;
   }
 
-  for (const checkpoint of orderedCheckpoints(course.checkpoints)) {
-    if (checkpoint.progressMeters <= course.startProgressMeters) {
+  for (let index = 1; index < state.accepted.length; index += 1) {
+    const previous = state.accepted[index - 1];
+    const current = state.accepted[index];
+    if (!previous || !current) {
       continue;
     }
-    if (checkpoint.progressMeters >= course.finishProgressMeters) {
-      continue;
-    }
-    if (state.crossings.some((crossing) => crossing.checkpointId === checkpoint.id)) {
-      continue;
-    }
-    if (previous.progressMeters < checkpoint.progressMeters && current.progressMeters >= checkpoint.progressMeters) {
-      state.crossings.push({
-        checkpointId: checkpoint.id,
-        checkpointName: checkpoint.name,
-        checkpointProgressMeters: checkpoint.progressMeters,
-        crossedAtMs: interpolateCrossingTime(previous, current, checkpoint.progressMeters),
-      });
+    for (const checkpoint of pending) {
+      if (state.crossings.some((crossing) => crossing.checkpointId === checkpoint.id)) {
+        continue;
+      }
+      if (previous.progressMeters < checkpoint.progressMeters && current.progressMeters >= checkpoint.progressMeters) {
+        const crossedAtMs = interpolateCrossingTime(previous, current, checkpoint.progressMeters);
+        if (crossedAtMs < state.startedAtMs) {
+          continue;
+        }
+        state.crossings.push({
+          checkpointId: checkpoint.id,
+          checkpointName: checkpoint.name,
+          checkpointProgressMeters: checkpoint.progressMeters,
+          crossedAtMs,
+        });
+      }
     }
   }
 }

@@ -88,6 +88,32 @@ describe('attempt persistence', () => {
     assert.doesNotMatch(fk?.sql ?? '', /route_checkpoint/);
   });
 
+  it('deletes attempt rows with the route while keeping the attempt recording samples', async () => {
+    const sql = await insertSourceSession('source-1');
+    const routes = new SqliteRouteStore(async () => sql);
+    const attempts = new SqliteAttemptStore(async () => sql);
+    const route = makeRoute({ id: 'route-1', sourceRecordingId: 'source-1', referencePath: northPath() });
+    await routes.createRoute(route);
+    await attempts.createAttempt({
+      id: 'attempt-1',
+      routeId: route.id,
+      sessionId: 'attempt-session',
+      lifecycle: 'completed',
+      validity: 'valid',
+      armedAtMs: 3000,
+      startedAtMs: 3100,
+      finishedAtMs: 4000,
+      resultAcknowledged: true,
+      crossings: [],
+    });
+    await routes.deleteRoute(route.id);
+    assert.equal(await attempts.getAttempt('attempt-1'), null);
+    const session = await sql.getFirst<{ id: string }>('SELECT id FROM tracking_session WHERE id = ?', [
+      'attempt-session',
+    ]);
+    assert.equal(session?.id, 'attempt-session');
+  });
+
   it('migrates existing v3 routes in place and adds attempt tables', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
