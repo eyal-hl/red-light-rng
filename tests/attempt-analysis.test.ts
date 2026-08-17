@@ -9,6 +9,7 @@ import {
   deriveCurrentLayoutAttempt,
   hasStartCoverage,
   segmentSpecsForCourse,
+  shouldShowPersistedUnrankedWarning,
   startCoverageThresholdMeters,
   timingCourseFromRoute,
   type AttemptTrace,
@@ -21,8 +22,9 @@ import {
 } from '../src/domain/attempt-timing';
 import { pathDistanceMeters } from '../src/domain/geo';
 import type { LocationSample } from '../src/domain/location-sample';
+import { pointAtProgress } from '../src/domain/path-projection';
 import { makeRoute, northPath } from './helpers/routes';
-import { traceAlongPath } from './helpers/samples';
+import { offsetLatLng, sample, traceAlongPath } from './helpers/samples';
 
 function longPath() {
   return northPath({ points: 41, stepMeters: 20 });
@@ -60,6 +62,45 @@ function coveringTrace(
     stepMeters,
     count,
   });
+}
+
+function detourNearStartThenFinish(
+  path: { latitude: number; longitude: number }[],
+  sessionId: string,
+  startMs: number,
+): LocationSample[] {
+  const onCourseStart = traceAlongPath(path, {
+    sessionId,
+    startMs,
+    startProgressMeters: 0,
+    stepMeters: 5,
+    intervalMs: 1000,
+    count: 16,
+  });
+  const last = onCourseStart[onCourseStart.length - 1];
+  if (!last) {
+    return onCourseStart;
+  }
+  const offCourse: LocationSample[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    const far = offsetLatLng(last.latitude, last.longitude, 0, 80);
+    offCourse.push(
+      sample({
+        id: `${sessionId}-off-${index}`,
+        sessionId,
+        recordedAtMs: last.recordedAtMs + 1000 + index * 1000,
+        latitude: far.latitude,
+        longitude: far.longitude,
+      }),
+    );
+  }
+  const lastOff = offCourse[offCourse.length - 1];
+  const resume = coveringTrace(path, {
+    sessionId,
+    startMs: (lastOff?.recordedAtMs ?? last.recordedAtMs) + 1000,
+    startProgressMeters: 80,
+  });
+  return [...onCourseStart, ...offCourse, ...resume];
 }
 
 function makeAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | 'sessionId'>): Attempt {
@@ -727,5 +768,114 @@ describe('attempt analysis', () => {
     assert.notEqual(courseLayoutIdentity(course), courseLayoutIdentity(widerFinish));
     assert.match(courseLayoutIdentity(widerFinish), /finishR=90\.000/);
     assert.match(courseLayoutIdentity(widerFinish), /finishTrigger=/);
+  });
+
+  it('does not use frozen completion-time validity once current-layout analysis exists', () => {
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'completed',
+        persistedValidity: 'unranked',
+        focus: { eligible: true },
+      }),
+      false,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'completed',
+        persistedValidity: 'unranked',
+        focus: { eligible: false },
+      }),
+      false,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'completed',
+        persistedValidity: 'unranked',
+        focus: null,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'completed',
+        persistedValidity: 'unranked',
+        focus: undefined,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'completed',
+        persistedValidity: 'valid',
+        focus: null,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: 'cancelled',
+        persistedValidity: 'unranked',
+        focus: null,
+      }),
+      false,
+    );
+  });
+
+  it('does not treat a start-line edit that re-ranks a frozen-unranked attempt as Unranked', () => {
+    const path = longPath();
+    const original = courseFromPath(path, { startProgressMeters: 0 });
+    const samples = detourNearStartThenFinish(path, 'detour', 1_000);
+    const attempt = makeAttempt({
+      id: 'detour',
+      sessionId: 'detour',
+      armedAtMs: 1_000,
+      validity: 'unranked',
+    });
+    const originalEngine = replayAttemptTrace(original, samples);
+    const originalDerived = deriveCurrentLayoutAttempt(original, attempt, samples);
+    assert.equal(originalEngine.lifecycle, 'completed');
+    assert.equal(originalEngine.validity, 'unranked');
+    assert.equal(originalDerived.eligible, false);
+    assert.equal(originalDerived.unavailabilityReason, 'not_valid');
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: attempt.lifecycle,
+        persistedValidity: attempt.validity,
+        focus: originalDerived,
+      }),
+      false,
+    );
+
+    const movedStart = courseFromPath(path, {
+      startProgressMeters: 180,
+      startZone: {
+        center: pointAtProgress(path, 180),
+        radiusMeters: original.startZone.radiusMeters,
+      },
+    });
+    const traces = [traceFor(movedStart, attempt, samples)];
+    const focus = analyzeFocusAttempt(movedStart, traces, 'detour');
+    assert.ok(focus);
+    assert.equal(attempt.validity, 'unranked');
+    assert.equal(focus.focus.eligible, true);
+    assert.equal(focus.isPb, true);
+    assert.equal(focus.rank, 1);
+    assert.ok((focus.focus.officialTimeMs ?? 0) > 0);
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: attempt.lifecycle,
+        persistedValidity: attempt.validity,
+        focus: focus.focus,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldShowPersistedUnrankedWarning({
+        lifecycle: attempt.lifecycle,
+        persistedValidity: attempt.validity,
+        focus: null,
+      }),
+      true,
+    );
   });
 });

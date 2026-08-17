@@ -627,6 +627,18 @@ export function describeUnavailability(reason: AttemptUnavailabilityReason): str
   }
 }
 
+export function shouldShowPersistedUnrankedWarning(options: {
+  lifecycle: Attempt['lifecycle'];
+  persistedValidity: Attempt['validity'];
+  focus: Pick<CurrentLayoutAttempt, 'eligible'> | null | undefined;
+}): boolean {
+  return (
+    options.lifecycle === 'completed' &&
+    options.persistedValidity !== 'valid' &&
+    options.focus == null
+  );
+}
+
 export function segmentEndpointLabel(endpoint: SegmentEndpoint): string {
   if (endpoint.kind === 'checkpoint') {
     return endpoint.name;

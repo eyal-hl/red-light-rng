@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import {
   describeUnavailability,
   segmentEndpointLabel,
+  shouldShowPersistedUnrankedWarning,
   type FocusAttemptAnalysis,
 } from '../domain/attempt-analysis';
 import { type Attempt } from '../domain/attempt';
@@ -76,7 +77,11 @@ export function AttemptResultScreen({
         {focus && !focus.eligible && focus.unavailabilityReason ? (
           <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
         ) : null}
-        {completed && attempt.validity !== 'valid' && focus?.eligible !== false ? (
+        {shouldShowPersistedUnrankedWarning({
+          lifecycle: attempt.lifecycle,
+          persistedValidity: attempt.validity,
+          focus,
+        }) ? (
           <Text style={styles.warningText}>Unranked — the course match was not reliable enough.</Text>
         ) : null}
 
