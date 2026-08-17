@@ -35,4 +35,20 @@ describe('course camera bounds', () => {
       'a far extra point must change bounds, proving preview omission is load-bearing',
     );
   });
+
+  it('expands framing when start or finish detection radiuses grow', () => {
+    const path = northPath(5);
+    const compact = courseCameraBounds(
+      path,
+      { center: path[0]!, radiusMeters: 25 },
+      { center: path[path.length - 1]!, radiusMeters: 25 },
+    );
+    const wideStart = courseCameraBounds(
+      path,
+      { center: path[0]!, radiusMeters: 200 },
+      { center: path[path.length - 1]!, radiusMeters: 25 },
+    );
+    assert.notDeepEqual(wideStart, compact);
+    assert.ok(wideStart[1] < compact[1] || wideStart[3] > compact[3]);
+  });
 });

@@ -2,6 +2,8 @@ import { pathDistanceMeters, type GeoZone, type LatLng } from './geo';
 import { pointAtProgress } from './path-projection';
 
 export const MIN_COURSE_MARKER_SEPARATION_METERS = 10;
+export const MIN_ZONE_RADIUS_METERS = 8;
+export const MAX_ZONE_RADIUS_METERS = 250;
 
 export type RouteCheckpoint = {
   id: string;
@@ -25,6 +27,24 @@ export type CourseLayoutValidation = {
 export const MARKERS_TOO_CLOSE_REASON =
   'Course markers must stay at least 10 m apart along the route.';
 export const EMPTY_CHECKPOINT_NAME_REASON = 'Every checkpoint needs a name.';
+export const INVALID_START_RADIUS_REASON = `Auto-start radius must be between ${MIN_ZONE_RADIUS_METERS} and ${MAX_ZONE_RADIUS_METERS} m.`;
+export const INVALID_FINISH_RADIUS_REASON = `Auto-finish radius must be between ${MIN_ZONE_RADIUS_METERS} and ${MAX_ZONE_RADIUS_METERS} m.`;
+
+export function isValidZoneRadiusMeters(radiusMeters: number): boolean {
+  return (
+    Number.isFinite(radiusMeters) &&
+    radiusMeters >= MIN_ZONE_RADIUS_METERS &&
+    radiusMeters <= MAX_ZONE_RADIUS_METERS
+  );
+}
+
+export function parseZoneRadiusInput(text: string): number {
+  const normalized = text.trim().replace(',', '.');
+  if (normalized.length === 0) {
+    return Number.NaN;
+  }
+  return Number(normalized);
+}
 
 export function cloneGeoZone(zone: GeoZone): GeoZone {
   return {
@@ -74,6 +94,12 @@ export function checkpointMapPoints(
 }
 
 export function validateCourseLayout(layout: CourseLayout): CourseLayoutValidation {
+  if (!isValidZoneRadiusMeters(layout.startZone.radiusMeters)) {
+    return { valid: false, reason: INVALID_START_RADIUS_REASON };
+  }
+  if (!isValidZoneRadiusMeters(layout.finishZone.radiusMeters)) {
+    return { valid: false, reason: INVALID_FINISH_RADIUS_REASON };
+  }
   if (layout.checkpoints.some((checkpoint) => checkpoint.name.trim().length === 0)) {
     return { valid: false, reason: EMPTY_CHECKPOINT_NAME_REASON };
   }

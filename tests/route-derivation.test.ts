@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { pathDistanceMeters } from '../src/domain/geo';
-import { deriveRouteGeometry, MIN_START_FINISH_SEPARATION_METERS } from '../src/domain/route-derivation';
+import { deriveRouteGeometry, DEFAULT_ZONE_RADIUS_METERS, MIN_START_FINISH_SEPARATION_METERS } from '../src/domain/route-derivation';
 import { movingTrace, offsetLatLng, sample } from './helpers/samples';
 
 describe('deriveRouteGeometry', () => {
@@ -35,6 +35,8 @@ describe('deriveRouteGeometry', () => {
     assert.ok(naive > derived.distanceMeters);
     assert.ok(derived.startZone);
     assert.ok(derived.finishZone);
+    assert.equal(derived.startZone.radiusMeters, DEFAULT_ZONE_RADIUS_METERS);
+    assert.equal(derived.finishZone.radiusMeters, DEFAULT_ZONE_RADIUS_METERS);
   });
 
   it('drops poor-accuracy fixes from the reference path', () => {

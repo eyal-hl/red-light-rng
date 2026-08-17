@@ -6,6 +6,8 @@ import {
   createCourseEditorDraft,
   previewMapTap,
   renameSelectedCheckpoint,
+  setFinishZoneRadiusMeters,
+  setStartZoneRadiusMeters,
   toCourseLayout,
 } from '../src/domain/course-editor';
 import { pointAtProgress } from '../src/domain/path-projection';
@@ -53,6 +55,29 @@ describe('course layout persistence', () => {
     assert.equal(loaded.startZone.radiusMeters, route.startZone.radiusMeters);
     assert.equal(loaded.finishZone.radiusMeters, route.finishZone.radiusMeters);
     assert.deepEqual(loaded.referencePath, path);
+  });
+
+  it('persists independently edited start and finish radiuses across reload', async () => {
+    const sql = createMemorySqlExecutor();
+    await applyMigrations(sql, 1);
+    await insertSourceSession(sql, 'session-1');
+    const store = new SqliteRouteStore(async () => sql);
+    const route = makeRoute({
+      startZone: { center: { latitude: 32.08, longitude: 34.78 }, radiusMeters: 30 },
+      finishZone: { center: { latitude: 32.09, longitude: 34.78 }, radiusMeters: 30 },
+    });
+    await store.createRoute(route);
+
+    let draft = createCourseEditorDraft(route);
+    draft = setStartZoneRadiusMeters(draft, 42);
+    draft = setFinishZoneRadiusMeters(draft, 16);
+    await store.replaceCourseLayout(route.id, toCourseLayout(draft));
+
+    const loaded = await new SqliteRouteStore(async () => sql).getRoute(route.id);
+    assert.equal(loaded?.startZone.radiusMeters, 42);
+    assert.equal(loaded?.finishZone.radiusMeters, 16);
+    assert.deepEqual(loaded?.startZone.center, route.startZone.center);
+    assert.deepEqual(loaded?.finishZone.center, route.finishZone.center);
   });
 
   it('mirrors whole-layout replace in the memory store', async () => {

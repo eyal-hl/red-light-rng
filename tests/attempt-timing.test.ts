@@ -4,7 +4,6 @@ import { describe, it } from 'node:test';
 import {
   ABANDON_OFF_COURSE_MS,
   DEPARTURE_WINDOW_MS,
-  FINISH_PROGRESS_TOLERANCE_METERS,
   replayAttemptTrace,
   startLineHasPreStartRegion,
   type TimingCourse,
@@ -16,12 +15,13 @@ import { makeRoute, northPath, outAndBackPath } from './helpers/routes';
 
 function courseFromRoute(overrides: Partial<TimingCourse> = {}): TimingCourse {
   const route = makeRoute({
-    referencePath: northPath({ points: 16, stepMeters: 20 }),
+    referencePath: overrides.referencePath ?? northPath({ points: 16, stepMeters: 20 }),
   });
   return {
     referencePath: route.referencePath,
     startProgressMeters: route.startProgressMeters,
     finishProgressMeters: route.finishProgressMeters,
+    startZone: route.startZone,
     finishZone: route.finishZone,
     checkpoints: route.checkpoints,
     ...overrides,
@@ -242,7 +242,7 @@ describe('attempt timing', () => {
     });
     const lastProgress = 6 * 47;
     assert.ok(lastProgress < course.finishProgressMeters);
-    assert.ok(lastProgress >= course.finishProgressMeters - FINISH_PROGRESS_TOLERANCE_METERS - 6);
+    assert.ok(lastProgress >= course.finishProgressMeters - course.finishZone.radiusMeters - 6);
     const result = replayAttemptTrace(course, samples);
     assert.equal(result.lifecycle, 'completed');
     assert.ok(result.finishedAtMs != null);
@@ -280,6 +280,7 @@ describe('attempt timing', () => {
       referencePath: path,
       startProgressMeters: 0,
       finishProgressMeters: pathDistanceMeters(path),
+      startZone: { center: path[0]!, radiusMeters: 30 },
       finishZone: { center: path[path.length - 1]!, radiusMeters: 30 },
       checkpoints: [{ id: 'turn', name: 'Turn', progressMeters: pathDistanceMeters(path) / 2 }],
     };
@@ -292,5 +293,70 @@ describe('attempt timing', () => {
     assert.ok(result.lifecycle === 'active' || result.lifecycle === 'completed');
     assert.ok((result.match.lastAcceptedProgressMeters ?? 0) > 18);
     assert.equal(result.crossings.length, 1);
+  });
+
+  it('stays armed when departure never enters the configured start radius', () => {
+    const path = northPath({ points: 16, stepMeters: 20 });
+    const course = courseFromRoute({
+      referencePath: path,
+      startZone: { center: path[0]!, radiusMeters: 12 },
+    });
+    const past = traceAlongPath(path, {
+      startProgressMeters: 40,
+      stepMeters: 5,
+      count: 10,
+    });
+    const result = replayAttemptTrace(course, past);
+    assert.equal(result.lifecycle, 'armed');
+    assert.equal(result.startedAtMs, null);
+  });
+
+  it('can auto-start farther from the start line when the start radius is larger', () => {
+    const path = northPath({ points: 16, stepMeters: 20 });
+    const course = courseFromRoute({
+      referencePath: path,
+      startZone: { center: path[0]!, radiusMeters: 50 },
+    });
+    const fromForty = traceAlongPath(path, {
+      startProgressMeters: 40,
+      stepMeters: 5,
+      count: 10,
+    });
+    const result = replayAttemptTrace(course, fromForty);
+    assert.equal(result.lifecycle, 'active');
+    assert.ok(result.startedAtMs != null);
+  });
+
+  it('uses the configured finish radius independently of the start radius', () => {
+    const path = northPath({ points: 16, stepMeters: 20 });
+    const finish = path[path.length - 1]!;
+    const start = path[0]!;
+    const samples = traceAlongPath(path, {
+      startProgressMeters: 0,
+      stepMeters: 10,
+      count: 29,
+    });
+    const lastProgress = 10 * 28;
+    const finishProgress = pathDistanceMeters(path);
+    assert.equal(lastProgress, 280);
+    assert.ok(finishProgress > 280);
+
+    const tightFinish = courseFromRoute({
+      referencePath: path,
+      startZone: { center: start, radiusMeters: 40 },
+      finishZone: { center: finish, radiusMeters: 8 },
+    });
+    const wideFinish = courseFromRoute({
+      referencePath: path,
+      startZone: { center: start, radiusMeters: 40 },
+      finishZone: { center: finish, radiusMeters: 40 },
+    });
+    const tight = replayAttemptTrace(tightFinish, samples);
+    const wide = replayAttemptTrace(wideFinish, samples);
+    assert.ok(lastProgress < finishProgress - tightFinish.finishZone.radiusMeters);
+    assert.ok(lastProgress >= finishProgress - wideFinish.finishZone.radiusMeters);
+    assert.equal(tight.lifecycle, 'active');
+    assert.equal(wide.lifecycle, 'completed');
+    assert.equal(tight.startedAtMs != null, true);
   });
 });

@@ -26,6 +26,15 @@ describe('course editor map gestures', () => {
     assert.match(source, /PLACE HERE/);
   });
 
+  it('lets the user edit auto-start and auto-finish radiuses on the marker cards', () => {
+    const source = readFileSync('src/ui/CourseEditorScreen.tsx', 'utf8');
+    assert.match(source, /Auto-start radius/);
+    assert.match(source, /Auto-finish radius/);
+    assert.match(source, /setStartZoneRadiusMeters/);
+    assert.match(source, /setFinishZoneRadiusMeters/);
+    assert.match(source, /keyboardType="number-pad"/);
+  });
+
   it('initializes the camera from course bounds and does not re-fit on preview', () => {
     const source = readFileSync('src/map/RouteMap.tsx', 'utf8');
     const cameraStart = source.indexOf('<Camera');
@@ -38,5 +47,15 @@ describe('course editor map gestures', () => {
     assert.doesNotMatch(withoutInitial, /\bduration=/);
     assert.match(source, /courseCameraBounds\(\s*path,\s*startZone,\s*finishZone,\s*checkpoints\s*\)/);
     assert.doesNotMatch(source, /courseCameraBounds\([^)]*previewPoint/);
+  });
+
+  it('draws start and finish detection zones on the map and fallback preview', () => {
+    const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    const fallback = readFileSync('src/map/FallbackRoutePreview.tsx', 'utf8');
+    assert.match(map, /start-zone/);
+    assert.match(map, /finish-zone/);
+    assert.match(map, /startZone.radiusMeters/);
+    assert.match(fallback, /Auto-start detection zone/);
+    assert.match(fallback, /Auto-finish detection zone/);
   });
 });

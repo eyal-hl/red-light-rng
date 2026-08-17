@@ -25,6 +25,19 @@ export function haversineMeters(a: LatLng, b: LatLng): number {
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+export function geoZoneExtentPoints(zone: GeoZone): LatLng[] {
+  const latMeters = 111_320;
+  const lngMeters = Math.max(1e-6, latMeters * Math.cos(toRadians(zone.center.latitude)));
+  const dLat = zone.radiusMeters / latMeters;
+  const dLng = zone.radiusMeters / lngMeters;
+  return [
+    { latitude: zone.center.latitude + dLat, longitude: zone.center.longitude },
+    { latitude: zone.center.latitude - dLat, longitude: zone.center.longitude },
+    { latitude: zone.center.latitude, longitude: zone.center.longitude + dLng },
+    { latitude: zone.center.latitude, longitude: zone.center.longitude - dLng },
+  ];
+}
+
 export function pathDistanceMeters(path: LatLng[]): number {
   let total = 0;
   for (let index = 1; index < path.length; index += 1) {
