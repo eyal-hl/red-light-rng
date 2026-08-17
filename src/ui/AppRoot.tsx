@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Text, View } from 'react-native';
+import { AppState, BackHandler, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import {
@@ -21,16 +21,13 @@ import { RecordingScreen } from './RecordingScreen';
 import { ReviewScreen } from './ReviewScreen';
 import { RouteDetailScreen } from './RouteDetailScreen';
 import { styles } from './styles';
+import { handleSystemBack, type AppScreenKind } from './system-back';
 
 type AppScreen =
-  | { kind: 'loading' }
-  | { kind: 'home' }
-  | { kind: 'recording' }
+  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor'> }
   | { kind: 'review'; sessionId: string }
   | { kind: 'detail'; routeId: string }
-  | { kind: 'editor'; routeId: string }
-  | { kind: 'attempt' }
-  | { kind: 'attempt-result' };
+  | { kind: 'editor'; routeId: string };
 
 type AppRootProps = {
   workspace: RouteWorkspace;
@@ -451,6 +448,33 @@ export function AppRoot({ workspace }: AppRootProps) {
     setScreen({ kind: 'detail', routeId: screen.routeId });
   }, [screen, workspace]);
 
+  const leaveToHome = useCallback(() => {
+    setError(null);
+    setScreen({ kind: 'home' });
+    void refreshHome();
+  }, [refreshHome]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () =>
+      handleSystemBack(screen.kind, {
+        leaveToHome,
+        cancelRecording: () => {
+          void onCancel();
+        },
+        cancelEditor: () => {
+          void onCancelEditor();
+        },
+        cancelAttempt: () => {
+          void onCancelAttempt();
+        },
+        acknowledgeAttemptResult: () => {
+          void onAcknowledgeAttempt();
+        },
+      }),
+    );
+    return () => sub.remove();
+  }, [leaveToHome, onAcknowledgeAttempt, onCancel, onCancelAttempt, onCancelEditor, screen.kind]);
+
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
@@ -514,6 +538,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           onDiscard={() => {
             void onDiscard();
           }}
+          onBack={leaveToHome}
         />
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
@@ -523,11 +548,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           canArm={canStartNewRecording}
           busy={busy}
           error={error}
-          onBack={() => {
-            setError(null);
-            setScreen({ kind: 'home' });
-            void refreshHome();
-          }}
+          onBack={leaveToHome}
           onArmRun={() => {
             void onArmRun();
           }}

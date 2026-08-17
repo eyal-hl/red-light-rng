@@ -21,6 +21,7 @@ type ReviewScreenProps = {
   onChangeMode: (mode: TransportationMode) => void;
   onSave: () => void;
   onDiscard: () => void;
+  onBack: () => void;
 };
 
 export function ReviewScreen({
@@ -35,6 +36,7 @@ export function ReviewScreen({
   onChangeMode,
   onSave,
   onDiscard,
+  onBack,
 }: ReviewScreenProps) {
   const durationMs = reviewDurationMs(session);
   const saveDisabled = busy || !derivation.saveable || name.trim().length === 0;
@@ -42,7 +44,9 @@ export function ReviewScreen({
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.kicker}>NEW ROUTE</Text>
+        <Pressable accessibilityRole="button" onPress={onBack}>
+          <Text style={styles.kicker}>← YOUR ROUTES</Text>
+        </Pressable>
         <Text style={styles.title}>Review recording</Text>
 
         {session.captureOutcome === 'interrupted' ? (
