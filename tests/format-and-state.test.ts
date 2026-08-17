@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { formatElapsed, recordingElapsedMs, reviewDurationMs } from '../src/domain/duration';
+import { formatElapsed, formatOrdinal, formatRankAmong, formatSignedDelta, recordingElapsedMs, reviewDurationMs } from '../src/domain/duration';
 import { formatSampleLine } from '../src/domain/format-sample';
 import { resolveGpsHealth, STALE_FIX_THRESHOLD_MS } from '../src/domain/session';
 import { resolveTrackingStatus } from '../src/domain/tracking-state';
@@ -40,6 +40,15 @@ describe('recording and review durations', () => {
     assert.equal(recordingElapsedMs(1_000, 4_000), 3_000);
     assert.equal(formatElapsed(3_000), '0:03');
     assert.equal(formatElapsed(62_000), '1:02');
+    assert.equal(formatSignedDelta(-4_000), '-0:04');
+    assert.equal(formatSignedDelta(19_000), '+0:19');
+    assert.equal(formatSignedDelta(0), '0:00');
+    assert.equal(formatOrdinal(1), '1st');
+    assert.equal(formatOrdinal(2), '2nd');
+    assert.equal(formatOrdinal(3), '3rd');
+    assert.equal(formatOrdinal(4), '4th');
+    assert.equal(formatOrdinal(11), '11th');
+    assert.equal(formatRankAmong(4, 31), '4th fastest of 31');
   });
 
   it('uses stop time for a finished recording and last sample time for an interrupted one', () => {
