@@ -5,7 +5,7 @@ import {
   segmentEndpointLabel,
   type FocusAttemptAnalysis,
 } from '../domain/attempt-analysis';
-import { officialTimeMs, type Attempt } from '../domain/attempt';
+import { type Attempt } from '../domain/attempt';
 import { formatElapsed, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
 import type { Route } from '../domain/route';
 import { styles } from './styles';
@@ -39,7 +39,9 @@ export function AttemptResultScreen({
   const completed = attempt.lifecycle === 'completed';
   const focus = analysis?.focus;
   const competitive = focus?.eligible === true;
-  const official = competitive ? focus.officialTimeMs : officialTimeMs(attempt);
+  const official = competitive ? focus.officialTimeMs : null;
+  const displayStartedAtMs = competitive ? focus.startedAtMs : attempt.startedAtMs;
+  const displayFinishedAtMs = competitive ? focus.finishedAtMs : attempt.finishedAtMs;
 
   return (
     <View style={styles.screen}>
@@ -47,8 +49,6 @@ export function AttemptResultScreen({
         <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
         <Text style={styles.title}>{route?.name ?? 'Attempt'}</Text>
         {competitive && official != null ? (
-          <Text style={styles.title}>{formatElapsed(official)}</Text>
-        ) : completed && official != null && !competitive ? (
           <Text style={styles.title}>{formatElapsed(official)}</Text>
         ) : (
           <Text style={styles.subtitle}>
@@ -95,7 +95,9 @@ export function AttemptResultScreen({
                   <Text style={styles.statLabel}>{segmentEndpointLabel(segment.spec.to)}</Text>
                   <Text style={styles.statValue}>
                     {segment.durationMs == null ? '—' : formatElapsed(segment.durationMs)}
-                    {segment.deltaVsPbRunMs == null ? '' : `   ${formatSignedDelta(segment.deltaVsPbRunMs)}`}
+                    {segment.deltaVsPbRunMs == null || analysis?.isPb
+                      ? ''
+                      : `   ${formatSignedDelta(segment.deltaVsPbRunMs)}`}
                   </Text>
                 </View>
                 {segment.durationMs == null ? (
@@ -111,7 +113,7 @@ export function AttemptResultScreen({
               </Text>
             </View>
             <View style={styles.statRow}>
-              <Text style={styles.statLabel}>Today</Text>
+              <Text style={styles.statLabel}>This run</Text>
               <Text style={styles.statValue}>{official == null ? '—' : formatElapsed(official)}</Text>
             </View>
             <View style={styles.statRow}>
@@ -123,16 +125,16 @@ export function AttemptResultScreen({
           </View>
         ) : null}
 
-        {attempt.startedAtMs != null ? (
+        {displayStartedAtMs != null ? (
           <View style={styles.statRow}>
             <Text style={styles.statLabel}>Started</Text>
-            <Text style={styles.statValue}>{formatTimeOfDay(attempt.startedAtMs)}</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(displayStartedAtMs)}</Text>
           </View>
         ) : null}
-        {attempt.finishedAtMs != null ? (
+        {displayFinishedAtMs != null ? (
           <View style={styles.statRow}>
             <Text style={styles.statLabel}>Finished</Text>
-            <Text style={styles.statValue}>{formatTimeOfDay(attempt.finishedAtMs)}</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(displayFinishedAtMs)}</Text>
           </View>
         ) : null}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
