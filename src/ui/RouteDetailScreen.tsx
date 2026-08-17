@@ -1,5 +1,6 @@
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 
+import { checkpointMapPoints } from '../domain/course-layout';
 import { formatDistance, pathDistanceMeters } from '../domain/geo';
 import {
   transportationModeIcon,
@@ -14,11 +15,20 @@ type RouteDetailScreenProps = {
   busy: boolean;
   error: string | null;
   onBack: () => void;
+  onEditCourse: () => void;
   onDelete: () => void;
 };
 
-export function RouteDetailScreen({ route, busy, error, onBack, onDelete }: RouteDetailScreenProps) {
+export function RouteDetailScreen({
+  route,
+  busy,
+  error,
+  onBack,
+  onEditCourse,
+  onDelete,
+}: RouteDetailScreenProps) {
   const distance = pathDistanceMeters(route.referencePath);
+  const checkpoints = checkpointMapPoints(route.referencePath, route.checkpoints);
 
   const confirmDelete = () => {
     Alert.alert('Delete route?', 'The saved route will be removed. The original GPS recording is kept.', [
@@ -48,12 +58,17 @@ export function RouteDetailScreen({ route, busy, error, onBack, onDelete }: Rout
             path={route.referencePath}
             startZone={route.startZone}
             finishZone={route.finishZone}
+            checkpoints={checkpoints}
           />
         </View>
 
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Distance</Text>
           <Text style={styles.statValue}>{formatDistance(distance)}</Text>
+        </View>
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>Checkpoints</Text>
+          <Text style={styles.statValue}>{route.checkpoints.length}</Text>
         </View>
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Reference points</Text>
@@ -67,6 +82,14 @@ export function RouteDetailScreen({ route, busy, error, onBack, onDelete }: Rout
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={onEditCourse}
+            style={[styles.button, styles.primaryButton, busy ? styles.disabledButton : null]}
+          >
+            <Text style={styles.buttonText}>EDIT COURSE</Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             disabled={busy}

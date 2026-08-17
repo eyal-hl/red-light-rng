@@ -10,6 +10,13 @@ import { RouteWorkspace } from '../src/product/route-workspace';
 import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
 import { TrackingSessionService } from '../src/tracking/tracking-session-service';
 import type { LocationPlatform } from '../src/tracking/location-tracker';
+import {
+  addCheckpointFromPending,
+  createCourseEditorDraft,
+  previewMapTap,
+  toCourseLayout,
+} from '../src/domain/course-editor';
+import { pointAtProgress } from '../src/domain/path-projection';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 import { movingTrace } from './helpers/samples';
 
@@ -73,6 +80,9 @@ describe('RouteWorkspace', () => {
       return;
     }
     assert.equal(saved.route.referencePath.length >= 3, true);
+    assert.equal(saved.route.checkpoints.length, 0);
+    assert.equal(saved.route.startProgressMeters, 0);
+    assert.ok(saved.route.finishProgressMeters > 0);
     assert.equal(await sessions.countSamples('id-1'), 16);
     assert.equal((await sessions.getSession('id-1'))?.reviewDisposition, 'saved');
     assert.equal(await sessions.findPendingRouteCreation(), null);
@@ -200,5 +210,40 @@ describe('RouteWorkspace', () => {
     assert.equal(await reloadedSessions.countSamples('sql-session'), 14);
     assert.equal((await reloadedSessions.getSession('sql-session'))?.id, 'sql-session');
     assert.equal((await reloadedSessions.getSession('sql-session'))?.reviewDisposition, 'saved');
+  });
+
+  it('saves a course layout through the workspace without changing source telemetry', async () => {
+    const { workspace, sessions } = createMemoryWorkspace();
+    await workspace.startRouteRecording();
+    await sessions.appendSamples(movingTrace({ sessionId: 'id-1', points: 16, stepMeters: 15 }));
+    await workspace.finishRecording();
+    const saved = await workspace.saveRoute('id-1', 'Home → Work', 'scooter');
+    assert.equal(saved.ok, true);
+    if (!saved.ok) {
+      return;
+    }
+
+    let draft = createCourseEditorDraft(saved.route);
+    draft = previewMapTap(draft, pointAtProgress(saved.route.referencePath, 40));
+    draft = addCheckpointFromPending(draft, () => 'cp-1');
+    const result = await workspace.saveCourseLayout(saved.route.id, toCourseLayout(draft));
+    assert.equal(result.ok, true);
+    if (!result.ok) {
+      return;
+    }
+    assert.equal(result.route.checkpoints.length, 1);
+    assert.equal(await sessions.countSamples('id-1'), 16);
+    assert.deepEqual(result.route.referencePath, saved.route.referencePath);
+
+    const rejected = await workspace.saveCourseLayout(saved.route.id, {
+      ...toCourseLayout(draft),
+      checkpoints: [
+        { id: 'a', name: 'A', progressMeters: 20 },
+        { id: 'b', name: 'B', progressMeters: 22 },
+      ],
+    });
+    assert.equal(rejected.ok, false);
+    const unchanged = await workspace.getRoute(saved.route.id);
+    assert.equal(unchanged?.checkpoints.length, 1);
   });
 });

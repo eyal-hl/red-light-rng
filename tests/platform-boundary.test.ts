@@ -9,6 +9,9 @@ describe('platform boundary', () => {
       'src/domain/tracking-state.ts',
       'src/domain/route.ts',
       'src/domain/route-derivation.ts',
+      'src/domain/path-projection.ts',
+      'src/domain/course-layout.ts',
+      'src/domain/course-editor.ts',
       'src/domain/session.ts',
       'src/persistence/location-sample-store.ts',
       'src/persistence/memory-location-sample-store.ts',
@@ -17,6 +20,7 @@ describe('platform boundary', () => {
       'src/persistence/migrations.ts',
       'src/persistence/route-store.ts',
       'src/persistence/sqlite-route-store.ts',
+      'src/persistence/memory-route-store.ts',
       'src/product/route-workspace.ts',
       'src/tracking/location-tracker.ts',
       'src/tracking/shared-location-tracker.ts',
@@ -26,6 +30,7 @@ describe('platform boundary', () => {
       'src/ui/RecordingScreen.tsx',
       'src/ui/ReviewScreen.tsx',
       'src/ui/RouteDetailScreen.tsx',
+      'src/ui/CourseEditorScreen.tsx',
     ];
 
     for (const file of sharedFiles) {
@@ -48,8 +53,13 @@ describe('platform boundary', () => {
       'src/domain/geo.ts',
       'src/domain/route.ts',
       'src/domain/route-derivation.ts',
+      'src/domain/path-projection.ts',
+      'src/domain/course-layout.ts',
+      'src/domain/course-editor.ts',
       'src/persistence/schema.ts',
       'src/persistence/sqlite-route-store.ts',
+      'src/persistence/memory-route-store.ts',
+      'src/persistence/migrations.ts',
       'src/product/route-workspace.ts',
     ];
     for (const file of domainFiles) {

@@ -29,6 +29,40 @@ export const styles = StyleSheet.create({
     lineHeight: 22,
     marginBottom: 20,
   },
+  editorHeader: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  editorSubtitle: {
+    color: '#c5c8ce',
+    fontSize: 15,
+    lineHeight: 21,
+    marginBottom: 4,
+  },
+  editorMapPane: {
+    flex: 1,
+    minHeight: 240,
+    marginHorizontal: 20,
+    marginBottom: 8,
+  },
+  editorMap: {
+    flex: 1,
+    minHeight: 240,
+  },
+  editorStatus: {
+    paddingHorizontal: 20,
+    paddingBottom: 4,
+  },
+  editorControls: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: 360,
+  },
+  editorControlsContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
   sectionLabel: {
     color: '#9aa0a6',
     fontSize: 12,
@@ -70,6 +104,8 @@ export const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#1b1b1b',
   },
   cardTitle: {
     color: '#f5f5f5',
@@ -164,6 +200,17 @@ export const styles = StyleSheet.create({
   mapSlot: {
     height: 260,
     marginBottom: 16,
+  },
+  editorMapSlot: {
+    height: 320,
+    marginBottom: 16,
+  },
+  selectedCard: {
+    borderWidth: 1,
+    borderColor: '#4fc3f7',
+  },
+  markerAction: {
+    marginTop: 12,
   },
   recordingDot: {
     color: '#f07178',

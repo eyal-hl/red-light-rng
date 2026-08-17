@@ -1,3 +1,4 @@
+import { pathDistanceMeters } from '../domain/geo';
 import { LOCATION_SPIKE_SCHEMA, CURRENT_SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 
@@ -61,6 +62,39 @@ export const MIGRATIONS: Migration[] = [
       await sql.exec(
         `ALTER TABLE tracking_session ADD COLUMN background_permission_confirmed INTEGER NOT NULL DEFAULT 0`,
       );
+    },
+  },
+  {
+    version: 3,
+    async up(sql) {
+      await sql.exec(`ALTER TABLE route ADD COLUMN start_progress_m REAL NOT NULL DEFAULT 0`);
+      await sql.exec(`ALTER TABLE route ADD COLUMN finish_progress_m REAL NOT NULL DEFAULT 0`);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS route_checkpoint (
+          id TEXT PRIMARY KEY NOT NULL,
+          route_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          progress_m REAL NOT NULL,
+          FOREIGN KEY (route_id) REFERENCES route(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_route_checkpoint_route_progress
+        ON route_checkpoint(route_id, progress_m);
+      `);
+
+      const routes = await sql.getAll<{ id: string }>('SELECT id FROM route');
+      for (const route of routes) {
+        const points = await sql.getAll<{ latitude: number; longitude: number }>(
+          'SELECT latitude, longitude FROM route_reference_point WHERE route_id = ? ORDER BY seq ASC',
+          [route.id],
+        );
+        const finishProgressMeters = pathDistanceMeters(points);
+        await sql.run('UPDATE route SET start_progress_m = 0, finish_progress_m = ? WHERE id = ?', [
+          finishProgressMeters,
+          route.id,
+        ]);
+      }
     },
   },
 ];

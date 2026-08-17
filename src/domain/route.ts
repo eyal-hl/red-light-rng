@@ -1,3 +1,4 @@
+import type { RouteCheckpoint } from './course-layout';
 import type { GeoZone, LatLng } from './geo';
 
 export type TransportationMode = 'scooter' | 'bike' | 'run' | 'walk';
@@ -26,4 +27,7 @@ export type Route = {
   referencePath: LatLng[];
   startZone: GeoZone;
   finishZone: GeoZone;
+  startProgressMeters: number;
+  finishProgressMeters: number;
+  checkpoints: RouteCheckpoint[];
 };

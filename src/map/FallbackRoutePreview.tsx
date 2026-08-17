@@ -3,18 +3,34 @@ import { StyleSheet, View } from 'react-native';
 
 import type { GeoZone, LatLng } from '../domain/geo';
 
+type FallbackCheckpoint = {
+  id: string;
+  name: string;
+  point: LatLng;
+};
+
 type FallbackRoutePreviewProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
+  checkpoints?: FallbackCheckpoint[];
+  previewPoint?: LatLng | null;
 };
 
 type Point = { x: number; y: number };
 
-function project(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZone | null): {
+function project(
+  path: LatLng[],
+  startZone?: GeoZone | null,
+  finishZone?: GeoZone | null,
+  checkpoints: FallbackCheckpoint[] = [],
+  previewPoint?: LatLng | null,
+): {
   points: Point[];
   start: Point | null;
   finish: Point | null;
+  checkpointPoints: Point[];
+  preview: Point | null;
 } {
   const coords = [...path];
   if (startZone) {
@@ -23,8 +39,14 @@ function project(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZon
   if (finishZone) {
     coords.push(finishZone.center);
   }
+  for (const checkpoint of checkpoints) {
+    coords.push(checkpoint.point);
+  }
+  if (previewPoint) {
+    coords.push(previewPoint);
+  }
   if (coords.length === 0) {
-    return { points: [], start: null, finish: null };
+    return { points: [], start: null, finish: null, checkpointPoints: [], preview: null };
   }
 
   const lats = coords.map((item) => item.latitude);
@@ -45,13 +67,21 @@ function project(path: LatLng[], startZone?: GeoZone | null, finishZone?: GeoZon
     points: path.map(toPoint),
     start: startZone ? toPoint(startZone.center) : null,
     finish: finishZone ? toPoint(finishZone.center) : null,
+    checkpointPoints: checkpoints.map((checkpoint) => toPoint(checkpoint.point)),
+    preview: previewPoint ? toPoint(previewPoint) : null,
   };
 }
 
-export function FallbackRoutePreview({ path, startZone, finishZone }: FallbackRoutePreviewProps) {
+export function FallbackRoutePreview({
+  path,
+  startZone,
+  finishZone,
+  checkpoints = [],
+  previewPoint = null,
+}: FallbackRoutePreviewProps) {
   const projected = useMemo(
-    () => project(path, startZone, finishZone),
-    [finishZone, path, startZone],
+    () => project(path, startZone, finishZone, checkpoints, previewPoint),
+    [checkpoints, finishZone, path, previewPoint, startZone],
   );
 
   return (
@@ -64,6 +94,15 @@ export function FallbackRoutePreview({ path, startZone, finishZone }: FallbackRo
       ))}
       {projected.start ? (
         <View style={[styles.start, { left: `${projected.start.x}%`, top: `${projected.start.y}%` }]} />
+      ) : null}
+      {projected.checkpointPoints.map((point, index) => (
+        <View
+          key={`checkpoint-${point.x}-${point.y}-${index}`}
+          style={[styles.checkpoint, { left: `${point.x}%`, top: `${point.y}%` }]}
+        />
+      ))}
+      {projected.preview ? (
+        <View style={[styles.preview, { left: `${projected.preview.x}%`, top: `${projected.preview.y}%` }]} />
       ) : null}
       {projected.finish ? (
         <View
@@ -99,6 +138,28 @@ const styles = StyleSheet.create({
     marginTop: -7,
     borderRadius: 7,
     backgroundColor: '#2e7d4f',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  checkpoint: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    marginLeft: -6,
+    marginTop: -6,
+    borderRadius: 6,
+    backgroundColor: '#f0c040',
+    borderWidth: 2,
+    borderColor: '#111111',
+  },
+  preview: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    marginTop: -7,
+    borderRadius: 7,
+    backgroundColor: '#7ee0ff',
     borderWidth: 2,
     borderColor: '#ffffff',
   },

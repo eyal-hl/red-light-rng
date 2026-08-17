@@ -1,3 +1,4 @@
+import { defaultCourseProgress, validateCourseLayout, type CourseLayout } from '../domain/course-layout';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
 import type { Route, TransportationMode } from '../domain/route';
@@ -15,6 +16,10 @@ export type HomeSnapshot = {
 };
 
 export type SaveRouteResult =
+  | { ok: true; route: Route }
+  | { ok: false; reason: string };
+
+export type SaveCourseLayoutResult =
   | { ok: true; route: Route }
   | { ok: false; reason: string };
 
@@ -121,6 +126,7 @@ export class RouteWorkspace {
       };
     }
 
+    const progress = defaultCourseProgress(derivation.referencePath);
     const route: Route = {
       id: this.createRouteId(),
       name: trimmedName,
@@ -130,6 +136,9 @@ export class RouteWorkspace {
       referencePath: derivation.referencePath,
       startZone: derivation.startZone,
       finishZone: derivation.finishZone,
+      startProgressMeters: progress.startProgressMeters,
+      finishProgressMeters: progress.finishProgressMeters,
+      checkpoints: [],
     };
     await this.routes.createRoute(route);
     await this.sessions.setReviewDisposition(sessionId, 'saved');
@@ -138,6 +147,23 @@ export class RouteWorkspace {
 
   async getRoute(routeId: string): Promise<Route | null> {
     return this.routes.getRoute(routeId);
+  }
+
+  async saveCourseLayout(routeId: string, layout: CourseLayout): Promise<SaveCourseLayoutResult> {
+    const existing = await this.routes.getRoute(routeId);
+    if (!existing) {
+      return { ok: false, reason: 'This route is no longer available.' };
+    }
+    const validation = validateCourseLayout(layout);
+    if (!validation.valid) {
+      return { ok: false, reason: validation.reason ?? 'This course layout cannot be saved.' };
+    }
+    await this.routes.replaceCourseLayout(routeId, layout);
+    const route = await this.routes.getRoute(routeId);
+    if (!route) {
+      return { ok: false, reason: 'This route is no longer available.' };
+    }
+    return { ok: true, route };
   }
 
   async deleteRoute(routeId: string): Promise<void> {
