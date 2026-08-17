@@ -5,9 +5,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
+  actions: write
   contents: read
   issues: write
   pull-requests: write
+
+concurrency:
+  group: android-pr-apk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   build-android-apk:
@@ -59,6 +64,27 @@ jobs:
             --freeze-credentials \
             --output "${{ github.workspace }}/artifacts/red-light-rng-pr-${{ github.event.pull_request.number }}-android-preview.apk"
 
+      - name: Delete previous APK artifacts for this PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifactName = `red-light-rng-pr-${context.issue.number}-android-preview`;
+            const { data } = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+
+            for (const artifact of data.artifacts) {
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+              });
+              core.info(`Deleted old artifact ${artifact.name} (${artifact.id})`);
+            }
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -78,6 +104,8 @@ jobs:
               '',
               `Download the **red-light-rng-pr-${context.issue.number}-android-preview** artifact from this workflow run:`,
               runUrl,
+              '',
+              'Only the latest APK artifact for this PR is retained; older APK artifacts for the same PR are deleted before upload.',
               '',
               'This APK is built locally on GitHub Actions but uses the existing EAS-managed Android signing credentials, so it can update the previously installed preview build without wiping app data.',
               '',
