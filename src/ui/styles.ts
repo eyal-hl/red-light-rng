@@ -212,6 +212,28 @@ export const styles = StyleSheet.create({
   markerAction: {
     marginTop: 12,
   },
+  radiusField: {
+    marginTop: 12,
+  },
+  radiusLabel: {
+    color: '#9aa0a6',
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  radiusInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  radiusInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  radiusUnit: {
+    color: '#f5f5f5',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   recordingDot: {
     color: '#f07178',
     fontSize: 16,

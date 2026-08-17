@@ -209,6 +209,38 @@ export function commitMoveFromPending(draft: CourseEditorDraft): CourseEditorDra
   return next;
 }
 
+export function setStartZoneRadiusMeters(
+  draft: CourseEditorDraft,
+  radiusMeters: number,
+): CourseEditorDraft {
+  if (draft.layout.startZone.radiusMeters === radiusMeters) {
+    return draft;
+  }
+  const next = cloneDraft(draft);
+  next.layout.startZone = {
+    center: { ...next.layout.startZone.center },
+    radiusMeters,
+  };
+  next.dirty = true;
+  return next;
+}
+
+export function setFinishZoneRadiusMeters(
+  draft: CourseEditorDraft,
+  radiusMeters: number,
+): CourseEditorDraft {
+  if (draft.layout.finishZone.radiusMeters === radiusMeters) {
+    return draft;
+  }
+  const next = cloneDraft(draft);
+  next.layout.finishZone = {
+    center: { ...next.layout.finishZone.center },
+    radiusMeters,
+  };
+  next.dirty = true;
+  return next;
+}
+
 export function renameSelectedCheckpoint(draft: CourseEditorDraft, name: string): CourseEditorDraft {
   const next = cloneDraft(draft);
   if (!next.selectedMarkerId || next.selectedMarkerId === START_MARKER_ID || next.selectedMarkerId === FINISH_MARKER_ID) {

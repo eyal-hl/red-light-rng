@@ -22,6 +22,7 @@ function toTimingCourse(route: Route): TimingCourse {
     referencePath: route.referencePath,
     startProgressMeters: route.startProgressMeters,
     finishProgressMeters: route.finishProgressMeters,
+    startZone: route.startZone,
     finishZone: route.finishZone,
     checkpoints: route.checkpoints,
   };

@@ -1,4 +1,8 @@
-import { orderedCheckpoints, type RouteCheckpoint } from './course-layout';
+import {
+  MIN_COURSE_MARKER_SEPARATION_METERS,
+  orderedCheckpoints,
+  type RouteCheckpoint,
+} from './course-layout';
 import type { AttemptLifecycle, AttemptValidity } from './attempt';
 import { createCourseMatchState, matchSampleToCourse, type CourseMatchState } from './course-matching';
 import type { GeoZone, LatLng } from './geo';
@@ -10,7 +14,6 @@ export const DEPARTURE_MIN_SAMPLES = 4;
 export const START_PROGRESS_NOISE_METERS = 5;
 export const START_PRE_START_MARGIN_METERS = 3;
 export const START_RETURN_HYSTERESIS_METERS = 4;
-export const FINISH_PROGRESS_TOLERANCE_METERS = 15;
 export const ABANDON_OFF_COURSE_MS = 60_000;
 export const MATERIAL_DEVIATION_MS = 25_000;
 
@@ -18,6 +21,7 @@ export type TimingCourse = {
   referencePath: LatLng[];
   startProgressMeters: number;
   finishProgressMeters: number;
+  startZone: GeoZone;
   finishZone: GeoZone;
   checkpoints: RouteCheckpoint[];
 };
@@ -68,11 +72,21 @@ export function startLineHasPreStartRegion(startProgressMeters: number): boolean
   return startProgressMeters > START_PROGRESS_NOISE_METERS;
 }
 
+export function progressIsInStartZone(progressMeters: number, course: TimingCourse): boolean {
+  const radiusMeters = course.startZone.radiusMeters;
+  if (!Number.isFinite(radiusMeters) || radiusMeters < 0) {
+    return false;
+  }
+  return Math.abs(progressMeters - course.startProgressMeters) <= radiusMeters;
+}
+
 export function finishTriggerProgressMeters(course: TimingCourse): number {
-  const tolerance = Math.max(
-    FINISH_PROGRESS_TOLERANCE_METERS,
-    Math.min(course.finishZone.radiusMeters, FINISH_PROGRESS_TOLERANCE_METERS * 2),
-  );
+  const courseLength = Math.max(0, course.finishProgressMeters - course.startProgressMeters);
+  const maxTolerance = Math.max(0, courseLength - MIN_COURSE_MARKER_SEPARATION_METERS);
+  const configured = Number.isFinite(course.finishZone.radiusMeters)
+    ? Math.max(0, course.finishZone.radiusMeters)
+    : 0;
+  const tolerance = Math.min(configured, maxTolerance);
   return Math.max(course.startProgressMeters, course.finishProgressMeters - tolerance);
 }
 
@@ -180,6 +194,9 @@ function applyOffCourse(
 function maybePromoteFromArmed(state: AttemptEngineState, course: TimingCourse): AttemptEngineState {
   const departure = detectQualifyingDeparture(state.accepted, course.startProgressMeters);
   if (!departure) {
+    return state;
+  }
+  if (!departure.some((sample) => progressIsInStartZone(sample.progressMeters, course))) {
     return state;
   }
   if (startLineHasPreStartRegion(course.startProgressMeters) && !state.sawPreStart) {

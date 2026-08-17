@@ -14,11 +14,20 @@ import {
   renameSelectedCheckpoint,
   selectMarker,
   selectedMarkerLabel,
+  setFinishZoneRadiusMeters,
+  setStartZoneRadiusMeters,
   START_MARKER_ID,
   FINISH_MARKER_ID,
   toCourseLayout,
 } from '../src/domain/course-editor';
-import { MIN_COURSE_MARKER_SEPARATION_METERS, validateCourseLayout } from '../src/domain/course-layout';
+import {
+  INVALID_FINISH_RADIUS_REASON,
+  INVALID_START_RADIUS_REASON,
+  MIN_COURSE_MARKER_SEPARATION_METERS,
+  MIN_ZONE_RADIUS_METERS,
+  parseZoneRadiusInput,
+  validateCourseLayout,
+} from '../src/domain/course-layout';
 import { pathDistanceMeters } from '../src/domain/geo';
 import { pointAtProgress } from '../src/domain/path-projection';
 import { DEFAULT_ZONE_RADIUS_METERS } from '../src/domain/route-derivation';
@@ -173,5 +182,41 @@ describe('course editor draft', () => {
     assert.equal(layout.checkpoints.length, 1);
     assert.equal(route.checkpoints.length, 0);
     assert.equal(validateCourseLayout(layout).valid, true);
+  });
+
+  it('edits auto-start and auto-finish radiuses independently without moving markers', () => {
+    const route = makeRoute();
+    const startProgress = route.startProgressMeters;
+    const finishProgress = route.finishProgressMeters;
+    let draft = createCourseEditorDraft(route);
+    draft = setStartZoneRadiusMeters(draft, 45);
+    draft = setFinishZoneRadiusMeters(draft, 18);
+    assert.equal(draft.layout.startZone.radiusMeters, 45);
+    assert.equal(draft.layout.finishZone.radiusMeters, 18);
+    assert.equal(draft.layout.startProgressMeters, startProgress);
+    assert.equal(draft.layout.finishProgressMeters, finishProgress);
+    assert.equal(route.startZone.radiusMeters, DEFAULT_ZONE_RADIUS_METERS);
+    assert.equal(route.finishZone.radiusMeters, DEFAULT_ZONE_RADIUS_METERS);
+    assert.equal(draft.dirty, true);
+    assert.equal(draftValidation(draft).valid, true);
+  });
+
+  it('rejects zero, negative, and unreasonably small zone radiuses', () => {
+    const route = makeRoute();
+    let draft = createCourseEditorDraft(route);
+    draft = setStartZoneRadiusMeters(draft, 0);
+    assert.equal(draftValidation(draft).valid, false);
+    assert.equal(draftValidation(draft).reason, INVALID_START_RADIUS_REASON);
+
+    draft = createCourseEditorDraft(route);
+    draft = setFinishZoneRadiusMeters(draft, -5);
+    assert.equal(draftValidation(draft).valid, false);
+    assert.equal(draftValidation(draft).reason, INVALID_FINISH_RADIUS_REASON);
+
+    draft = createCourseEditorDraft(route);
+    draft = setStartZoneRadiusMeters(draft, MIN_ZONE_RADIUS_METERS - 1);
+    assert.equal(draftValidation(draft).valid, false);
+    assert.equal(parseZoneRadiusInput(''), Number.NaN);
+    assert.equal(parseZoneRadiusInput('40'), 40);
   });
 });

@@ -13,6 +13,8 @@ import {
   addCheckpointFromPending,
   createCourseEditorDraft,
   previewMapTap,
+  setFinishZoneRadiusMeters,
+  setStartZoneRadiusMeters,
   toCourseLayout,
 } from '../src/domain/course-editor';
 import { pointAtProgress } from '../src/domain/path-projection';
@@ -236,5 +238,39 @@ describe('RouteWorkspace', () => {
     assert.equal(rejected.ok, false);
     const unchanged = await workspace.getRoute(saved.route.id);
     assert.equal(unchanged?.checkpoints.length, 1);
+  });
+
+  it('saves edited detection radiuses and rejects invalid values without writing', async () => {
+    const { workspace, sessions } = createMemoryWorkspace();
+    await workspace.startRouteRecording();
+    await sessions.appendSamples(movingTrace({ sessionId: 'id-1', points: 16, stepMeters: 15 }));
+    await workspace.finishRecording();
+    const saved = await workspace.saveRoute('id-1', 'Home → Work', 'scooter');
+    assert.equal(saved.ok, true);
+    if (!saved.ok) {
+      return;
+    }
+    assert.equal(saved.route.startZone.radiusMeters, 30);
+    assert.equal(saved.route.finishZone.radiusMeters, 30);
+
+    let draft = createCourseEditorDraft(saved.route);
+    draft = setStartZoneRadiusMeters(draft, 48);
+    draft = setFinishZoneRadiusMeters(draft, 14);
+    const updated = await workspace.saveCourseLayout(saved.route.id, toCourseLayout(draft));
+    assert.equal(updated.ok, true);
+    if (!updated.ok) {
+      return;
+    }
+    assert.equal(updated.route.startZone.radiusMeters, 48);
+    assert.equal(updated.route.finishZone.radiusMeters, 14);
+
+    const rejected = await workspace.saveCourseLayout(saved.route.id, {
+      ...toCourseLayout(draft),
+      startZone: { ...draft.layout.startZone, radiusMeters: 0 },
+    });
+    assert.equal(rejected.ok, false);
+    const persisted = await workspace.getRoute(saved.route.id);
+    assert.equal(persisted?.startZone.radiusMeters, 48);
+    assert.equal(persisted?.finishZone.radiusMeters, 14);
   });
 });

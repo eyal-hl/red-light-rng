@@ -14,11 +14,13 @@ import {
   renameSelectedCheckpoint,
   selectMarker,
   selectedMarkerLabel,
+  setFinishZoneRadiusMeters,
+  setStartZoneRadiusMeters,
   START_MARKER_ID,
   type CourseEditorDraft,
   type CourseMarkerId,
 } from '../domain/course-editor';
-import { checkpointMapPoints } from '../domain/course-layout';
+import { checkpointMapPoints, parseZoneRadiusInput } from '../domain/course-layout';
 import { createId } from '../domain/ids';
 import { RouteMap } from '../map/RouteMap';
 import { styles } from './styles';
@@ -73,6 +75,38 @@ function MarkerMoveButton({
   );
 }
 
+function ZoneRadiusField({
+  label,
+  value,
+  busy,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  busy: boolean;
+  onChange: (radiusMeters: number) => void;
+}) {
+  return (
+    <View style={styles.radiusField}>
+      <Text style={styles.radiusLabel}>{label}</Text>
+      <View style={styles.radiusInputRow}>
+        <TextInput
+          accessibilityLabel={label}
+          editable={!busy}
+          keyboardType="number-pad"
+          inputMode="numeric"
+          value={Number.isFinite(value) ? String(value) : ''}
+          onChangeText={(text) => onChange(parseZoneRadiusInput(text))}
+          placeholder="30"
+          placeholderTextColor="#6b6f76"
+          style={[styles.input, styles.radiusInput]}
+        />
+        <Text style={styles.radiusUnit}>m</Text>
+      </View>
+    </View>
+  );
+}
+
 export function CourseEditorScreen({
   draft,
   busy,
@@ -97,7 +131,7 @@ export function CourseEditorScreen({
         <Text style={styles.title}>Edit course</Text>
         <Text style={styles.editorSubtitle}>
           Map pan and pinch stay on the map. Checkpoints snap to the saved route. A route with no
-          checkpoints is still valid.
+          checkpoints is still valid. Auto-start and auto-finish radiuses are shown as circles.
         </Text>
       </View>
 
@@ -185,8 +219,14 @@ export function CourseEditorScreen({
             onPress={() => onChangeDraft(selectMarker(draft, START_MARKER_ID))}
           >
             <Text style={styles.cardTitle}>Start</Text>
-            <Text style={styles.cardMeta}>{Math.round(draft.layout.startProgressMeters)} m</Text>
+            <Text style={styles.cardMeta}>{Math.round(draft.layout.startProgressMeters)} m along course</Text>
           </Pressable>
+          <ZoneRadiusField
+            label="Auto-start radius"
+            value={draft.layout.startZone.radiusMeters}
+            busy={busy}
+            onChange={(radiusMeters) => onChangeDraft(setStartZoneRadiusMeters(draft, radiusMeters))}
+          />
           <MarkerMoveButton
             draft={draft}
             markerId={START_MARKER_ID}
@@ -227,8 +267,14 @@ export function CourseEditorScreen({
             onPress={() => onChangeDraft(selectMarker(draft, FINISH_MARKER_ID))}
           >
             <Text style={styles.cardTitle}>Finish</Text>
-            <Text style={styles.cardMeta}>{Math.round(draft.layout.finishProgressMeters)} m</Text>
+            <Text style={styles.cardMeta}>{Math.round(draft.layout.finishProgressMeters)} m along course</Text>
           </Pressable>
+          <ZoneRadiusField
+            label="Auto-finish radius"
+            value={draft.layout.finishZone.radiusMeters}
+            busy={busy}
+            onChange={(radiusMeters) => onChangeDraft(setFinishZoneRadiusMeters(draft, radiusMeters))}
+          />
           <MarkerMoveButton
             draft={draft}
             markerId={FINISH_MARKER_ID}

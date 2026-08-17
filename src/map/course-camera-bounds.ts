@@ -1,4 +1,4 @@
-import type { GeoZone, LatLng } from '../domain/geo';
+import { geoZoneExtentPoints, type GeoZone, type LatLng } from '../domain/geo';
 
 export type CourseCameraPoint = {
   point: LatLng;
@@ -23,10 +23,10 @@ export function courseCameraBounds(
 ): [number, number, number, number] {
   const coords = [...path];
   if (startZone) {
-    coords.push(startZone.center);
+    coords.push(startZone.center, ...geoZoneExtentPoints(startZone));
   }
   if (finishZone) {
-    coords.push(finishZone.center);
+    coords.push(finishZone.center, ...geoZoneExtentPoints(finishZone));
   }
   for (const checkpoint of checkpoints) {
     coords.push(checkpoint.point);
