@@ -13,14 +13,22 @@ export type RouteMapCheckpoint = {
   point: LatLng;
 };
 
+export type RouteMapWaitMarker = {
+  id: string;
+  point: LatLng;
+  label: string;
+};
+
 export type RouteMapProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
   checkpoints?: RouteMapCheckpoint[];
+  waitMarkers?: RouteMapWaitMarker[];
   previewPoint?: LatLng | null;
   selectedMarkerId?: string | null;
   onMapPress?: (point: LatLng) => void;
+  onWaitMarkerPress?: (waitId: string) => void;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -28,7 +36,7 @@ type FeatureCollection = {
   type: 'FeatureCollection';
   features: {
     type: 'Feature';
-    properties: { kind: string; selected: string };
+    properties: { kind: string; selected: string; waitId: string; label: string };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
       | { type: 'Polygon'; coordinates: number[][][] }
@@ -50,6 +58,10 @@ function circlePolygon(center: LatLng, radiusMeters: number, steps = 32): number
   return coordinates;
 }
 
+function emptyProperties(kind: string, selected = false): FeatureCollection['features'][number]['properties'] {
+  return { kind, selected: selected ? 'yes' : 'no', waitId: '', label: '' };
+}
+
 function toGeoJson(
   path: LatLng[],
   startZone?: GeoZone | null,
@@ -62,7 +74,7 @@ function toGeoJson(
   if (path.length >= 2) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'path', selected: 'no' },
+      properties: emptyProperties('path'),
       geometry: {
         type: 'LineString',
         coordinates: path.map((point) => [point.longitude, point.latitude]),
@@ -72,42 +84,64 @@ function toGeoJson(
   if (startZone) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'start-zone', selected: 'no' },
+      properties: emptyProperties('start-zone'),
       geometry: { type: 'Polygon', coordinates: [circlePolygon(startZone.center, startZone.radiusMeters)] },
     });
     features.push({
       type: 'Feature',
-      properties: { kind: 'start', selected: selectedMarkerId === 'start' ? 'yes' : 'no' },
+      properties: emptyProperties('start', selectedMarkerId === 'start'),
       geometry: { type: 'Point', coordinates: [startZone.center.longitude, startZone.center.latitude] },
     });
   }
   if (finishZone) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'finish-zone', selected: 'no' },
+      properties: emptyProperties('finish-zone'),
       geometry: { type: 'Polygon', coordinates: [circlePolygon(finishZone.center, finishZone.radiusMeters)] },
     });
     features.push({
       type: 'Feature',
-      properties: { kind: 'finish', selected: selectedMarkerId === 'finish' ? 'yes' : 'no' },
+      properties: emptyProperties('finish', selectedMarkerId === 'finish'),
       geometry: { type: 'Point', coordinates: [finishZone.center.longitude, finishZone.center.latitude] },
     });
   }
   for (const checkpoint of checkpoints) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'checkpoint', selected: selectedMarkerId === checkpoint.id ? 'yes' : 'no' },
+      properties: emptyProperties('checkpoint', selectedMarkerId === checkpoint.id),
       geometry: { type: 'Point', coordinates: [checkpoint.point.longitude, checkpoint.point.latitude] },
     });
   }
   if (previewPoint) {
     features.push({
       type: 'Feature',
-      properties: { kind: 'preview', selected: 'no' },
+      properties: emptyProperties('preview'),
       geometry: { type: 'Point', coordinates: [previewPoint.longitude, previewPoint.latitude] },
     });
   }
   return { type: 'FeatureCollection', features };
+}
+
+function toWaitGeoJson(
+  waitMarkers: RouteMapWaitMarker[],
+  selectedMarkerId?: string | null,
+): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: waitMarkers.map((marker) => ({
+      type: 'Feature' as const,
+      properties: {
+        kind: 'wait',
+        selected: selectedMarkerId === marker.id ? 'yes' : 'no',
+        waitId: marker.id,
+        label: marker.label,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [marker.point.longitude, marker.point.latitude],
+      },
+    })),
+  };
 }
 
 class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -134,19 +168,45 @@ function MapLibreRouteMap({
   startZone,
   finishZone,
   checkpoints = [],
+  waitMarkers = [],
   previewPoint,
   selectedMarkerId,
   onMapPress,
+  onWaitMarkerPress,
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
   const data = useMemo(
     () => toGeoJson(path, startZone, finishZone, checkpoints, previewPoint, selectedMarkerId),
     [checkpoints, finishZone, path, previewPoint, selectedMarkerId, startZone],
   );
-  const initialBounds = useMemo(
-    () => courseCameraBounds(path, startZone, finishZone, checkpoints),
-    [checkpoints, finishZone, path, startZone],
+  const waitData = useMemo(
+    () => toWaitGeoJson(waitMarkers, selectedMarkerId),
+    [selectedMarkerId, waitMarkers],
   );
+  const cameraPoints = useMemo(
+    () => [...checkpoints, ...waitMarkers.map((marker) => ({ point: marker.point }))],
+    [checkpoints, waitMarkers],
+  );
+  const initialBounds = useMemo(
+    () => courseCameraBounds(path, startZone, finishZone, cameraPoints),
+    [cameraPoints, finishZone, path, startZone],
+  );
+
+  const selectWaitFromFeatures = (
+    features: { properties?: { waitId?: unknown } | null }[] | undefined,
+  ) => {
+    if (!onWaitMarkerPress || !features) {
+      return false;
+    }
+    for (const feature of features) {
+      const waitId = feature.properties?.waitId;
+      if (typeof waitId === 'string' && waitId.length > 0) {
+        onWaitMarkerPress(waitId);
+        return true;
+      }
+    }
+    return false;
+  };
 
   return (
     <Map
@@ -158,10 +218,17 @@ function MapLibreRouteMap({
       touchZoom
       onDidFailLoadingMap={onBasemapFailed}
       onPress={(event) => {
+        const nativeEvent = event.nativeEvent as {
+          lngLat?: unknown;
+          features?: { properties?: { waitId?: unknown } | null }[];
+        };
+        if (selectWaitFromFeatures(nativeEvent.features)) {
+          return;
+        }
         if (!onMapPress) {
           return;
         }
-        const lngLat = event.nativeEvent.lngLat;
+        const lngLat = nativeEvent.lngLat;
         if (!Array.isArray(lngLat) || lngLat.length < 2) {
           return;
         }
@@ -243,6 +310,44 @@ function MapLibreRouteMap({
           }}
         />
       </GeoJSONSource>
+      {waitMarkers.length > 0 ? (
+        <GeoJSONSource
+          id="wait-events"
+          data={waitData}
+          onPress={(event) => {
+            selectWaitFromFeatures(event.nativeEvent.features);
+          }}
+        >
+          <Layer
+            id="wait-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'wait']}
+            paint={{
+              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 11, 8],
+              'circle-color': ['case', ['==', ['get', 'selected'], 'yes'], '#ffb74d', '#ff7043'],
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#111111',
+            }}
+          />
+          <Layer
+            id="wait-label"
+            type="symbol"
+            filter={['==', ['get', 'kind'], 'wait']}
+            layout={{
+              'text-field': ['get', 'label'],
+              'text-size': 12,
+              'text-offset': [0, 1.15],
+              'text-anchor': 'top',
+              'text-allow-overlap': true,
+            }}
+            paint={{
+              'text-color': '#fff3e0',
+              'text-halo-color': '#111111',
+              'text-halo-width': 1.2,
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
     </Map>
   );
 }
@@ -252,9 +357,11 @@ export function RouteMap({
   startZone,
   finishZone,
   checkpoints = [],
+  waitMarkers = [],
   previewPoint = null,
   selectedMarkerId = null,
   onMapPress,
+  onWaitMarkerPress,
   style,
 }: RouteMapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -265,10 +372,12 @@ export function RouteMap({
         startZone={startZone}
         finishZone={finishZone}
         checkpoints={checkpoints}
+        waitMarkers={waitMarkers}
+        selectedMarkerId={selectedMarkerId}
         previewPoint={previewPoint}
       />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
-      {onMapPress ? (
+      {onMapPress && !onWaitMarkerPress ? (
         <Text style={styles.fallbackNote}>Tap-to-place is unavailable without the street map.</Text>
       ) : null}
       <Text style={styles.attribution}>© OpenStreetMap contributors</Text>
@@ -286,9 +395,11 @@ export function RouteMap({
             startZone={startZone}
             finishZone={finishZone}
             checkpoints={checkpoints}
+            waitMarkers={waitMarkers}
             previewPoint={previewPoint}
             selectedMarkerId={selectedMarkerId}
             onMapPress={onMapPress}
+            onWaitMarkerPress={onWaitMarkerPress}
             onBasemapFailed={() => setUseFallback(true)}
           />
         </MapErrorBoundary>

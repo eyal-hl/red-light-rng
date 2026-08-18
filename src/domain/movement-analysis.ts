@@ -68,14 +68,37 @@ export type MovementBreakdown = {
   trust: MovementTrust;
 };
 
-type LocatedFix = {
+export type MovementIntervalLabel = 'moving' | 'waiting' | 'unknown';
+
+/**
+ * A usable movement flank. `progressMeters` may exist for off-course
+ * projections; `matched` is true only when course matching accepted the fix.
+ */
+export type MovementFix = {
   recordedAtMs: number;
   latitude: number;
   longitude: number;
   horizontalAccuracyMeters: number | null;
   speedMetersPerSecond: number | null;
   progressMeters: number | null;
+  matched: boolean;
 };
+
+export type ClassifiedMovementInterval = {
+  label: MovementIntervalLabel;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  startFix: MovementFix | null;
+  endFix: MovementFix | null;
+};
+
+export type MovementTimeline = {
+  breakdown: MovementBreakdown;
+  intervals: ClassifiedMovementInterval[];
+};
+
+type LocatedFix = MovementFix;
 
 type DenseWindowEntry = {
   durationMs: number;
@@ -85,11 +108,16 @@ type DenseWindowEntry = {
   end: LocatedFix;
 };
 
-type IntervalLabel = 'moving' | 'waiting' | 'unknown';
-
 export function emptyMovementBreakdown(officialTimeMs: number): MovementBreakdown {
   const total = Math.max(0, officialTimeMs);
   return finalizeBreakdown(total, 0, 0, total);
+}
+
+export function emptyMovementTimeline(officialTimeMs: number): MovementTimeline {
+  return {
+    breakdown: emptyMovementBreakdown(officialTimeMs),
+    intervals: [],
+  };
 }
 
 export function analyzeAttemptMovement(input: {
@@ -98,9 +126,18 @@ export function analyzeAttemptMovement(input: {
   startedAtMs: number;
   finishedAtMs: number;
 }): MovementBreakdown {
+  return analyzeAttemptMovementTimeline(input).breakdown;
+}
+
+export function analyzeAttemptMovementTimeline(input: {
+  course: TimingCourse;
+  samples: LocationSample[];
+  startedAtMs: number;
+  finishedAtMs: number;
+}): MovementTimeline {
   const officialTimeMs = Math.max(0, input.finishedAtMs - input.startedAtMs);
   if (officialTimeMs <= 0) {
-    return emptyMovementBreakdown(officialTimeMs);
+    return emptyMovementTimeline(officialTimeMs);
   }
 
   const usable = locateUsableFixes(input.course, input.samples);
@@ -122,10 +159,26 @@ export function analyzeAttemptMovement(input: {
   let movingMs = 0;
   let waitingMs = 0;
   let unknownMs = 0;
-  const add = (label: IntervalLabel, durationMs: number) => {
+  const intervals: ClassifiedMovementInterval[] = [];
+  const add = (
+    label: MovementIntervalLabel,
+    startMs: number,
+    endMs: number,
+    startFixForInterval: MovementFix | null,
+    endFixForInterval: MovementFix | null,
+  ) => {
+    const durationMs = endMs - startMs;
     if (durationMs <= 0) {
       return;
     }
+    intervals.push({
+      label,
+      startMs,
+      endMs,
+      durationMs,
+      startFix: startFixForInterval,
+      endFix: endFixForInterval,
+    });
     if (label === 'moving') {
       movingMs += durationMs;
     } else if (label === 'waiting') {
@@ -137,13 +190,16 @@ export function analyzeAttemptMovement(input: {
 
   let cursorMs = input.startedAtMs;
   if (points.length === 0) {
-    add('unknown', input.finishedAtMs - cursorMs);
-    return finalizeBreakdown(officialTimeMs, movingMs, waitingMs, unknownMs);
+    add('unknown', input.startedAtMs, input.finishedAtMs, null, null);
+    return {
+      breakdown: finalizeBreakdown(officialTimeMs, movingMs, waitingMs, unknownMs),
+      intervals,
+    };
   }
 
   const first = points[0];
   if (first && first.recordedAtMs > cursorMs) {
-    add('unknown', first.recordedAtMs - cursorMs);
+    add('unknown', cursorMs, first.recordedAtMs, null, first);
     cursorMs = first.recordedAtMs;
   }
 
@@ -159,15 +215,19 @@ export function analyzeAttemptMovement(input: {
       continue;
     }
     const label = classifyInterval(left, right, durationMs, denseWindow);
-    add(label, durationMs);
+    add(label, left.recordedAtMs, right.recordedAtMs, left, right);
     cursorMs = right.recordedAtMs;
   }
 
   if (input.finishedAtMs > cursorMs) {
-    add('unknown', input.finishedAtMs - cursorMs);
+    const last = points[points.length - 1] ?? null;
+    add('unknown', cursorMs, input.finishedAtMs, last, null);
   }
 
-  return finalizeBreakdown(officialTimeMs, movingMs, waitingMs, unknownMs);
+  return {
+    breakdown: finalizeBreakdown(officialTimeMs, movingMs, waitingMs, unknownMs),
+    intervals,
+  };
 }
 
 export function movementTotalsReconcile(
@@ -245,6 +305,7 @@ function locateUsableFixes(course: TimingCourse, samples: LocationSample[]): Loc
       horizontalAccuracyMeters: sample.horizontalAccuracyMeters,
       speedMetersPerSecond: sample.speedMetersPerSecond,
       progressMeters: result.progressMeters,
+      matched: result.accepted,
     });
   }
 
@@ -303,6 +364,7 @@ function interpolateFix(left: LocatedFix, right: LocatedFix, atMs: number): Loca
     horizontalAccuracyMeters,
     speedMetersPerSecond,
     progressMeters,
+    matched: left.matched && right.matched && progressMeters != null,
   };
 }
 
@@ -324,7 +386,7 @@ function classifyInterval(
   right: LocatedFix,
   durationMs: number,
   denseWindow: DenseWindowEntry[],
-): IntervalLabel {
+): MovementIntervalLabel {
   if (durationMs > MAX_STATIONARY_GAP_MS) {
     denseWindow.length = 0;
     return 'unknown';
@@ -434,7 +496,7 @@ function windowDuration(window: DenseWindowEntry[]): number {
   return window.reduce((sum, entry) => sum + entry.durationMs, 0);
 }
 
-function classifyDenseWindow(window: DenseWindowEntry[]): IntervalLabel {
+function classifyDenseWindow(window: DenseWindowEntry[]): MovementIntervalLabel {
   const first = window[0];
   const last = window[window.length - 1];
   if (!first || !last) {

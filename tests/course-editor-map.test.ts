@@ -45,7 +45,7 @@ describe('course editor map gestures', () => {
     const withoutInitial = cameraJsx.replace(/initialViewState=\{\{[\s\S]*?\}\}/, '');
     assert.doesNotMatch(withoutInitial, /\bbounds=/);
     assert.doesNotMatch(withoutInitial, /\bduration=/);
-    assert.match(source, /courseCameraBounds\(\s*path,\s*startZone,\s*finishZone,\s*checkpoints\s*\)/);
+    assert.match(source, /courseCameraBounds\(\s*path,\s*startZone,\s*finishZone,\s*cameraPoints\s*\)/);
     assert.doesNotMatch(source, /courseCameraBounds\([^)]*previewPoint/);
   });
 

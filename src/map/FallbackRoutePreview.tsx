@@ -9,11 +9,18 @@ type FallbackCheckpoint = {
   point: LatLng;
 };
 
+type FallbackWaitMarker = {
+  id: string;
+  point: LatLng;
+};
+
 type FallbackRoutePreviewProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
   checkpoints?: FallbackCheckpoint[];
+  waitMarkers?: FallbackWaitMarker[];
+  selectedMarkerId?: string | null;
   previewPoint?: LatLng | null;
 };
 
@@ -24,6 +31,7 @@ function project(
   startZone?: GeoZone | null,
   finishZone?: GeoZone | null,
   checkpoints: FallbackCheckpoint[] = [],
+  waitMarkers: FallbackWaitMarker[] = [],
   previewPoint?: LatLng | null,
 ): {
   points: Point[];
@@ -32,6 +40,7 @@ function project(
   startDiameterPercent: number;
   finishDiameterPercent: number;
   checkpointPoints: Point[];
+  waitPoints: { id: string; point: Point }[];
   preview: Point | null;
 } {
   const coords = [...path];
@@ -44,6 +53,9 @@ function project(
   for (const checkpoint of checkpoints) {
     coords.push(checkpoint.point);
   }
+  for (const wait of waitMarkers) {
+    coords.push(wait.point);
+  }
   if (previewPoint) {
     coords.push(previewPoint);
   }
@@ -55,6 +67,7 @@ function project(
       startDiameterPercent: 0,
       finishDiameterPercent: 0,
       checkpointPoints: [],
+      waitPoints: [],
       preview: null,
     };
   }
@@ -88,6 +101,7 @@ function project(
     startDiameterPercent: diameterPercent(startZone),
     finishDiameterPercent: diameterPercent(finishZone),
     checkpointPoints: checkpoints.map((checkpoint) => toPoint(checkpoint.point)),
+    waitPoints: waitMarkers.map((wait) => ({ id: wait.id, point: toPoint(wait.point) })),
     preview: previewPoint ? toPoint(previewPoint) : null,
   };
 }
@@ -97,11 +111,13 @@ export function FallbackRoutePreview({
   startZone,
   finishZone,
   checkpoints = [],
+  waitMarkers = [],
+  selectedMarkerId = null,
   previewPoint = null,
 }: FallbackRoutePreviewProps) {
   const projected = useMemo(
-    () => project(path, startZone, finishZone, checkpoints, previewPoint),
-    [checkpoints, finishZone, path, previewPoint, startZone],
+    () => project(path, startZone, finishZone, checkpoints, waitMarkers, previewPoint),
+    [checkpoints, finishZone, path, previewPoint, startZone, waitMarkers],
   );
 
   return (
@@ -138,6 +154,17 @@ export function FallbackRoutePreview({
         <View
           key={`checkpoint-${point.x}-${point.y}-${index}`}
           style={[styles.checkpoint, { left: `${point.x}%`, top: `${point.y}%` }]}
+        />
+      ))}
+      {projected.waitPoints.map((wait) => (
+        <View
+          key={`wait-${wait.id}`}
+          accessibilityLabel="Waiting stop"
+          style={[
+            styles.wait,
+            selectedMarkerId === wait.id ? styles.waitSelected : null,
+            { left: `${wait.point.x}%`, top: `${wait.point.y}%` },
+          ]}
         />
       ))}
       {projected.preview ? (
@@ -209,6 +236,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0c040',
     borderWidth: 2,
     borderColor: '#111111',
+  },
+  wait: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    marginTop: -7,
+    borderRadius: 7,
+    backgroundColor: '#ff7043',
+    borderWidth: 2,
+    borderColor: '#111111',
+  },
+  waitSelected: {
+    width: 18,
+    height: 18,
+    marginLeft: -9,
+    marginTop: -9,
+    borderRadius: 9,
+    backgroundColor: '#ffb74d',
   },
   zone: {
     position: 'absolute',

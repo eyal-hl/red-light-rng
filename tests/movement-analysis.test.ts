@@ -14,6 +14,7 @@ import type { LocationSample } from '../src/domain/location-sample';
 import { pathDistanceMeters } from '../src/domain/geo';
 import {
   analyzeAttemptMovement,
+  analyzeAttemptMovementTimeline,
   MAX_STATIONARY_GAP_MS,
   MIN_DISPLAYABLE_COVERAGE_RATIO,
   MOVEMENT_ANALYSIS_VERSION,
@@ -769,5 +770,35 @@ describe('movement analysis', () => {
   it('imports no Expo, native, or MapLibre code', () => {
     const source = readFileSync('src/domain/movement-analysis.ts', 'utf8');
     assert.doesNotMatch(source, /expo-location|expo-task-manager|expo-sqlite|react-native|@maplibre\/maplibre-react-native|maplibre/);
+  });
+
+  it('exposes the classified interval sequence used to produce aggregate totals', () => {
+    const course = courseFromPath();
+    const moving = alongPath(course.referencePath, { sessionId: 'seq', startMs: 1_000, count: 12, stepMeters: 4 });
+    const lastMove = moving[moving.length - 1];
+    assert.ok(lastMove);
+    const wait = stationaryAt(course.referencePath, {
+      sessionId: 'seq',
+      startMs: lastMove.recordedAtMs + 1000,
+      progressMeters: 44,
+      count: 8,
+    });
+    const samples = [...moving, ...wait];
+    const bounds = windowOf(samples);
+    const timeline = analyzeAttemptMovementTimeline({
+      course,
+      samples,
+      startedAtMs: bounds.startedAtMs,
+      finishedAtMs: bounds.finishedAtMs,
+    });
+    const fromIntervals = { movingMs: 0, waitingMs: 0, unknownMs: 0 };
+    for (const interval of timeline.intervals) {
+      fromIntervals[`${interval.label}Ms` as 'movingMs' | 'waitingMs' | 'unknownMs'] += interval.durationMs;
+    }
+    assert.equal(fromIntervals.movingMs, timeline.breakdown.movingMs);
+    assert.equal(fromIntervals.waitingMs, timeline.breakdown.waitingMs);
+    assert.equal(fromIntervals.unknownMs, timeline.breakdown.unknownMs);
+    assert.ok(timeline.intervals.some((interval) => interval.label === 'waiting' && interval.startFix != null));
+    assert.deepEqual(analyzeAttemptMovement({ course, samples, ...bounds }), timeline.breakdown);
   });
 });

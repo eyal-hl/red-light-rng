@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import {
@@ -7,9 +8,17 @@ import {
   type FocusAttemptAnalysis,
 } from '../domain/attempt-analysis';
 import { type Attempt } from '../domain/attempt';
+import { checkpointMapPoints } from '../domain/course-layout';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
 import type { Route } from '../domain/route';
+import {
+  formatWaitEventDuration,
+  formatWaitEventLocation,
+  waitEventIdNearPoint,
+  type WaitEvent,
+} from '../domain/wait-events';
+import { RouteMap } from '../map/RouteMap';
 import { styles } from './styles';
 
 type AttemptResultScreenProps = {
@@ -29,7 +38,21 @@ function deltaStyle(deltaMs: number | null) {
   return deltaMs < 0 ? styles.deltaFaster : styles.deltaSlower;
 }
 
-function MovementBreakdownBlock({ breakdown }: { breakdown: MovementBreakdown }) {
+function stopCountLabel(count: number): string {
+  return count === 1 ? '1 stop' : `${count} stops`;
+}
+
+function MovementBreakdownBlock({
+  breakdown,
+  waitEvents,
+  selectedWaitId,
+  onSelectWait,
+}: {
+  breakdown: MovementBreakdown;
+  waitEvents: WaitEvent[];
+  selectedWaitId: string | null;
+  onSelectWait: (waitId: string) => void;
+}) {
   if (!isMovementDisplayable(breakdown)) {
     return (
       <View style={styles.movementSection}>
@@ -60,8 +83,27 @@ function MovementBreakdownBlock({ breakdown }: { breakdown: MovementBreakdown })
         <Text style={styles.statValue}>
           {formatElapsed(breakdown.waitingMs)}
           {waitingShare == null ? '' : ` · ${formatPercent(waitingShare)}`}
+          {` · ${stopCountLabel(waitEvents.length)}`}
         </Text>
       </View>
+      {waitEvents.map((event, index) => {
+        const selected = selectedWaitId === event.id;
+        return (
+          <Pressable
+            key={event.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`Wait ${index + 1}, ${formatWaitEventDuration(event.durationMs)}, ${formatWaitEventLocation(event)}`}
+            onPress={() => onSelectWait(event.id)}
+            style={[styles.waitRow, selected ? styles.selectedCard : null]}
+          >
+            <Text style={styles.waitDuration}>
+              {index + 1}. {formatWaitEventDuration(event.durationMs)}
+            </Text>
+            <Text style={styles.waitLocation}>{formatWaitEventLocation(event)}</Text>
+          </Pressable>
+        );
+      })}
       {breakdown.trust === 'partial' ? (
         <View>
           <View style={styles.statRow}>
@@ -93,38 +135,101 @@ export function AttemptResultScreen({
   const official = competitive ? focus.officialTimeMs : null;
   const displayStartedAtMs = competitive ? focus.startedAtMs : attempt.startedAtMs;
   const displayFinishedAtMs = competitive ? focus.finishedAtMs : attempt.finishedAtMs;
+  const waitEvents = competitive ? focus.waitEvents : [];
+  const displayableMovement = focus?.movement != null && isMovementDisplayable(focus.movement);
+  const visibleWaitEvents = displayableMovement ? waitEvents : [];
+  const locatedWaits = visibleWaitEvents.filter(
+    (event) => event.locationState === 'located' && event.coordinate != null,
+  );
+  const [selection, setSelection] = useState<{ attemptId: string; waitId: string } | null>(null);
+  const selectedWaitId = selection?.attemptId === attempt.id ? selection.waitId : null;
+  const selectWait = (waitId: string) => {
+    setSelection({ attemptId: attempt.id, waitId });
+  };
+
+  const checkpoints = route ? checkpointMapPoints(route.referencePath, route.checkpoints) : [];
+  const waitMarkers = locatedWaits.flatMap((event) =>
+    event.coordinate
+      ? [
+          {
+            id: event.id,
+            point: event.coordinate,
+            label: formatWaitEventDuration(event.durationMs),
+          },
+        ]
+      : [],
+  );
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
-        <Text style={styles.title}>{route?.name ?? 'Attempt'}</Text>
-        {competitive && official != null ? (
-          <Text style={styles.title}>{formatElapsed(official)}</Text>
-        ) : (
-          <Text style={styles.subtitle}>
-            {attempt.lifecycle === 'abandoned'
-              ? 'This attempt left the course and was not ranked.'
-              : attempt.lifecycle === 'cancelled'
-                ? 'This attempt was cancelled and is not an official run.'
-                : 'This attempt is not available for current-layout comparison.'}
-          </Text>
-        )}
-        {analysis?.isPb ? <Text style={styles.pbBadge}>PB</Text> : null}
-        {competitive && analysis?.deltaVsPbMs != null ? (
-          <Text style={deltaStyle(analysis.deltaVsPbMs)}>
-            {formatSignedDelta(analysis.deltaVsPbMs)} vs PB
-          </Text>
+      {competitive && route ? (
+        <View style={styles.attemptResultHeader}>
+          <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
+          <Text style={styles.title}>{route.name}</Text>
+          {official != null ? <Text style={styles.title}>{formatElapsed(official)}</Text> : null}
+          {analysis?.isPb ? <Text style={styles.pbBadge}>PB</Text> : null}
+          {analysis?.deltaVsPbMs != null ? (
+            <Text style={deltaStyle(analysis.deltaVsPbMs)}>
+              {formatSignedDelta(analysis.deltaVsPbMs)} vs PB
+            </Text>
+          ) : null}
+          {analysis?.deltaVsPreviousMs != null ? (
+            <Text style={deltaStyle(analysis.deltaVsPreviousMs)}>
+              {formatSignedDelta(analysis.deltaVsPreviousMs)} vs previous
+            </Text>
+          ) : null}
+          {analysis?.rank != null ? (
+            <Text style={styles.subtitle}>{formatRankAmong(analysis.rank, analysis.summary.rankedAttemptCount)}</Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {competitive && route ? (
+        <View style={styles.attemptMapPane} collapsable={false}>
+          <RouteMap
+            path={route.referencePath}
+            startZone={route.startZone}
+            finishZone={route.finishZone}
+            checkpoints={checkpoints}
+            waitMarkers={waitMarkers}
+            selectedMarkerId={selectedWaitId}
+            onWaitMarkerPress={selectWait}
+            onMapPress={(point) => {
+              const tappedId = waitEventIdNearPoint(visibleWaitEvents, point);
+              if (tappedId) {
+                selectWait(tappedId);
+              }
+            }}
+            style={styles.attemptMap}
+          />
+        </View>
+      ) : null}
+
+      <ScrollView
+        style={competitive ? styles.attemptResultScroll : undefined}
+        contentContainerStyle={competitive ? styles.attemptResultScrollContent : styles.content}
+      >
+        {!competitive ? (
+          <View>
+            <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
+            <Text style={styles.title}>{route?.name ?? 'Attempt'}</Text>
+            <Text style={styles.subtitle}>
+              {attempt.lifecycle === 'abandoned'
+                ? 'This attempt left the course and was not ranked.'
+                : attempt.lifecycle === 'cancelled'
+                  ? 'This attempt was cancelled and is not an official run.'
+                  : 'This attempt is not available for current-layout comparison.'}
+            </Text>
+          </View>
         ) : null}
-        {competitive && analysis?.deltaVsPreviousMs != null ? (
-          <Text style={deltaStyle(analysis.deltaVsPreviousMs)}>
-            {formatSignedDelta(analysis.deltaVsPreviousMs)} vs previous
-          </Text>
+        {competitive && focus?.movement ? (
+          <MovementBreakdownBlock
+            breakdown={focus.movement}
+            waitEvents={visibleWaitEvents}
+            selectedWaitId={selectedWaitId}
+            onSelectWait={selectWait}
+          />
         ) : null}
-        {competitive && analysis?.rank != null ? (
-          <Text style={styles.subtitle}>{formatRankAmong(analysis.rank, analysis.summary.rankedAttemptCount)}</Text>
-        ) : null}
-        {competitive && focus?.movement ? <MovementBreakdownBlock breakdown={focus.movement} /> : null}
         {focus && !focus.eligible && focus.unavailabilityReason ? (
           <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
         ) : null}
