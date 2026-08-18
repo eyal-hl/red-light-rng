@@ -252,6 +252,59 @@ describe('movement analysis', () => {
     assert.ok(breakdown.waitingMs < breakdown.officialTimeMs * 0.15);
   });
 
+  it('does not label a sparse 9 s span of 1 m/s route progress as waiting', () => {
+    const course = courseFromPath();
+    const leftPoint = pointAtProgress(course.referencePath, 40);
+    const rightPoint = pointAtProgress(course.referencePath, 49);
+    const left = sample({
+      id: 'sparse-slow-left',
+      sessionId: 'sparse-slow',
+      recordedAtMs: 20_000,
+      latitude: leftPoint.latitude,
+      longitude: leftPoint.longitude,
+      horizontalAccuracyMeters: 8,
+      speedMetersPerSecond: 1,
+    });
+    const right = sample({
+      id: 'sparse-slow-right',
+      sessionId: 'sparse-slow',
+      recordedAtMs: 29_000,
+      latitude: rightPoint.latitude,
+      longitude: rightPoint.longitude,
+      horizontalAccuracyMeters: 8,
+      speedMetersPerSecond: 1,
+    });
+    const breakdown = analyze(course, [left, right]);
+    assert.equal(movementTotalsReconcile(breakdown), true);
+    assert.ok(breakdown.waitingMs < 1_000);
+    assert.ok(breakdown.unknownMs >= 8_000);
+    assert.notEqual(breakdown.trust, 'complete');
+  });
+
+  it('does not treat 1 m/s travel as waiting when interior 1 Hz fixes are dropped as unusable', () => {
+    const course = courseFromPath();
+    const samples: LocationSample[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const point = pointAtProgress(course.referencePath, 40 + index);
+      samples.push(
+        sample({
+          id: `sparse-drop-${index}`,
+          sessionId: 'sparse-drop',
+          recordedAtMs: 20_000 + index * 1000,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          horizontalAccuracyMeters: index === 0 || index === 9 ? 8 : 32,
+          speedMetersPerSecond: 1,
+        }),
+      );
+    }
+    const breakdown = analyze(course, samples);
+    assert.equal(movementTotalsReconcile(breakdown), true);
+    assert.ok(breakdown.waitingMs < 1_000);
+    assert.ok(breakdown.unknownMs >= 8_000);
+    assert.notEqual(breakdown.trust, 'complete');
+  });
+
   it('classifies movement when reported speed is absent', () => {
     const course = courseFromPath();
     const samples = alongPath(course.referencePath, {
@@ -297,6 +350,44 @@ describe('movement analysis', () => {
     assert.equal(movementTotalsReconcile(breakdown), true);
     assert.ok(breakdown.movingMs < 30_000);
     assert.ok(breakdown.unknownMs < 5_000);
+  });
+
+  it('still classifies a bounded stationary gap as waiting when ignored poor-accuracy interiors spike along-track', () => {
+    const course = courseFromPath();
+    const stop = pointAtProgress(course.referencePath, 80);
+    const spike = pointAtProgress(course.referencePath, 140);
+    const left = sample({
+      id: 'poison-left',
+      sessionId: 'poison',
+      recordedAtMs: 20_000,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      horizontalAccuracyMeters: 8,
+      speedMetersPerSecond: 0,
+    });
+    const interior = sample({
+      id: 'poison-spike',
+      sessionId: 'poison',
+      recordedAtMs: 45_000,
+      latitude: spike.latitude,
+      longitude: spike.longitude,
+      horizontalAccuracyMeters: 40,
+      speedMetersPerSecond: 4,
+    });
+    const right = sample({
+      id: 'poison-right',
+      sessionId: 'poison',
+      recordedAtMs: 70_000,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      horizontalAccuracyMeters: 8,
+      speedMetersPerSecond: 0,
+    });
+    const breakdown = analyze(course, [left, interior, right]);
+    assert.equal(movementTotalsReconcile(breakdown), true);
+    assert.ok(breakdown.waitingMs >= 49_000);
+    assert.ok(breakdown.unknownMs < 1_000);
+    assert.equal(breakdown.trust, 'complete');
   });
 
   it('classifies a bounded no-sample stop as waiting when flanks are trustworthy and co-located', () => {

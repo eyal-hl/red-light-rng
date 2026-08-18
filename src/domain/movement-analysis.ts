@@ -10,7 +10,7 @@ import type { LocationSample } from './location-sample';
  * Movement-analysis version identity. Results are derived on read from raw
  * telemetry; this string exists so a later cache cannot mix algorithm revisions.
  */
-export const MOVEMENT_ANALYSIS_VERSION = 'movement-v1';
+export const MOVEMENT_ANALYSIS_VERSION = 'movement-v2';
 
 /**
  * Distinct from `MIN_MOVING_SPEED_MPS` in `route-derivation.ts` (0.8 m/s).
@@ -28,7 +28,13 @@ export const MAX_USABLE_ACCURACY_METERS = 25;
 /** Intervals longer than this are gaps, not ordinary 1 Hz classification. */
 export const DENSE_INTERVAL_MAX_MS = 8_000;
 
-/** Product constant: bounded no-fix stationary gap, aligned with stale-fix UX. */
+/**
+ * Product constant: bounded no-fix stationary gap, aligned with stale-fix UX.
+ * The 15 m position/progress caps are stay-put evidence across a suppressed-fix
+ * gap (GPS wander around a red light). They are not a duration-independent
+ * "moved ≤ 15 m ⇒ waiting" rule: implied along-route speed must also stay
+ * below `MOVING_SPEED_MPS`, or the span is unknown rather than a confident wait.
+ */
 export const MAX_STATIONARY_GAP_MS = 120_000;
 export const MAX_STATIONARY_GAP_ACCURACY_METERS = 25;
 export const MAX_STATIONARY_GAP_DISPLACEMENT_METERS = 15;
@@ -214,6 +220,13 @@ function locateUsableFixes(course: TimingCourse, samples: LocationSample[]): Loc
     if (lastKeptAtMs != null && sample.recordedAtMs <= lastKeptAtMs) {
       continue;
     }
+    lastKeptAtMs = sample.recordedAtMs;
+    // Ignore poor-quality fixes before matching. Timing still accepts up to 45 m,
+    // and those spikes would otherwise advance lastAcceptedProgressMeters so the
+    // next usable flank fails the 15 m progress test for a real stop.
+    if (!isUsableAccuracy(sample.horizontalAccuracyMeters)) {
+      continue;
+    }
 
     const result = matchSampleToCourse(
       course.referencePath,
@@ -223,11 +236,6 @@ function locateUsableFixes(course: TimingCourse, samples: LocationSample[]): Loc
     );
     if (result.accepted) {
       match = result.state;
-    }
-
-    lastKeptAtMs = sample.recordedAtMs;
-    if (!isUsableAccuracy(sample.horizontalAccuracyMeters)) {
-      continue;
     }
 
     usable.push({
@@ -373,6 +381,15 @@ function isStationaryGap(
     return false;
   }
   if (progressDelta == null || progressDelta > MAX_STATIONARY_GAP_PROGRESS_METERS) {
+    return false;
+  }
+  const durationSec = durationMs / 1000;
+  if (durationSec <= 0) {
+    return false;
+  }
+  // Haversine wander up to 15 m can still be a stop; along-route progress at
+  // moving speed is travel, even when that progress is under the 15 m cap.
+  if (progressDelta / durationSec >= MOVING_SPEED_MPS) {
     return false;
   }
   return true;
