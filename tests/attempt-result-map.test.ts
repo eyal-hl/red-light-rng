@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
+import { OPENFREEMAP_LIBERTY_TEXT_FONT } from '../src/map/openfreemap-style';
+
 describe('attempt result wait map', () => {
   it('keeps RouteMap outside the attempt-result ScrollView', () => {
     const source = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
@@ -34,6 +36,19 @@ describe('attempt result wait map', () => {
     assert.match(map, /text-field/);
     assert.match(map, /onWaitMarkerPress/);
     assert.match(fallback, /Waiting stop/);
+  });
+
+  it('uses OpenFreeMap Liberty glyph fonts for wait duration labels', () => {
+    assert.deepEqual(OPENFREEMAP_LIBERTY_TEXT_FONT, ['Noto Sans Regular']);
+    const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    const labelStart = map.indexOf('id="wait-label"');
+    assert.ok(labelStart >= 0, 'RouteMap must render a wait-label symbol layer');
+    const labelEnd = map.indexOf('/>', labelStart);
+    assert.ok(labelEnd > labelStart);
+    const waitLabel = map.slice(labelStart, labelEnd);
+    assert.match(waitLabel, /'text-field':\s*\['get',\s*'label'\]/);
+    assert.match(waitLabel, /'text-font':\s*OPENFREEMAP_LIBERTY_TEXT_FONT/);
+    assert.doesNotMatch(waitLabel, /Open Sans|Arial Unicode/);
   });
 
   it('leaves Android attempt-detail back navigation on the existing history action', () => {

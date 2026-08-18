@@ -5,7 +5,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 import type { GeoZone, LatLng } from '../domain/geo';
 import { COURSE_CAMERA_PADDING, courseCameraBounds } from './course-camera-bounds';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
-import { OPENFREEMAP_LIBERTY_STYLE_URL } from './openfreemap-style';
+import { OPENFREEMAP_LIBERTY_STYLE_URL, OPENFREEMAP_LIBERTY_TEXT_FONT } from './openfreemap-style';
 
 export type RouteMapCheckpoint = {
   id: string;
@@ -335,6 +335,7 @@ function MapLibreRouteMap({
             filter={['==', ['get', 'kind'], 'wait']}
             layout={{
               'text-field': ['get', 'label'],
+              'text-font': OPENFREEMAP_LIBERTY_TEXT_FONT,
               'text-size': 12,
               'text-offset': [0, 1.15],
               'text-anchor': 'top',
