@@ -48,6 +48,13 @@ export function formatRankAmong(rank: number, total: number): string {
   return `${formatOrdinal(rank)} fastest of ${total}`;
 }
 
+export function formatPercent(ratio: number): string {
+  if (!Number.isFinite(ratio)) {
+    return '0%';
+  }
+  return `${Math.round(Math.max(0, ratio) * 100)}%`;
+}
+
 export function formatAttemptStamp(ms: number): string {
   const date = new Date(ms);
   const year = date.getFullYear();

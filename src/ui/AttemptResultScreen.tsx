@@ -7,7 +7,8 @@ import {
   type FocusAttemptAnalysis,
 } from '../domain/attempt-analysis';
 import { type Attempt } from '../domain/attempt';
-import { formatElapsed, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
+import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
+import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
 import type { Route } from '../domain/route';
 import { styles } from './styles';
 
@@ -26,6 +27,55 @@ function deltaStyle(deltaMs: number | null) {
     return styles.deltaNeutral;
   }
   return deltaMs < 0 ? styles.deltaFaster : styles.deltaSlower;
+}
+
+function MovementBreakdownBlock({ breakdown }: { breakdown: MovementBreakdown }) {
+  if (!isMovementDisplayable(breakdown)) {
+    return (
+      <View style={styles.movementSection}>
+        <Text style={styles.sectionLabel}>MOVEMENT</Text>
+        <Text style={styles.mutedText}>
+          Not enough trustworthy telemetry to classify moving vs waiting.
+        </Text>
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>Coverage</Text>
+          <Text style={styles.statValue}>{formatPercent(breakdown.coverageRatio)}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const waitingShare =
+    breakdown.officialTimeMs > 0 ? breakdown.waitingMs / breakdown.officialTimeMs : null;
+
+  return (
+    <View style={styles.movementSection}>
+      <Text style={styles.sectionLabel}>MOVEMENT</Text>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Moving</Text>
+        <Text style={styles.statValue}>{formatElapsed(breakdown.movingMs)}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Waiting</Text>
+        <Text style={styles.statValue}>
+          {formatElapsed(breakdown.waitingMs)}
+          {waitingShare == null ? '' : ` · ${formatPercent(waitingShare)}`}
+        </Text>
+      </View>
+      {breakdown.trust === 'partial' ? (
+        <View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Uncertain</Text>
+            <Text style={styles.statValue}>{formatElapsed(breakdown.unknownMs)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Coverage</Text>
+            <Text style={styles.statValue}>{formatPercent(breakdown.coverageRatio)}</Text>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 export function AttemptResultScreen({
@@ -74,6 +124,7 @@ export function AttemptResultScreen({
         {competitive && analysis?.rank != null ? (
           <Text style={styles.subtitle}>{formatRankAmong(analysis.rank, analysis.summary.rankedAttemptCount)}</Text>
         ) : null}
+        {competitive && focus?.movement ? <MovementBreakdownBlock breakdown={focus.movement} /> : null}
         {focus && !focus.eligible && focus.unavailabilityReason ? (
           <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
         ) : null}

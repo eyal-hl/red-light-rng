@@ -9,6 +9,11 @@ import {
 } from './attempt-timing';
 import { orderedCheckpoints, type RouteCheckpoint } from './course-layout';
 import type { LocationSample } from './location-sample';
+import {
+  analyzeAttemptMovement,
+  emptyMovementBreakdown,
+  type MovementBreakdown,
+} from './movement-analysis';
 import type { Route } from './route';
 
 export type AttemptUnavailabilityReason =
@@ -47,6 +52,7 @@ export type CurrentLayoutAttempt = {
   startedAtMs: number | null;
   finishedAtMs: number | null;
   officialTimeMs: number | null;
+  movement: MovementBreakdown | null;
   segments: SegmentTiming[];
 };
 
@@ -201,6 +207,7 @@ export function deriveCurrentLayoutAttempt(
     startedAtMs: null,
     finishedAtMs: null,
     officialTimeMs: null,
+    movement: null,
     segments: specs.map((spec) => unavailableSegment(spec)),
   });
 
@@ -224,6 +231,16 @@ export function deriveCurrentLayoutAttempt(
   }
 
   const segments = deriveSegmentTimings(specs, interiorCheckpoints(course), engine);
+  const officialTimeMs = Math.max(0, engine.finishedAtMs - engine.startedAtMs);
+  const movement =
+    officialTimeMs > 0
+      ? analyzeAttemptMovement({
+          course,
+          samples,
+          startedAtMs: engine.startedAtMs,
+          finishedAtMs: engine.finishedAtMs,
+        })
+      : emptyMovementBreakdown(officialTimeMs);
   return {
     attemptId: attempt.id,
     routeId: attempt.routeId,
@@ -234,7 +251,8 @@ export function deriveCurrentLayoutAttempt(
     unavailabilityReason: null,
     startedAtMs: engine.startedAtMs,
     finishedAtMs: engine.finishedAtMs,
-    officialTimeMs: Math.max(0, engine.finishedAtMs - engine.startedAtMs),
+    officialTimeMs,
+    movement,
     segments,
   };
 }
