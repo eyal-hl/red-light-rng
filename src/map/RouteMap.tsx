@@ -335,7 +335,8 @@ function MapLibreRouteMap({
             filter={['==', ['get', 'kind'], 'wait']}
             layout={{
               'text-field': ['get', 'label'],
-              'text-font': OPENFREEMAP_LIBERTY_TEXT_FONT,
+              // Android treats string-first arrays as expressions; wrap the font stack.
+              'text-font': ['literal', OPENFREEMAP_LIBERTY_TEXT_FONT],
               'text-size': 12,
               'text-offset': [0, 1.15],
               'text-anchor': 'top',

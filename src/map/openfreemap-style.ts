@@ -5,6 +5,11 @@ export const OPENFREEMAP_LIBERTY_STYLE_URL = 'https://tiles.openfreemap.org/styl
  * MapLibre's style-spec default (`Open Sans Regular` / `Arial Unicode MS Regular`)
  * 404s against `tiles.openfreemap.org/fonts`, so symbol `text-field` labels
  * (including wait durations) never render unless this stack is set explicitly.
+ *
+ * On Android, MapLibre RN (`MLRNStyleValue`) classifies any style array whose
+ * first element is a string as an expression. Pass this stack as
+ * `['literal', OPENFREEMAP_LIBERTY_TEXT_FONT]` so native `text-font` receives a
+ * literal array rather than Expression("Noto Sans Regular").
  */
 export const OPENFREEMAP_LIBERTY_TEXT_FONT: string[] = ['Noto Sans Regular'];
 

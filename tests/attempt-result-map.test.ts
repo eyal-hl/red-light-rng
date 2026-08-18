@@ -47,7 +47,8 @@ describe('attempt result wait map', () => {
     assert.ok(labelEnd > labelStart);
     const waitLabel = map.slice(labelStart, labelEnd);
     assert.match(waitLabel, /'text-field':\s*\['get',\s*'label'\]/);
-    assert.match(waitLabel, /'text-font':\s*OPENFREEMAP_LIBERTY_TEXT_FONT/);
+    assert.match(waitLabel, /'text-font':\s*\[\s*'literal',\s*OPENFREEMAP_LIBERTY_TEXT_FONT\s*\]/);
+    assert.doesNotMatch(waitLabel, /'text-font':\s*OPENFREEMAP_LIBERTY_TEXT_FONT\s*,/);
     assert.doesNotMatch(waitLabel, /Open Sans|Arial Unicode/);
   });
 
