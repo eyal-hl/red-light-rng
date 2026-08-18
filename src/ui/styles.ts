@@ -308,4 +308,8 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1,
   },
+  movementSection: {
+    marginTop: 8,
+    marginBottom: 16,
+  },
 });
