@@ -5,23 +5,29 @@ export type AppScreenKind =
   | 'review'
   | 'detail'
   | 'editor'
+  | 'history'
   | 'attempt'
-  | 'attempt-result';
+  | 'attempt-result'
+  | 'attempt-detail';
 
 export type SystemBackAction =
   | 'none'
   | 'leaveToHome'
   | 'cancelRecording'
   | 'cancelEditor'
+  | 'leaveHistoryToDetail'
   | 'cancelAttempt'
-  | 'acknowledgeAttemptResult';
+  | 'acknowledgeAttemptResult'
+  | 'leaveAttemptDetailToHistory';
 
 export type SystemBackActions = {
   leaveToHome: () => void;
   cancelRecording: () => void;
   cancelEditor: () => void;
+  leaveHistoryToDetail: () => void;
   cancelAttempt: () => void;
   acknowledgeAttemptResult: () => void;
+  leaveAttemptDetailToHistory: () => void;
 };
 
 export function isRootScreen(kind: AppScreenKind): boolean {
@@ -40,10 +46,14 @@ export function systemBackAction(kind: AppScreenKind): SystemBackAction {
       return 'cancelRecording';
     case 'editor':
       return 'cancelEditor';
+    case 'history':
+      return 'leaveHistoryToDetail';
     case 'attempt':
       return 'cancelAttempt';
     case 'attempt-result':
       return 'acknowledgeAttemptResult';
+    case 'attempt-detail':
+      return 'leaveAttemptDetailToHistory';
   }
 }
 

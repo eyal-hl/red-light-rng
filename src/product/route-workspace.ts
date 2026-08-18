@@ -5,6 +5,14 @@ import type { Route, TransportationMode } from '../domain/route';
 import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-derivation';
 import type { TrackingState } from '../domain/tracking-state';
 import type { Attempt } from '../domain/attempt';
+import {
+  analyzeFocusAttempt,
+  analyzeRouteAttempts,
+  timingCourseFromRoute,
+  type AttemptTrace,
+  type FocusAttemptAnalysis,
+  type RouteAttemptAnalysis,
+} from '../domain/attempt-analysis';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteStore } from '../persistence/route-store';
 import type { LocationTracker } from '../tracking/location-tracker';
@@ -208,5 +216,44 @@ export class RouteWorkspace {
 
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
     return this.attempts.listAttemptsForRoute(routeId);
+  }
+
+  async getAttempt(attemptId: string): Promise<Attempt | null> {
+    return this.attempts.getAttempt(attemptId);
+  }
+
+  async loadRouteTraces(routeId: string): Promise<{ route: Route; traces: AttemptTrace[] } | null> {
+    const route = await this.routes.getRoute(routeId);
+    if (!route) {
+      return null;
+    }
+    const attempts = await this.attempts.listAttemptsForRoute(routeId);
+    const traces: AttemptTrace[] = [];
+    for (const attempt of attempts) {
+      traces.push({
+        attempt,
+        samples: await this.sessions.listSamples(attempt.sessionId),
+      });
+    }
+    return { route, traces };
+  }
+
+  async analyzeRoute(routeId: string): Promise<{ route: Route; analysis: RouteAttemptAnalysis } | null> {
+    const loaded = await this.loadRouteTraces(routeId);
+    if (!loaded) {
+      return null;
+    }
+    return {
+      route: loaded.route,
+      analysis: analyzeRouteAttempts(timingCourseFromRoute(loaded.route), loaded.traces),
+    };
+  }
+
+  async analyzeAttempt(routeId: string, attemptId: string): Promise<FocusAttemptAnalysis | null> {
+    const loaded = await this.loadRouteTraces(routeId);
+    if (!loaded) {
+      return null;
+    }
+    return analyzeFocusAttempt(timingCourseFromRoute(loaded.route), loaded.traces, attemptId);
   }
 }

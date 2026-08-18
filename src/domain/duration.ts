@@ -19,6 +19,43 @@ export function formatElapsed(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+export function formatSignedDelta(ms: number): string {
+  if (ms === 0) {
+    return formatElapsed(0);
+  }
+  const sign = ms < 0 ? '-' : '+';
+  return `${sign}${formatElapsed(Math.abs(ms))}`;
+}
+
+export function formatOrdinal(value: number): string {
+  const remainderHundred = value % 100;
+  if (remainderHundred >= 11 && remainderHundred <= 13) {
+    return `${value}th`;
+  }
+  switch (value % 10) {
+    case 1:
+      return `${value}st`;
+    case 2:
+      return `${value}nd`;
+    case 3:
+      return `${value}rd`;
+    default:
+      return `${value}th`;
+  }
+}
+
+export function formatRankAmong(rank: number, total: number): string {
+  return `${formatOrdinal(rank)} fastest of ${total}`;
+}
+
+export function formatAttemptStamp(ms: number): string {
+  const date = new Date(ms);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day} ${formatTimeOfDay(ms)}`;
+}
+
 export function recordingElapsedMs(startedAtMs: number, nowMs: number): number {
   return Math.max(0, nowMs - startedAtMs);
 }

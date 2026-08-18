@@ -25,11 +25,17 @@ function recordActions(): { calls: SystemBackAction[]; actions: SystemBackAction
       cancelEditor: () => {
         calls.push('cancelEditor');
       },
+      leaveHistoryToDetail: () => {
+        calls.push('leaveHistoryToDetail');
+      },
       cancelAttempt: () => {
         calls.push('cancelAttempt');
       },
       acknowledgeAttemptResult: () => {
         calls.push('acknowledgeAttemptResult');
+      },
+      leaveAttemptDetailToHistory: () => {
+        calls.push('leaveAttemptDetailToHistory');
       },
     },
   };
@@ -77,6 +83,21 @@ describe('system back policy', () => {
     }
   });
 
+  it('walks History back to route detail and historical attempt detail back to History', () => {
+    const nested: Array<[AppScreenKind, SystemBackAction]> = [
+      ['history', 'leaveHistoryToDetail'],
+      ['attempt-detail', 'leaveAttemptDetailToHistory'],
+    ];
+
+    for (const [kind, action] of nested) {
+      assert.equal(isRootScreen(kind), false);
+      assert.equal(systemBackAction(kind), action);
+      const { calls, actions } = recordActions();
+      assert.equal(handleSystemBack(kind, actions), true);
+      assert.deepEqual(calls, [action]);
+    }
+  });
+
   it('cancels an in-progress recording with the same leave action as the recording Cancel control', () => {
     assert.equal(isRootScreen('recording'), false);
     assert.equal(systemBackAction('recording'), 'cancelRecording');
@@ -94,10 +115,13 @@ describe('system back policy', () => {
     assert.match(appRoot, /BackHandler\.addEventListener\('hardwareBackPress'/);
     assert.match(appRoot, /handleSystemBack\(screen\.kind/);
     assert.match(appRoot, /onBack=\{leaveToHome\}/);
+    assert.match(appRoot, /onBack=\{onBackFromHistory\}/);
     assert.match(appRoot, /cancelRecording: \(\) => \{\s*void onCancel\(\);/s);
     assert.match(appRoot, /cancelEditor: \(\) => \{\s*void onCancelEditor\(\);/s);
+    assert.match(appRoot, /leaveHistoryToDetail: onBackFromHistory/);
     assert.match(appRoot, /cancelAttempt: \(\) => \{\s*void onCancelAttempt\(\);/s);
     assert.match(appRoot, /acknowledgeAttemptResult: \(\) => \{\s*void onAcknowledgeAttempt\(\);/s);
+    assert.match(appRoot, /leaveAttemptDetailToHistory: \(\) => \{\s*void onBackFromHistoryDetail\(\);/s);
     assert.match(review, /onPress=\{onBack\}/);
     assert.match(detail, /onPress=\{onBack\}/);
     assert.match(editor, /onPress=\{onCancel\}/);

@@ -1,36 +1,40 @@
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { checkpointMapPoints } from '../domain/course-layout';
+import { formatElapsed } from '../domain/duration';
 import { formatDistance, pathDistanceMeters } from '../domain/geo';
 import {
   transportationModeIcon,
   transportationModeLabel,
   type Route,
 } from '../domain/route';
+import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { RouteMap } from '../map/RouteMap';
 import { styles } from './styles';
 
 type RouteDetailScreenProps = {
   route: Route;
-  attemptCount: number;
+  summary: RouteCompetitiveSummary | null;
   canArm: boolean;
   busy: boolean;
   error: string | null;
   onBack: () => void;
   onArmRun: () => void;
   onEditCourse: () => void;
+  onHistory: () => void;
   onDelete: () => void;
 };
 
 export function RouteDetailScreen({
   route,
-  attemptCount,
+  summary,
   canArm,
   busy,
   error,
   onBack,
   onArmRun,
   onEditCourse,
+  onHistory,
   onDelete,
 }: RouteDetailScreenProps) {
   const distance = pathDistanceMeters(route.referencePath);
@@ -69,6 +73,28 @@ export function RouteDetailScreen({
         </View>
 
         <View style={styles.statRow}>
+          <Text style={styles.statLabel}>PB</Text>
+          <Text style={styles.statValue}>
+            {summary?.pbTimeMs == null ? '—' : formatElapsed(summary.pbTimeMs)}
+          </Text>
+        </View>
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>Last</Text>
+          <Text style={styles.statValue}>
+            {summary?.lastTimeMs == null ? '—' : formatElapsed(summary.lastTimeMs)}
+          </Text>
+        </View>
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>Attempts</Text>
+          <Text style={styles.statValue}>{summary?.rankedAttemptCount ?? 0}</Text>
+        </View>
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>Sum of Best</Text>
+          <Text style={styles.statValue}>
+            {summary?.sumOfBestMs == null ? '—' : formatElapsed(summary.sumOfBestMs)}
+          </Text>
+        </View>
+        <View style={styles.statRow}>
           <Text style={styles.statLabel}>Distance</Text>
           <Text style={styles.statValue}>{formatDistance(distance)}</Text>
         </View>
@@ -76,16 +102,10 @@ export function RouteDetailScreen({
           <Text style={styles.statLabel}>Checkpoints</Text>
           <Text style={styles.statValue}>{route.checkpoints.length}</Text>
         </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Reference points</Text>
-          <Text style={styles.statValue}>{route.referencePath.length}</Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Attempts</Text>
-          <Text style={styles.statValue}>{attemptCount}</Text>
-        </View>
         <Text style={styles.mutedText}>
-          {attemptCount === 0 ? 'No attempts yet.' : 'Official timing starts after you arm and depart.'}
+          {(summary?.rankedAttemptCount ?? 0) === 0
+            ? 'No ranked attempts yet.'
+            : 'Official timing starts after you arm and depart.'}
         </Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -97,6 +117,14 @@ export function RouteDetailScreen({
             style={[styles.button, styles.primaryButton, busy || !canArm ? styles.disabledButton : null]}
           >
             <Text style={styles.buttonText}>ARM RUN</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={onHistory}
+            style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+          >
+            <Text style={styles.buttonText}>HISTORY</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -119,3 +147,4 @@ export function RouteDetailScreen({
     </View>
   );
 }
+
