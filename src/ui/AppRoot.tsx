@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Text, View } from 'react-native';
+import { AppState, BackHandler, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import {
@@ -23,17 +23,14 @@ import { RecordingScreen } from './RecordingScreen';
 import { ReviewScreen } from './ReviewScreen';
 import { RouteDetailScreen } from './RouteDetailScreen';
 import { styles } from './styles';
+import { handleSystemBack, type AppScreenKind } from './system-back';
 
 type AppScreen =
-  | { kind: 'loading' }
-  | { kind: 'home' }
-  | { kind: 'recording' }
+  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor' | 'history' | 'attempt-detail'> }
   | { kind: 'review'; sessionId: string }
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
   | { kind: 'history'; routeId: string }
-  | { kind: 'attempt' }
-  | { kind: 'attempt-result' }
   | { kind: 'attempt-detail'; routeId: string; attemptId: string };
 
 type AppRootProps = {
@@ -524,6 +521,56 @@ export function AppRoot({ workspace }: AppRootProps) {
     setScreen({ kind: 'history', routeId: screen.routeId });
   }, [loadRouteStats, screen]);
 
+  const leaveToHome = useCallback(() => {
+    setError(null);
+    setScreen({ kind: 'home' });
+    void refreshHome();
+  }, [refreshHome]);
+
+  const onBackFromHistory = useCallback(() => {
+    if (screen.kind !== 'history') {
+      return;
+    }
+    const routeId = screen.routeId;
+    setError(null);
+    setScreen({ kind: 'detail', routeId });
+    void loadRouteStats(routeId);
+  }, [loadRouteStats, screen]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () =>
+      handleSystemBack(screen.kind, {
+        leaveToHome,
+        cancelRecording: () => {
+          void onCancel();
+        },
+        cancelEditor: () => {
+          void onCancelEditor();
+        },
+        leaveHistoryToDetail: onBackFromHistory,
+        cancelAttempt: () => {
+          void onCancelAttempt();
+        },
+        acknowledgeAttemptResult: () => {
+          void onAcknowledgeAttempt();
+        },
+        leaveAttemptDetailToHistory: () => {
+          void onBackFromHistoryDetail();
+        },
+      }),
+    );
+    return () => sub.remove();
+  }, [
+    leaveToHome,
+    onAcknowledgeAttempt,
+    onBackFromHistory,
+    onBackFromHistoryDetail,
+    onCancel,
+    onCancelAttempt,
+    onCancelEditor,
+    screen.kind,
+  ]);
+
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
@@ -587,6 +634,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           onDiscard={() => {
             void onDiscard();
           }}
+          onBack={leaveToHome}
         />
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
@@ -596,11 +644,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           canArm={canStartNewRecording}
           busy={busy}
           error={error}
-          onBack={() => {
-            setError(null);
-            setScreen({ kind: 'home' });
-            void refreshHome();
-          }}
+          onBack={leaveToHome}
           onArmRun={() => {
             void onArmRun();
           }}
@@ -646,11 +690,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           busy={busy}
           error={error}
           onChangeMode={setHistoryMode}
-          onBack={() => {
-            setError(null);
-            setScreen({ kind: 'detail', routeId: selectedRoute.id });
-            void loadRouteStats(selectedRoute.id);
-          }}
+          onBack={onBackFromHistory}
           onOpenAttempt={(attemptId) => {
             void onOpenHistoryAttempt(attemptId);
           }}
