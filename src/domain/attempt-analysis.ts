@@ -10,11 +10,12 @@ import {
 import { orderedCheckpoints, type RouteCheckpoint } from './course-layout';
 import type { LocationSample } from './location-sample';
 import {
-  analyzeAttemptMovement,
+  analyzeAttemptMovementTimeline,
   emptyMovementBreakdown,
   type MovementBreakdown,
 } from './movement-analysis';
 import type { Route } from './route';
+import { deriveWaitEvents, type WaitEvent } from './wait-events';
 
 export type AttemptUnavailabilityReason =
   | 'missing_telemetry'
@@ -53,6 +54,7 @@ export type CurrentLayoutAttempt = {
   finishedAtMs: number | null;
   officialTimeMs: number | null;
   movement: MovementBreakdown | null;
+  waitEvents: WaitEvent[];
   segments: SegmentTiming[];
 };
 
@@ -208,6 +210,7 @@ export function deriveCurrentLayoutAttempt(
     finishedAtMs: null,
     officialTimeMs: null,
     movement: null,
+    waitEvents: [],
     segments: specs.map((spec) => unavailableSegment(spec)),
   });
 
@@ -232,15 +235,20 @@ export function deriveCurrentLayoutAttempt(
 
   const segments = deriveSegmentTimings(specs, interiorCheckpoints(course), engine);
   const officialTimeMs = Math.max(0, engine.finishedAtMs - engine.startedAtMs);
-  const movement =
+  const timeline =
     officialTimeMs > 0
-      ? analyzeAttemptMovement({
+      ? analyzeAttemptMovementTimeline({
           course,
           samples,
           startedAtMs: engine.startedAtMs,
           finishedAtMs: engine.finishedAtMs,
         })
-      : emptyMovementBreakdown(officialTimeMs);
+      : { breakdown: emptyMovementBreakdown(officialTimeMs), intervals: [] };
+  const waitEvents = deriveWaitEvents({
+    intervals: timeline.intervals,
+    startedAtMs: engine.startedAtMs,
+    referencePath: course.referencePath,
+  });
   return {
     attemptId: attempt.id,
     routeId: attempt.routeId,
@@ -252,7 +260,8 @@ export function deriveCurrentLayoutAttempt(
     startedAtMs: engine.startedAtMs,
     finishedAtMs: engine.finishedAtMs,
     officialTimeMs,
-    movement,
+    movement: timeline.breakdown,
+    waitEvents,
     segments,
   };
 }

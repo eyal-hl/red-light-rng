@@ -312,4 +312,49 @@ export const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 16,
   },
+  attemptResultHeader: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  attemptMapPane: {
+    height: 260,
+    marginHorizontal: 20,
+    marginBottom: 8,
+  },
+  attemptMap: {
+    flex: 1,
+    minHeight: 240,
+  },
+  attemptResultScroll: {
+    flex: 1,
+  },
+  attemptResultScrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  waitRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#1b1b1b',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#1b1b1b',
+  },
+  waitDuration: {
+    color: '#ffcc80',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  waitLocation: {
+    color: '#c5c8ce',
+    fontSize: 14,
+    marginLeft: 12,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
 });
