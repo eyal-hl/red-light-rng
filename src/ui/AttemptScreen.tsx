@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import { formatTimeOfDay } from '../domain/duration';
@@ -60,26 +60,26 @@ export function AttemptScreen({
         {armed ? (
           <View
             accessibilityLabel={`Start zone: ${startZoneLabel(startZoneStatus)}`}
-            style={styles.startZoneStatusRow}
+            style={attemptStyles.startZoneStatusRow}
           >
             <View
               style={[
-                styles.startZoneStatusDot,
+                attemptStyles.startZoneStatusDot,
                 startZoneStatus === 'inside'
-                  ? styles.startZoneStatusDotInside
+                  ? attemptStyles.startZoneStatusDotInside
                   : startZoneStatus === 'outside'
-                    ? styles.startZoneStatusDotOutside
-                    : styles.startZoneStatusDotLocating,
+                    ? attemptStyles.startZoneStatusDotOutside
+                    : attemptStyles.startZoneStatusDotLocating,
               ]}
             />
             <Text
               style={[
-                styles.startZoneStatusText,
+                attemptStyles.startZoneStatusText,
                 startZoneStatus === 'inside'
-                  ? styles.startZoneStatusTextInside
+                  ? attemptStyles.startZoneStatusTextInside
                   : startZoneStatus === 'outside'
-                    ? styles.startZoneStatusTextOutside
-                    : styles.startZoneStatusTextLocating,
+                    ? attemptStyles.startZoneStatusTextOutside
+                    : attemptStyles.startZoneStatusTextLocating,
               ]}
             >
               {startZoneLabel(startZoneStatus)}
@@ -102,3 +102,41 @@ export function AttemptScreen({
     </View>
   );
 }
+
+const attemptStyles = StyleSheet.create({
+  startZoneStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: -4,
+    marginBottom: 20,
+  },
+  startZoneStatusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  startZoneStatusDotInside: {
+    backgroundColor: '#7dcea0',
+  },
+  startZoneStatusDotOutside: {
+    backgroundColor: '#f07178',
+  },
+  startZoneStatusDotLocating: {
+    backgroundColor: '#9aa0a6',
+  },
+  startZoneStatusText: {
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  startZoneStatusTextInside: {
+    color: '#7dcea0',
+  },
+  startZoneStatusTextOutside: {
+    color: '#f07178',
+  },
+  startZoneStatusTextLocating: {
+    color: '#9aa0a6',
+  },
+});
