@@ -18,7 +18,15 @@ import {
   waitEventIdNearPoint,
   type WaitEvent,
 } from '../domain/wait-events';
-import { RouteMap } from '../map/RouteMap';
+import {
+  describeWaitComparisonUnavailable,
+  formatWaitComparisonDelta,
+  formatWaitComparisonLocation,
+  waitComparisonLocationIdNearPoint,
+  type WaitComparison,
+  type WaitComparisonLocationEntry,
+} from '../domain/wait-comparison';
+import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
 import { styles } from './styles';
 
 type AttemptResultScreenProps = {
@@ -40,6 +48,80 @@ function deltaStyle(deltaMs: number | null) {
 
 function stopCountLabel(count: number): string {
   return count === 1 ? '1 stop' : `${count} stops`;
+}
+
+function comparisonTone(deltaMs: number): RouteMapWaitMarkerTone {
+  if (deltaMs > 0) {
+    return 'more';
+  }
+  if (deltaMs < 0) {
+    return 'less';
+  }
+  return 'wait';
+}
+
+function WaitingVsPbBlock({
+  comparison,
+  selectedComparisonId,
+  onSelectLocation,
+}: {
+  comparison: WaitComparison;
+  selectedComparisonId: string | null;
+  onSelectLocation: (location: WaitComparisonLocationEntry) => void;
+}) {
+  if (!comparison.available) {
+    return (
+      <View style={styles.movementSection}>
+        <Text style={styles.sectionLabel}>WAITING VS PB</Text>
+        <Text style={styles.mutedText}>
+          {comparison.unavailableReason
+            ? describeWaitComparisonUnavailable(comparison.unavailableReason)
+            : 'Waiting comparison is unavailable.'}
+        </Text>
+      </View>
+    );
+  }
+
+  const equal = comparison.waitingDeltaMs === 0;
+
+  return (
+    <View style={styles.movementSection}>
+      <Text style={styles.sectionLabel}>WAITING VS PB</Text>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Waiting vs PB</Text>
+        <Text style={deltaStyle(comparison.waitingDeltaMs)}>
+          {formatWaitComparisonDelta(comparison.waitingDeltaMs)}
+        </Text>
+      </View>
+      {equal && comparison.displayedLocations.length === 0 ? (
+        <Text style={styles.mutedText}>About the same confirmed waiting as the PB run.</Text>
+      ) : null}
+      {comparison.displayedLocations.map((location) => {
+        const selected = selectedComparisonId === location.id;
+        return (
+          <Pressable
+            key={location.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`Waiting versus PB ${formatWaitComparisonDelta(location.deltaMs)}, ${formatWaitComparisonLocation(location)}`}
+            onPress={() => onSelectLocation(location)}
+            style={[styles.waitRow, selected ? styles.selectedCard : null]}
+          >
+            <Text
+              style={[
+                styles.waitDuration,
+                location.deltaMs > 0 ? styles.waitComparisonMore : null,
+                location.deltaMs < 0 ? styles.waitComparisonLess : null,
+              ]}
+            >
+              {formatWaitComparisonDelta(location.deltaMs)}
+            </Text>
+            <Text style={styles.waitLocation}>{formatWaitComparisonLocation(location)}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 function MovementBreakdownBlock({
@@ -141,24 +223,68 @@ export function AttemptResultScreen({
   const locatedWaits = visibleWaitEvents.filter(
     (event) => event.locationState === 'located' && event.coordinate != null,
   );
-  const [selection, setSelection] = useState<{ attemptId: string; waitId: string } | null>(null);
-  const selectedWaitId = selection?.attemptId === attempt.id ? selection.waitId : null;
+  const [selection, setSelection] = useState<{
+    attemptId: string;
+    markerId: string;
+    comparisonId: string | null;
+  } | null>(null);
+  const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
+  const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
+  const waitingComparison = competitive ? analysis?.waitingComparison : null;
+  const displayedComparisonLocations =
+    waitingComparison?.available === true ? waitingComparison.displayedLocations : [];
+  const waitToneById = new Map<string, RouteMapWaitMarkerTone>();
+  for (const location of displayedComparisonLocations) {
+    const tone = comparisonTone(location.deltaMs);
+    if (tone === 'wait') {
+      continue;
+    }
+    for (const waitId of location.currentEventIds) {
+      waitToneById.set(waitId, tone);
+    }
+  }
+  const selectMarker = (markerId: string, comparisonId: string | null = null) => {
+    setSelection({ attemptId: attempt.id, markerId, comparisonId });
+  };
   const selectWait = (waitId: string) => {
-    setSelection({ attemptId: attempt.id, waitId });
+    const location = displayedComparisonLocations.find((entry) => entry.currentEventIds.includes(waitId));
+    selectMarker(waitId, location?.id ?? null);
+  };
+  const selectComparison = (location: WaitComparisonLocationEntry) => {
+    const currentWaitId = location.currentEventIds.find((waitId) =>
+      locatedWaits.some((event) => event.id === waitId),
+    );
+    selectMarker(currentWaitId ?? location.id, location.id);
   };
 
   const checkpoints = route ? checkpointMapPoints(route.referencePath, route.checkpoints) : [];
-  const waitMarkers = locatedWaits.flatMap((event) =>
-    event.coordinate
-      ? [
-          {
-            id: event.id,
-            point: event.coordinate,
-            label: formatWaitEventDuration(event.durationMs),
-          },
-        ]
-      : [],
-  );
+  const waitMarkers = [
+    ...locatedWaits.flatMap((event) =>
+      event.coordinate
+        ? [
+            {
+              id: event.id,
+              point: event.coordinate,
+              label: formatWaitEventDuration(event.durationMs),
+              tone: waitToneById.get(event.id) ?? 'wait',
+            },
+          ]
+        : [],
+    ),
+    ...displayedComparisonLocations.flatMap((location) => {
+      if (location.matchState !== 'reference-only' || location.coordinate == null) {
+        return [];
+      }
+      return [
+        {
+          id: location.id,
+          point: location.coordinate,
+          label: formatWaitComparisonDelta(location.deltaMs),
+          tone: comparisonTone(location.deltaMs),
+        },
+      ];
+    }),
+  ];
 
   return (
     <View style={styles.screen}>
@@ -193,11 +319,24 @@ export function AttemptResultScreen({
             checkpoints={checkpoints}
             waitMarkers={waitMarkers}
             selectedMarkerId={selectedWaitId}
-            onWaitMarkerPress={selectWait}
+            onWaitMarkerPress={(markerId) => {
+              const location = displayedComparisonLocations.find((entry) => entry.id === markerId);
+              if (location) {
+                selectComparison(location);
+                return;
+              }
+              selectWait(markerId);
+            }}
             onMapPress={(point) => {
-              const tappedId = waitEventIdNearPoint(visibleWaitEvents, point);
-              if (tappedId) {
-                selectWait(tappedId);
+              const tappedWaitId = waitEventIdNearPoint(visibleWaitEvents, point);
+              if (tappedWaitId) {
+                selectWait(tappedWaitId);
+                return;
+              }
+              const tappedComparisonId = waitComparisonLocationIdNearPoint(displayedComparisonLocations, point);
+              const location = displayedComparisonLocations.find((entry) => entry.id === tappedComparisonId);
+              if (location) {
+                selectComparison(location);
               }
             }}
             style={styles.attemptMap}
@@ -228,6 +367,13 @@ export function AttemptResultScreen({
             waitEvents={visibleWaitEvents}
             selectedWaitId={selectedWaitId}
             onSelectWait={selectWait}
+          />
+        ) : null}
+        {competitive && waitingComparison ? (
+          <WaitingVsPbBlock
+            comparison={waitingComparison}
+            selectedComparisonId={selectedComparisonId}
+            onSelectLocation={selectComparison}
           />
         ) : null}
         {focus && !focus.eligible && focus.unavailabilityReason ? (

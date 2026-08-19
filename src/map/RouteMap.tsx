@@ -13,10 +13,13 @@ export type RouteMapCheckpoint = {
   point: LatLng;
 };
 
+export type RouteMapWaitMarkerTone = 'wait' | 'more' | 'less';
+
 export type RouteMapWaitMarker = {
   id: string;
   point: LatLng;
   label: string;
+  tone?: RouteMapWaitMarkerTone;
 };
 
 export type RouteMapProps = {
@@ -36,7 +39,7 @@ type FeatureCollection = {
   type: 'FeatureCollection';
   features: {
     type: 'Feature';
-    properties: { kind: string; selected: string; waitId: string; label: string };
+    properties: { kind: string; selected: string; waitId: string; label: string; tone: string };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
       | { type: 'Polygon'; coordinates: number[][][] }
@@ -59,7 +62,7 @@ function circlePolygon(center: LatLng, radiusMeters: number, steps = 32): number
 }
 
 function emptyProperties(kind: string, selected = false): FeatureCollection['features'][number]['properties'] {
-  return { kind, selected: selected ? 'yes' : 'no', waitId: '', label: '' };
+  return { kind, selected: selected ? 'yes' : 'no', waitId: '', label: '', tone: 'wait' };
 }
 
 function toGeoJson(
@@ -130,11 +133,12 @@ function toWaitGeoJson(
     type: 'FeatureCollection',
     features: waitMarkers.map((marker) => ({
       type: 'Feature' as const,
-      properties: {
+        properties: {
         kind: 'wait',
         selected: selectedMarkerId === marker.id ? 'yes' : 'no',
         waitId: marker.id,
         label: marker.label,
+        tone: marker.tone ?? 'wait',
       },
       geometry: {
         type: 'Point' as const,
@@ -324,7 +328,14 @@ function MapLibreRouteMap({
             filter={['==', ['get', 'kind'], 'wait']}
             paint={{
               'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 11, 8],
-              'circle-color': ['case', ['==', ['get', 'selected'], 'yes'], '#ffb74d', '#ff7043'],
+              'circle-color': [
+                'case',
+                ['==', ['get', 'tone'], 'more'],
+                ['case', ['==', ['get', 'selected'], 'yes'], '#ef9a9a', '#f07178'],
+                ['==', ['get', 'tone'], 'less'],
+                ['case', ['==', ['get', 'selected'], 'yes'], '#a5d6a7', '#7dcea0'],
+                ['case', ['==', ['get', 'selected'], 'yes'], '#ffb74d', '#ff7043'],
+              ],
               'circle-stroke-width': 2,
               'circle-stroke-color': '#111111',
             }}
