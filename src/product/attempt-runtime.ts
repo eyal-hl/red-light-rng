@@ -3,11 +3,19 @@ import {
   type Attempt,
   type AttemptCheckpointCrossing,
 } from '../domain/attempt';
-import { replayAttemptTrace, type TimingCourse } from '../domain/attempt-timing';
+import {
+  replayAttemptTrace,
+  type AttemptEngineState,
+  type TimingCourse,
+} from '../domain/attempt-timing';
 import { validateCourseLayout } from '../domain/course-layout';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
 import type { Route } from '../domain/route';
+import {
+  deriveStartZoneStatus,
+  type StartZoneStatus,
+} from '../domain/start-zone-status';
 import type { AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 import type { RouteStore } from '../persistence/route-store';
@@ -16,6 +24,11 @@ import type { LocationPlatform, LocationTracker } from '../tracking/location-tra
 export type ArmAttemptResult =
   | { ok: true; attempt: Attempt }
   | { ok: false; reason: string };
+
+export type ProcessActiveAttemptResult = {
+  attempt: Attempt | null;
+  startZoneStatus: StartZoneStatus;
+};
 
 function toTimingCourse(route: Route): TimingCourse {
   return {
@@ -32,7 +45,11 @@ function crossingId(attemptId: string, checkpointId: string): string {
   return `${attemptId}:${checkpointId}`;
 }
 
-function applyEngine(attempt: Attempt, route: Route, samples: LocationSample[]): Attempt {
+function applyEngine(
+  attempt: Attempt,
+  route: Route,
+  samples: LocationSample[],
+): { attempt: Attempt; engine: AttemptEngineState } {
   const engine = replayAttemptTrace(toTimingCourse(route), samples);
   const crossings: AttemptCheckpointCrossing[] = engine.crossings.map((crossing) => ({
     id: crossingId(attempt.id, crossing.checkpointId),
@@ -43,12 +60,15 @@ function applyEngine(attempt: Attempt, route: Route, samples: LocationSample[]):
     crossedAtMs: crossing.crossedAtMs,
   }));
   return {
-    ...attempt,
-    lifecycle: engine.lifecycle,
-    validity: engine.validity,
-    startedAtMs: engine.startedAtMs,
-    finishedAtMs: engine.finishedAtMs,
-    crossings,
+    attempt: {
+      ...attempt,
+      lifecycle: engine.lifecycle,
+      validity: engine.validity,
+      startedAtMs: engine.startedAtMs,
+      finishedAtMs: engine.finishedAtMs,
+      crossings,
+    },
+    engine,
   };
 }
 
@@ -148,24 +168,40 @@ export class AttemptRuntime {
     return cancelled;
   }
 
-  async processActive(): Promise<Attempt | null> {
+  async processActiveWithStartZoneStatus(): Promise<ProcessActiveAttemptResult> {
     const open = await this.attempts.getOpenAttempt();
     if (!open) {
-      return this.attempts.getUnacknowledgedResult();
+      return {
+        attempt: await this.attempts.getUnacknowledgedResult(),
+        startZoneStatus: 'locating',
+      };
     }
     const route = await this.routes.getRoute(open.routeId);
     if (!route) {
-      return this.abandon(open, 'unranked');
+      return {
+        attempt: await this.abandon(open, 'unranked'),
+        startZoneStatus: 'locating',
+      };
     }
     const samples = await this.sessions.listSamples(open.sessionId);
-    const next = applyEngine(open, route, samples);
+    const course = toTimingCourse(route);
+    const applied = applyEngine(open, route, samples);
+    const next = applied.attempt;
+    const startZoneStatus =
+      next.lifecycle === 'armed'
+        ? deriveStartZoneStatus(course, samples, applied.engine)
+        : 'locating';
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
       await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
-      return next;
+      return { attempt: next, startZoneStatus };
     }
     await this.attempts.saveAttempt(next);
-    return next;
+    return { attempt: next, startZoneStatus };
+  }
+
+  async processActive(): Promise<Attempt | null> {
+    return (await this.processActiveWithStartZoneStatus()).attempt;
   }
 
   async reconcile(): Promise<Attempt | null> {

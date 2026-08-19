@@ -16,7 +16,11 @@ import {
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteStore } from '../persistence/route-store';
 import type { LocationTracker } from '../tracking/location-tracker';
-import { AttemptRuntime, type ArmAttemptResult } from './attempt-runtime';
+import {
+  AttemptRuntime,
+  type ArmAttemptResult,
+  type ProcessActiveAttemptResult,
+} from './attempt-runtime';
 
 export type HomeSnapshot = {
   routes: Route[];
@@ -200,6 +204,10 @@ export class RouteWorkspace {
 
   async processActiveAttempt(): Promise<Attempt | null> {
     return this.attempts.processActive();
+  }
+
+  async processActiveAttemptWithStartZoneStatus(): Promise<ProcessActiveAttemptResult> {
+    return this.attempts.processActiveWithStartZoneStatus();
   }
 
   async getOpenAttempt(): Promise<Attempt | null> {

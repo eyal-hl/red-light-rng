@@ -10,7 +10,12 @@ import {
 } from '../domain/course-editor';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
-import type { FocusAttemptAnalysis, RouteAttemptAnalysis, RouteCompetitiveSummary } from '../domain/attempt-analysis';
+import type { StartZoneStatus } from '../domain/start-zone-status';
+import type {
+  FocusAttemptAnalysis,
+  RouteAttemptAnalysis,
+  RouteCompetitiveSummary,
+} from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteWorkspace } from '../product/route-workspace';
@@ -51,6 +56,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
+  const [startZoneStatus, setStartZoneStatus] = useState<StartZoneStatus>('locating');
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [attemptAnalysis, setAttemptAnalysis] = useState<FocusAttemptAnalysis | null>(null);
   const [routeSummary, setRouteSummary] = useState<RouteCompetitiveSummary | null>(null);
@@ -95,6 +101,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setSelectedRoute(route);
       }
       setActiveAttempt(attempt);
+      setStartZoneStatus('locating');
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -109,6 +116,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       const analysis = await workspace.analyzeAttempt(attempt.routeId, attempt.id);
       setActiveAttempt(null);
+      setStartZoneStatus('locating');
       setAttemptResult(attempt);
       setAttemptAnalysis(analysis);
       setScreen({ kind: 'attempt-result' });
@@ -165,15 +173,19 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
     const interval = setInterval(() => {
       void (async () => {
-        const processed = await workspace.processActiveAttempt();
-        if (!processed) {
+        const processed = await workspace.processActiveAttemptWithStartZoneStatus();
+        if (!processed.attempt) {
           return;
         }
-        if (processed.lifecycle === 'armed' || processed.lifecycle === 'active') {
-          setActiveAttempt(processed);
+        setStartZoneStatus(processed.startZoneStatus);
+        if (
+          processed.attempt.lifecycle === 'armed' ||
+          processed.attempt.lifecycle === 'active'
+        ) {
+          setActiveAttempt(processed.attempt);
           return;
         }
-        await showAttemptResult(processed);
+        await showAttemptResult(processed.attempt);
       })();
     }, 1000);
     return () => clearInterval(interval);
@@ -356,6 +368,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     try {
       await workspace.cancelAttempt();
       setActiveAttempt(null);
+      setStartZoneStatus('locating');
       await refreshHome();
       if (selectedRoute) {
         await loadRouteStats(selectedRoute.id);
@@ -663,6 +676,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         <AttemptScreen
           route={selectedRoute}
           attempt={activeAttempt}
+          startZoneStatus={startZoneStatus}
           busy={busy}
           error={error}
           onCancel={() => {
