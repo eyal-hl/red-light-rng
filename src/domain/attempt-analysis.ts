@@ -15,6 +15,7 @@ import {
   type MovementBreakdown,
 } from './movement-analysis';
 import type { Route } from './route';
+import { compareAttemptWaiting, type WaitComparison } from './wait-comparison';
 import { deriveWaitEvents, type WaitEvent } from './wait-events';
 
 export type AttemptUnavailabilityReason =
@@ -112,6 +113,8 @@ export type FocusAttemptAnalysis = {
   deltaVsPreviousMs: number | null;
   pbBeforeThisTimeMs: number | null;
   deltaVsPbMs: number | null;
+  comparisonPbAttemptId: string | null;
+  waitingComparison: WaitComparison;
   segments: AnalyzedSegment[];
   sumOfBestMs: number | null;
 };
@@ -379,6 +382,12 @@ export function analyzeFocusAttempt(
         : null,
     pbBeforeThisTimeMs: pbBefore?.officialTimeMs ?? null,
     deltaVsPbMs: headlineDeltaVsPb(focus, routeAnalysis.summary.pbTimeMs, pbBefore?.officialTimeMs ?? null, isPb),
+    comparisonPbAttemptId: comparisonPbRun?.attemptId ?? null,
+    waitingComparison: compareAttemptWaiting({
+      current: focus,
+      reference: comparisonPbRun,
+      referencePath: course.referencePath,
+    }),
     segments,
     sumOfBestMs: routeAnalysis.summary.sumOfBestMs,
   };

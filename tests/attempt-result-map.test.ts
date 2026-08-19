@@ -22,9 +22,12 @@ describe('attempt result wait map', () => {
   it('links wait list rows and map markers in both directions without mutating attempt data', () => {
     const source = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
     assert.match(source, /onSelectWait=\{selectWait\}/);
-    assert.match(source, /onWaitMarkerPress=\{selectWait\}/);
+    assert.match(source, /onWaitMarkerPress/);
     assert.match(source, /waitEventIdNearPoint/);
+    assert.match(source, /waitComparisonLocationIdNearPoint/);
     assert.match(source, /selectedWaitId=\{selectedWaitId\}/);
+    assert.match(source, /WAITING VS PB/);
+    assert.match(source, /WaitingVsPbBlock/);
     assert.doesNotMatch(source, /workspace\.|acknowledgeAttemptResult|saveAttempt/);
   });
 
@@ -35,7 +38,12 @@ describe('attempt result wait map', () => {
     assert.match(map, /wait-label/);
     assert.match(map, /text-field/);
     assert.match(map, /onWaitMarkerPress/);
+    assert.match(map, /tone/);
+    assert.match(map, /#f07178/);
+    assert.match(map, /#7dcea0/);
     assert.match(fallback, /Waiting stop/);
+    assert.match(fallback, /Waited more than PB/);
+    assert.match(fallback, /Waited less than PB/);
   });
 
   it('uses OpenFreeMap Liberty glyph fonts for wait duration labels', () => {

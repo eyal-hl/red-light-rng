@@ -357,4 +357,10 @@ export const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'right',
   },
+  waitComparisonMore: {
+    color: '#f07178',
+  },
+  waitComparisonLess: {
+    color: '#7dcea0',
+  },
 });

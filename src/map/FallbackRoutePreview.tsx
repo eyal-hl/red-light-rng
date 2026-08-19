@@ -12,6 +12,7 @@ type FallbackCheckpoint = {
 type FallbackWaitMarker = {
   id: string;
   point: LatLng;
+  tone?: 'wait' | 'more' | 'less';
 };
 
 type FallbackRoutePreviewProps = {
@@ -40,7 +41,7 @@ function project(
   startDiameterPercent: number;
   finishDiameterPercent: number;
   checkpointPoints: Point[];
-  waitPoints: { id: string; point: Point }[];
+  waitPoints: { id: string; point: Point; tone?: 'wait' | 'more' | 'less' }[];
   preview: Point | null;
 } {
   const coords = [...path];
@@ -101,7 +102,7 @@ function project(
     startDiameterPercent: diameterPercent(startZone),
     finishDiameterPercent: diameterPercent(finishZone),
     checkpointPoints: checkpoints.map((checkpoint) => toPoint(checkpoint.point)),
-    waitPoints: waitMarkers.map((wait) => ({ id: wait.id, point: toPoint(wait.point) })),
+    waitPoints: waitMarkers.map((wait) => ({ id: wait.id, point: toPoint(wait.point), tone: wait.tone })),
     preview: previewPoint ? toPoint(previewPoint) : null,
   };
 }
@@ -159,9 +160,17 @@ export function FallbackRoutePreview({
       {projected.waitPoints.map((wait) => (
         <View
           key={`wait-${wait.id}`}
-          accessibilityLabel="Waiting stop"
+          accessibilityLabel={
+            wait.tone === 'more'
+              ? 'Waited more than PB'
+              : wait.tone === 'less'
+                ? 'Waited less than PB'
+                : 'Waiting stop'
+          }
           style={[
             styles.wait,
+            wait.tone === 'more' ? styles.waitMore : null,
+            wait.tone === 'less' ? styles.waitLess : null,
             selectedMarkerId === wait.id ? styles.waitSelected : null,
             { left: `${wait.point.x}%`, top: `${wait.point.y}%` },
           ]}
@@ -248,13 +257,18 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#111111',
   },
+  waitMore: {
+    backgroundColor: '#f07178',
+  },
+  waitLess: {
+    backgroundColor: '#7dcea0',
+  },
   waitSelected: {
     width: 18,
     height: 18,
     marginLeft: -9,
     marginTop: -9,
     borderRadius: 9,
-    backgroundColor: '#ffb74d',
   },
   zone: {
     position: 'absolute',
