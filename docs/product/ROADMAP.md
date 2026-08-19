@@ -127,11 +127,14 @@ Goal: reduce setup/interaction and learn patterns from historical runs.
 - Propose/learn route variants.
 - Maintain separate PB/statistics for meaningful variants.
 
-### Smart checkpoints
+### Recommended splits / smart checkpoints
 
-- Identify locations with high time variance or recurring waits.
-- Propose checkpoints where they make analysis more useful.
-- Allow user approval/editing before changing the canonical split layout.
+- After enough comparable runs exist for a route, analyze route-progress timing variance, recurring waits, and where time is commonly gained/lost.
+- Recommend a split/checkpoint layout that makes the route easiest to understand and compare, including suggested checkpoint locations and an appropriate number of splits.
+- Prefer stable, meaningful locations over noisy GPS-derived micro-segments.
+- Explain why each suggested split is useful (for example: recurring stop, high-variance section, or natural transition between consistently different route sections).
+- Recommendations are proposals only: the user approves, edits, or rejects them before the canonical split layout changes.
+- Changing the split/checkpoint layout does **not** create a new route by itself. Existing historical attempts are re-derived against the new current split layout from retained raw telemetry, so old runs immediately receive recalculated segment times/Gold/Sum-of-Best data where coverage is sufficient.
 
 ### Pattern analysis
 
