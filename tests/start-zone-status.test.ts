@@ -101,24 +101,30 @@ describe('armed start-zone status', () => {
   it('uses the latest sample so an off-course fix cannot leave a stale green light', () => {
     const course = makeCourse(30);
     const start = course.referencePath[0]!;
-    const sharedTimestamp = 1_700_000_000_000;
     const inside = sample({
       id: 'inside',
-      recordedAtMs: sharedTimestamp,
+      recordedAtMs: 1_700_000_000_000,
       latitude: start.latitude,
       longitude: start.longitude,
       horizontalAccuracyMeters: 5,
     });
     const offCoursePoint = offsetLatLng(start.latitude, start.longitude, 0, 40);
-    const outside = sample({
-      id: 'outside',
-      recordedAtMs: sharedTimestamp,
+    const laterOutside = sample({
+      id: 'outside-later',
+      recordedAtMs: 1_700_000_001_000,
+      ...offCoursePoint,
+      horizontalAccuracyMeters: 5,
+    });
+    const collidingOutside = sample({
+      id: 'outside-same-timestamp',
+      recordedAtMs: inside.recordedAtMs,
       ...offCoursePoint,
       horizontalAccuracyMeters: 5,
     });
 
     assert.equal(statusFor(course, [inside]).status, 'inside');
-    assert.equal(statusFor(course, [inside, outside]).status, 'outside');
+    assert.equal(statusFor(course, [inside, laterOutside]).status, 'outside');
+    assert.equal(statusFor(course, [inside, collidingOutside]).status, 'outside');
   });
 
   it('keeps null accuracy usable just like the course matcher', () => {
