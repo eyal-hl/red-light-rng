@@ -101,9 +101,10 @@ describe('armed start-zone status', () => {
   it('uses the latest sample so an off-course fix cannot leave a stale green light', () => {
     const course = makeCourse(30);
     const start = course.referencePath[0]!;
+    const sharedTimestamp = 1_700_000_000_000;
     const inside = sample({
       id: 'inside',
-      recordedAtMs: 1_700_000_000_000,
+      recordedAtMs: sharedTimestamp,
       latitude: start.latitude,
       longitude: start.longitude,
       horizontalAccuracyMeters: 5,
@@ -111,7 +112,7 @@ describe('armed start-zone status', () => {
     const offCoursePoint = offsetLatLng(start.latitude, start.longitude, 0, 40);
     const outside = sample({
       id: 'outside',
-      recordedAtMs: 1_700_000_001_000,
+      recordedAtMs: sharedTimestamp,
       ...offCoursePoint,
       horizontalAccuracyMeters: 5,
     });
