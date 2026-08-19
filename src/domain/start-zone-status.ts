@@ -1,4 +1,7 @@
-import { MAX_SAMPLE_ACCURACY_METERS } from './course-matching';
+import {
+  matchSampleToCourse,
+  MAX_SAMPLE_ACCURACY_METERS,
+} from './course-matching';
 import {
   progressIsInStartZone,
   type AttemptEngineState,
@@ -32,10 +35,19 @@ export function deriveStartZoneStatus(
     return 'locating';
   }
 
-  const latestAccepted = engine.accepted[engine.accepted.length - 1];
-  if (!latestAccepted || latestAccepted.recordedAtMs !== latestSample.recordedAtMs) {
+  // Do not infer sample identity from recordedAtMs: batched GPS fixes can share
+  // a timestamp. Re-run only the latest fix through the same course matcher.
+  // A rejected latest fix leaves engine.match at the exact pre-fix state; an
+  // accepted one is safely re-centered on its own accepted progress.
+  const latestMatch = matchSampleToCourse(
+    course.referencePath,
+    latestSample,
+    engine.match,
+    course.startProgressMeters,
+  );
+  if (!latestMatch.accepted || latestMatch.progressMeters == null) {
     return 'outside';
   }
 
-  return progressIsInStartZone(latestAccepted.progressMeters, course) ? 'inside' : 'outside';
+  return progressIsInStartZone(latestMatch.progressMeters, course) ? 'inside' : 'outside';
 }
