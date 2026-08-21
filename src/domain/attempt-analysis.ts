@@ -15,6 +15,7 @@ import {
   type MovementBreakdown,
 } from './movement-analysis';
 import type { Route } from './route';
+import { compareAttemptGhost, type GhostComparison } from './ghost-comparison';
 import { compareAttemptWaiting, type WaitComparison } from './wait-comparison';
 import { deriveWaitEvents, type WaitEvent } from './wait-events';
 
@@ -115,6 +116,7 @@ export type FocusAttemptAnalysis = {
   deltaVsPbMs: number | null;
   comparisonPbAttemptId: string | null;
   waitingComparison: WaitComparison;
+  ghostComparison: GhostComparison;
   segments: AnalyzedSegment[];
   sumOfBestMs: number | null;
 };
@@ -349,6 +351,18 @@ export function analyzeFocusAttempt(
     routeAnalysis.competitive.filter((item) => compareChronological(item, focus) > 0),
   );
 
+  const currentTrace = traces.find((trace) => trace.attempt.id === focus.attemptId);
+  const referenceTrace = comparisonPbRun
+    ? traces.find((trace) => trace.attempt.id === comparisonPbRun.attemptId)
+    : null;
+  const ghostComparison = compareAttemptGhost({
+    course,
+    current: focus,
+    currentSamples: currentTrace?.samples ?? [],
+    reference: comparisonPbRun,
+    referenceSamples: referenceTrace?.samples ?? [],
+  });
+
   const segments: AnalyzedSegment[] = focus.segments.map((segment) => {
     const pbRunDurationMs = durationForSegment(comparisonPbRun, segment.spec.id);
     const goldDurationMs = golds.get(segment.spec.id) ?? null;
@@ -388,6 +402,7 @@ export function analyzeFocusAttempt(
       reference: comparisonPbRun,
       referencePath: course.referencePath,
     }),
+    ghostComparison,
     segments,
     sumOfBestMs: routeAnalysis.summary.sumOfBestMs,
   };

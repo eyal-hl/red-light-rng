@@ -10,6 +10,10 @@ import {
 import { type Attempt } from '../domain/attempt';
 import { checkpointMapPoints } from '../domain/course-layout';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
+import {
+  describeGhostUnavailable,
+  type GhostComparison,
+} from '../domain/ghost-comparison';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
 import type { Route } from '../domain/route';
 import {
@@ -58,6 +62,47 @@ function comparisonTone(deltaMs: number): RouteMapWaitMarkerTone {
     return 'less';
   }
   return 'wait';
+}
+
+function GhostVsPbBlock({ comparison }: { comparison: GhostComparison }) {
+  if (!comparison.available) {
+    return (
+      <View style={styles.movementSection}>
+        <Text style={styles.sectionLabel}>GHOST VS PB</Text>
+        <Text style={styles.mutedText}>
+          {comparison.unavailableReason
+            ? describeGhostUnavailable(comparison.unavailableReason)
+            : 'Ghost comparison is unavailable.'}
+        </Text>
+      </View>
+    );
+  }
+
+  const finishDelta = comparison.finishTriggerDeltaMs;
+  const hasUnavailable = comparison.knots.some((knot) => knot.coverage === 'unavailable');
+
+  return (
+    <View style={styles.movementSection}>
+      <Text style={styles.sectionLabel}>GHOST VS PB</Text>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>At start</Text>
+        <Text style={deltaStyle(comparison.startDeltaMs)}>
+          {comparison.startDeltaMs == null ? '—' : formatSignedDelta(comparison.startDeltaMs)}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>At finish</Text>
+        <Text style={deltaStyle(finishDelta)}>{finishDelta == null ? '—' : formatSignedDelta(finishDelta)}</Text>
+      </View>
+      {hasUnavailable ? (
+        <Text style={styles.mutedText}>Some spans lack trustworthy telemetry and are not compared.</Text>
+      ) : (
+        <Text style={styles.mutedText}>
+          Route-progress delta vs the same PB run used for splits. Chart view comes later.
+        </Text>
+      )}
+    </View>
+  );
 }
 
 function WaitingVsPbBlock({
@@ -231,6 +276,7 @@ export function AttemptResultScreen({
   const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
   const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
   const waitingComparison = competitive ? analysis?.waitingComparison : null;
+  const ghostComparison = competitive ? analysis?.ghostComparison : null;
   const displayedComparisonLocations =
     waitingComparison?.available === true ? waitingComparison.displayedLocations : [];
   const waitToneById = new Map<string, RouteMapWaitMarkerTone>();
@@ -376,6 +422,7 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
+        {competitive && ghostComparison ? <GhostVsPbBlock comparison={ghostComparison} /> : null}
         {focus && !focus.eligible && focus.unavailabilityReason ? (
           <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
         ) : null}

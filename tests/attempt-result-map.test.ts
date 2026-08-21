@@ -28,6 +28,8 @@ describe('attempt result wait map', () => {
     assert.match(source, /selectedWaitId=\{selectedWaitId\}/);
     assert.match(source, /WAITING VS PB/);
     assert.match(source, /WaitingVsPbBlock/);
+    assert.match(source, /GHOST VS PB/);
+    assert.match(source, /GhostVsPbBlock/);
     assert.doesNotMatch(source, /workspace\.|acknowledgeAttemptResult|saveAttempt/);
   });
 
