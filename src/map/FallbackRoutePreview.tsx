@@ -177,7 +177,10 @@ export function FallbackRoutePreview({
         />
       ))}
       {projected.preview ? (
-        <View style={[styles.preview, { left: `${projected.preview.x}%`, top: `${projected.preview.y}%` }]} />
+        <View
+          accessibilityLabel="Selected route location"
+          style={[styles.preview, { left: `${projected.preview.x}%`, top: `${projected.preview.y}%` }]}
+        />
       ) : null}
       {projected.finish ? (
         <>

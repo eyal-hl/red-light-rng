@@ -28,9 +28,13 @@ describe('attempt result wait map', () => {
     assert.match(source, /selectedWaitId=\{selectedWaitId\}/);
     assert.match(source, /WAITING VS PB/);
     assert.match(source, /WaitingVsPbBlock/);
-    assert.match(source, /GHOST VS PB/);
-    assert.match(source, /GhostVsPbBlock/);
+    assert.match(source, /GhostDeltaChart/);
+    assert.match(source, /previewPoint=\{ghostMapPoint\}/);
+    assert.match(source, /waitMarkers=\{waitMarkers\}/);
+    assert.match(source, /setGhostSelection\(null\)/);
+    assert.match(source, /pointAtProgress/);
     assert.doesNotMatch(source, /workspace\.|acknowledgeAttemptResult|saveAttempt/);
+    assert.doesNotMatch(source, /elapsedOnIncreasingFlanks|knotsNearProgress/);
   });
 
   it('renders wait duration labels on distinguishable markers', () => {
@@ -46,6 +50,7 @@ describe('attempt result wait map', () => {
     assert.match(fallback, /Waiting stop/);
     assert.match(fallback, /Waited more than PB/);
     assert.match(fallback, /Waited less than PB/);
+    assert.match(fallback, /Selected route location/);
   });
 
   it('uses OpenFreeMap Liberty glyph fonts for wait duration labels', () => {
@@ -66,5 +71,27 @@ describe('attempt result wait map', () => {
     const source = readFileSync('src/ui/system-back.ts', 'utf8');
     assert.match(source, /case 'attempt-detail':\s*return 'leaveAttemptDetailToHistory'/);
     assert.doesNotMatch(source, /selectedWaitId/);
+  });
+
+  it('keeps the ghost chart outside ScrollView and scrubs via shared helpers', () => {
+    const screen = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
+    const chart = readFileSync('src/ui/GhostDeltaChart.tsx', 'utf8');
+    const chartIndex = screen.indexOf('<GhostDeltaChart');
+    const scrollStart = screen.indexOf('<ScrollView');
+    const scrollEnd = screen.lastIndexOf('</ScrollView>');
+    assert.ok(chartIndex >= 0, 'AttemptResultScreen must render GhostDeltaChart');
+    assert.equal(
+      chartIndex > scrollStart && chartIndex < scrollEnd,
+      false,
+      'GhostDeltaChart must stay outside ScrollView so scrubbing can stay synced with the map',
+    );
+    assert.match(chart, /prepareGhostChartSeries/);
+    assert.match(chart, /selectGhostChartPoint/);
+    assert.match(chart, /ghostChartCopy/);
+    assert.doesNotMatch(chart, /elapsedOnIncreasingFlanks/);
+    assert.doesNotMatch(chart, /compareAttemptGhost/);
+    assert.doesNotMatch(chart, /uniqueFirst|one-value-per|first knot in/);
+    assert.match(screen, /waitMarkers=\{waitMarkers\}/);
+    assert.match(screen, /previewPoint=\{ghostMapPoint\}/);
   });
 });
