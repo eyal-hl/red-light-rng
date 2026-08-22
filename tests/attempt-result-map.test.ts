@@ -73,6 +73,54 @@ describe('attempt result wait map', () => {
     assert.doesNotMatch(source, /selectedWaitId/);
   });
 
+  it('paints ghost preview above wait pins as a larger hollow ring', () => {
+    const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    const fallback = readFileSync('src/map/FallbackRoutePreview.tsx', 'utf8');
+    const waitPoint = map.indexOf('id="wait-point"');
+    const previewPoint = map.indexOf('id="preview-point"');
+    const waitSource = map.indexOf('id="wait-events"');
+    const previewSource = map.indexOf('id="ghost-preview"');
+    assert.ok(waitPoint >= 0, 'RouteMap must render wait-point');
+    assert.ok(previewPoint >= 0, 'RouteMap must render preview-point');
+    assert.ok(waitSource >= 0, 'RouteMap must keep the wait-events source');
+    assert.ok(previewSource >= 0, 'ghost preview must use its own source');
+    assert.ok(
+      previewPoint > waitPoint,
+      'preview-point must paint after wait-point so an on-route wait cannot cover ghost selection',
+    );
+    assert.ok(
+      previewSource > waitSource,
+      'ghost-preview source must come after wait-events so MapLibre draws it on top',
+    );
+    const previewLayer = map.slice(previewPoint, map.indexOf('/>', previewPoint));
+    assert.match(previewLayer, /PREVIEW_MARKER_RADIUS/);
+    assert.match(previewLayer, /rgba\(0, 0, 0, 0\)/);
+    assert.match(previewLayer, /#7ee0ff/);
+    const waitRadius = Number(map.match(/const WAIT_MARKER_RADIUS = (\d+);/)?.[1]);
+    const waitSelectedRadius = Number(map.match(/const WAIT_MARKER_SELECTED_RADIUS = (\d+);/)?.[1]);
+    const previewRadius = Number(map.match(/const PREVIEW_MARKER_RADIUS = (\d+);/)?.[1]);
+    assert.equal(waitRadius, 8);
+    assert.equal(waitSelectedRadius, 11);
+    assert.ok(
+      previewRadius > waitSelectedRadius,
+      'ghost ring must be larger than a selected wait pin so both remain visible at the same coordinate',
+    );
+
+    const waitRender = fallback.indexOf('projected.waitPoints.map');
+    const previewRender = fallback.indexOf('projected.preview ?');
+    assert.ok(waitRender >= 0);
+    assert.ok(previewRender > waitRender, 'fallback preview must paint after wait pins');
+    const previewStyleStart = fallback.indexOf('preview: {');
+    const previewStyle = fallback.slice(previewStyleStart, fallback.indexOf('},', previewStyleStart));
+    assert.match(previewStyle, /width: 26/);
+    assert.match(previewStyle, /backgroundColor: 'transparent'/);
+    assert.match(previewStyle, /zIndex: 3/);
+    const waitStyleStart = fallback.indexOf('wait: {');
+    const waitStyle = fallback.slice(waitStyleStart, fallback.indexOf('},', waitStyleStart));
+    assert.match(waitStyle, /width: 14/);
+    assert.match(waitStyle, /zIndex: 2/);
+  });
+
   it('keeps the ghost chart outside ScrollView and scrubs via shared helpers', () => {
     const screen = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
     const chart = readFileSync('src/ui/GhostDeltaChart.tsx', 'utf8');
