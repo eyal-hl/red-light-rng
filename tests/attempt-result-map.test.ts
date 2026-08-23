@@ -5,18 +5,40 @@ import { describe, it } from 'node:test';
 import { OPENFREEMAP_LIBERTY_TEXT_FONT } from '../src/map/openfreemap-style';
 
 describe('attempt result wait map', () => {
-  it('keeps RouteMap outside the attempt-result ScrollView', () => {
+  it('scrolls header, map, and ghost chart as one attempt-result page', () => {
     const source = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
     const mapIndex = source.indexOf('<RouteMap');
-    assert.ok(mapIndex >= 0, 'AttemptResultScreen must render RouteMap');
+    const headerIndex = source.indexOf('styles.attemptResultHeader');
+    const chartIndex = source.indexOf('<GhostDeltaChart');
     const scrollStart = source.indexOf('<ScrollView');
     const scrollEnd = source.lastIndexOf('</ScrollView>');
+    assert.ok(mapIndex >= 0, 'AttemptResultScreen must render RouteMap');
+    assert.ok(headerIndex >= 0, 'AttemptResultScreen must render the competitive header');
+    assert.ok(chartIndex >= 0, 'AttemptResultScreen must render GhostDeltaChart');
     assert.ok(scrollStart >= 0);
-    assert.equal(
-      mapIndex > scrollStart && mapIndex < scrollEnd,
-      false,
-      'RouteMap must not be nested in ScrollView; parent scrolling fights pan/pinch',
+    assert.ok(
+      headerIndex > scrollStart && headerIndex < scrollEnd,
+      'competitive header must scroll with the rest of attempt detail',
     );
+    assert.ok(
+      mapIndex > scrollStart && mapIndex < scrollEnd,
+      'RouteMap must scroll with the rest of attempt detail instead of pinning a nested results viewport',
+    );
+    assert.ok(
+      chartIndex > scrollStart && chartIndex < scrollEnd,
+      'GhostDeltaChart must scroll with the rest of attempt detail',
+    );
+    assert.ok(headerIndex < mapIndex && mapIndex < chartIndex, 'header, map, and chart must stay in page order');
+    const waitingIndex = source.indexOf('<WaitingVsPbBlock');
+    assert.ok(waitingIndex >= 0, 'AttemptResultScreen must render WaitingVsPbBlock');
+    assert.ok(
+      waitingIndex > chartIndex && waitingIndex < scrollEnd,
+      'Waiting vs PB must remain in the same scrolling page after the chart',
+    );
+    assert.match(source, /scrollEnabled=\{pageScrollEnabled\}/);
+    assert.match(source, /onScrubChange=\{\(active\) => setPageScrollEnabled\(!active\)\}/);
+    assert.match(source, /cameraGesturesEnabled=\{false\}/);
+    assert.match(source, /nestedScrollEnabled/);
   });
 
   it('links wait list rows and map markers in both directions without mutating attempt data', () => {
@@ -121,21 +143,22 @@ describe('attempt result wait map', () => {
     assert.match(waitStyle, /zIndex: 2/);
   });
 
-  it('keeps the ghost chart outside ScrollView and scrubs via shared helpers', () => {
+  it('keeps the ghost chart inside the page ScrollView and scrubs via shared helpers', () => {
     const screen = readFileSync('src/ui/AttemptResultScreen.tsx', 'utf8');
     const chart = readFileSync('src/ui/GhostDeltaChart.tsx', 'utf8');
     const chartIndex = screen.indexOf('<GhostDeltaChart');
     const scrollStart = screen.indexOf('<ScrollView');
     const scrollEnd = screen.lastIndexOf('</ScrollView>');
     assert.ok(chartIndex >= 0, 'AttemptResultScreen must render GhostDeltaChart');
-    assert.equal(
+    assert.ok(
       chartIndex > scrollStart && chartIndex < scrollEnd,
-      false,
-      'GhostDeltaChart must stay outside ScrollView so scrubbing can stay synced with the map',
+      'GhostDeltaChart must live in the page ScrollView so results are not trapped in a tiny nested pane',
     );
     assert.match(chart, /prepareGhostChartSeries/);
     assert.match(chart, /selectGhostChartPoint/);
     assert.match(chart, /ghostChartCopy/);
+    assert.match(chart, /onScrubChange/);
+    assert.match(chart, /onPanResponderRelease/);
     assert.doesNotMatch(chart, /elapsedOnIncreasingFlanks/);
     assert.doesNotMatch(chart, /compareAttemptGhost/);
     assert.doesNotMatch(chart, /uniqueFirst|one-value-per|first knot in/);

@@ -32,6 +32,7 @@ export type RouteMapProps = {
   selectedMarkerId?: string | null;
   onMapPress?: (point: LatLng) => void;
   onWaitMarkerPress?: (waitId: string) => void;
+  cameraGesturesEnabled?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -189,6 +190,7 @@ function MapLibreRouteMap({
   selectedMarkerId,
   onMapPress,
   onWaitMarkerPress,
+  cameraGesturesEnabled = true,
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
   const data = useMemo(
@@ -231,8 +233,8 @@ function MapLibreRouteMap({
       style={StyleSheet.absoluteFill}
       attribution
       logo
-      dragPan
-      touchZoom
+      dragPan={cameraGesturesEnabled}
+      touchZoom={cameraGesturesEnabled}
       onDidFailLoadingMap={onBasemapFailed}
       onPress={(event) => {
         const nativeEvent = event.nativeEvent as {
@@ -397,6 +399,7 @@ export function RouteMap({
   selectedMarkerId = null,
   onMapPress,
   onWaitMarkerPress,
+  cameraGesturesEnabled = true,
   style,
 }: RouteMapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -435,6 +438,7 @@ export function RouteMap({
             selectedMarkerId={selectedMarkerId}
             onMapPress={onMapPress}
             onWaitMarkerPress={onWaitMarkerPress}
+            cameraGesturesEnabled={cameraGesturesEnabled}
             onBasemapFailed={() => setUseFallback(true)}
           />
         </MapErrorBoundary>

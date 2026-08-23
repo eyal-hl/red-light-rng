@@ -30,6 +30,7 @@ type GhostDeltaChartProps = {
   isCurrentPb: boolean;
   selection: GhostChartSelection | null;
   onSelect: (selection: GhostChartSelection | null) => void;
+  onScrubChange?: (active: boolean) => void;
 };
 
 function formatChartSeconds(ms: number): string {
@@ -173,10 +174,12 @@ function ChartPlot({
   comparison,
   selection,
   onSelect,
+  onScrubChange,
 }: {
   comparison: GhostComparison;
   selection: GhostChartSelection | null;
   onSelect: (selection: GhostChartSelection | null) => void;
+  onScrubChange?: (active: boolean) => void;
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const layout = size.width > 0 ? ghostChartLayoutForSize(size.width, size.height) : null;
@@ -195,6 +198,7 @@ function ChartPlot({
         onMoveShouldSetPanResponder: () => true,
         onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: (event: GestureResponderEvent) => {
+          onScrubChange?.(true);
           if (!prepared || !layout) {
             return;
           }
@@ -221,8 +225,14 @@ function ChartPlot({
             onSelect(next);
           }
         },
+        onPanResponderRelease: () => {
+          onScrubChange?.(false);
+        },
+        onPanResponderTerminate: () => {
+          onScrubChange?.(false);
+        },
       }),
-    [layout, onSelect, prepared],
+    [layout, onScrubChange, onSelect, prepared],
   );
 
   const yRange = prepared ? ghostChartYRange(prepared) : { minDeltaMs: -5_000, maxDeltaMs: 5_000 };
@@ -358,7 +368,13 @@ function ChartPolylines({
   );
 }
 
-export function GhostDeltaChart({ comparison, isCurrentPb, selection, onSelect }: GhostDeltaChartProps) {
+export function GhostDeltaChart({
+  comparison,
+  isCurrentPb,
+  selection,
+  onSelect,
+  onScrubChange,
+}: GhostDeltaChartProps) {
   const copy = ghostChartCopy({
     available: comparison.available,
     unavailableReason: comparison.unavailableReason,
@@ -387,7 +403,12 @@ export function GhostDeltaChart({ comparison, isCurrentPb, selection, onSelect }
           {comparison.finishTriggerDeltaMs == null ? '—' : formatSignedDelta(comparison.finishTriggerDeltaMs)}
         </Text>
       </View>
-      <ChartPlot comparison={comparison} selection={selection} onSelect={onSelect} />
+      <ChartPlot
+        comparison={comparison}
+        selection={selection}
+        onSelect={onSelect}
+        onScrubChange={onScrubChange}
+      />
       {!selection ? (
         <Text style={styles.mutedText}>
           {comparison.finishTriggerDeltaMs == null

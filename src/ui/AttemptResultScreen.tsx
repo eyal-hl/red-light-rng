@@ -235,6 +235,7 @@ export function AttemptResultScreen({
     attemptId: string;
     point: GhostChartSelection;
   } | null>(null);
+  const [pageScrollEnabled, setPageScrollEnabled] = useState(true);
   const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
   const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
   const activeGhostSelection = ghostSelection?.attemptId === attempt.id ? ghostSelection.point : null;
@@ -301,6 +302,13 @@ export function AttemptResultScreen({
 
   return (
     <View style={styles.screen}>
+      <ScrollView
+        style={styles.attemptResultScroll}
+        contentContainerStyle={competitive ? styles.attemptResultScrollContent : styles.content}
+        scrollEnabled={pageScrollEnabled}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
       {competitive && route ? (
         <View style={styles.attemptResultHeader}>
           <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
@@ -355,6 +363,7 @@ export function AttemptResultScreen({
               }
               setGhostSelection(null);
             }}
+            cameraGesturesEnabled={false}
             style={styles.attemptMap}
           />
         </View>
@@ -369,14 +378,11 @@ export function AttemptResultScreen({
             onSelect={(point) => {
               setGhostSelection(point ? { attemptId: attempt.id, point } : null);
             }}
+            onScrubChange={(active) => setPageScrollEnabled(!active)}
           />
         </View>
       ) : null}
 
-      <ScrollView
-        style={competitive ? styles.attemptResultScroll : undefined}
-        contentContainerStyle={competitive ? styles.attemptResultScrollContent : styles.content}
-      >
         {!competitive ? (
           <View>
             <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>

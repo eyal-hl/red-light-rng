@@ -313,13 +313,10 @@ export const styles = StyleSheet.create({
     marginBottom: 16,
   },
   attemptResultHeader: {
-    paddingTop: 56,
-    paddingHorizontal: 20,
     paddingBottom: 8,
   },
   attemptMapPane: {
     height: 220,
-    marginHorizontal: 20,
     marginBottom: 8,
   },
   attemptMap: {
@@ -333,6 +330,7 @@ export const styles = StyleSheet.create({
     flex: 1,
   },
   attemptResultScrollContent: {
+    paddingTop: 56,
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
@@ -367,7 +365,6 @@ export const styles = StyleSheet.create({
     color: '#7dcea0',
   },
   ghostChartSection: {
-    marginHorizontal: 20,
     marginBottom: 8,
   },
   ghostChartPlot: {
