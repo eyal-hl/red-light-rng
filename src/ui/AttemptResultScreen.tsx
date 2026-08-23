@@ -10,11 +10,9 @@ import {
 import { type Attempt } from '../domain/attempt';
 import { checkpointMapPoints } from '../domain/course-layout';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
-import {
-  describeGhostUnavailable,
-  type GhostComparison,
-} from '../domain/ghost-comparison';
+import { type GhostChartSelection } from '../domain/ghost-chart';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
+import { pointAtProgress } from '../domain/path-projection';
 import type { Route } from '../domain/route';
 import {
   formatWaitEventDuration,
@@ -31,6 +29,7 @@ import {
   type WaitComparisonLocationEntry,
 } from '../domain/wait-comparison';
 import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
+import { GhostDeltaChart } from './GhostDeltaChart';
 import { styles } from './styles';
 
 type AttemptResultScreenProps = {
@@ -62,47 +61,6 @@ function comparisonTone(deltaMs: number): RouteMapWaitMarkerTone {
     return 'less';
   }
   return 'wait';
-}
-
-function GhostVsPbBlock({ comparison }: { comparison: GhostComparison }) {
-  if (!comparison.available) {
-    return (
-      <View style={styles.movementSection}>
-        <Text style={styles.sectionLabel}>GHOST VS PB</Text>
-        <Text style={styles.mutedText}>
-          {comparison.unavailableReason
-            ? describeGhostUnavailable(comparison.unavailableReason)
-            : 'Ghost comparison is unavailable.'}
-        </Text>
-      </View>
-    );
-  }
-
-  const finishDelta = comparison.finishTriggerDeltaMs;
-  const hasUnavailable = comparison.knots.some((knot) => knot.coverage === 'unavailable');
-
-  return (
-    <View style={styles.movementSection}>
-      <Text style={styles.sectionLabel}>GHOST VS PB</Text>
-      <View style={styles.statRow}>
-        <Text style={styles.statLabel}>At start</Text>
-        <Text style={deltaStyle(comparison.startDeltaMs)}>
-          {comparison.startDeltaMs == null ? '—' : formatSignedDelta(comparison.startDeltaMs)}
-        </Text>
-      </View>
-      <View style={styles.statRow}>
-        <Text style={styles.statLabel}>At finish</Text>
-        <Text style={deltaStyle(finishDelta)}>{finishDelta == null ? '—' : formatSignedDelta(finishDelta)}</Text>
-      </View>
-      {hasUnavailable ? (
-        <Text style={styles.mutedText}>Some spans lack trustworthy telemetry and are not compared.</Text>
-      ) : (
-        <Text style={styles.mutedText}>
-          Route-progress delta vs the same PB run used for splits. Chart view comes later.
-        </Text>
-      )}
-    </View>
-  );
 }
 
 function WaitingVsPbBlock({
@@ -273,8 +231,18 @@ export function AttemptResultScreen({
     markerId: string;
     comparisonId: string | null;
   } | null>(null);
+  const [ghostSelection, setGhostSelection] = useState<{
+    attemptId: string;
+    point: GhostChartSelection;
+  } | null>(null);
+  const [pageScrollEnabled, setPageScrollEnabled] = useState(true);
   const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
   const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
+  const activeGhostSelection = ghostSelection?.attemptId === attempt.id ? ghostSelection.point : null;
+  const ghostMapPoint =
+    competitive && route && activeGhostSelection
+      ? pointAtProgress(route.referencePath, activeGhostSelection.progressMeters)
+      : null;
   const waitingComparison = competitive ? analysis?.waitingComparison : null;
   const ghostComparison = competitive ? analysis?.ghostComparison : null;
   const displayedComparisonLocations =
@@ -334,6 +302,13 @@ export function AttemptResultScreen({
 
   return (
     <View style={styles.screen}>
+      <ScrollView
+        style={styles.attemptResultScroll}
+        contentContainerStyle={competitive ? styles.attemptResultScrollContent : styles.content}
+        scrollEnabled={pageScrollEnabled}
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
       {competitive && route ? (
         <View style={styles.attemptResultHeader}>
           <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
@@ -365,6 +340,7 @@ export function AttemptResultScreen({
             checkpoints={checkpoints}
             waitMarkers={waitMarkers}
             selectedMarkerId={selectedWaitId}
+            previewPoint={ghostMapPoint}
             onWaitMarkerPress={(markerId) => {
               const location = displayedComparisonLocations.find((entry) => entry.id === markerId);
               if (location) {
@@ -383,17 +359,30 @@ export function AttemptResultScreen({
               const location = displayedComparisonLocations.find((entry) => entry.id === tappedComparisonId);
               if (location) {
                 selectComparison(location);
+                return;
               }
+              setGhostSelection(null);
             }}
+            cameraGesturesEnabled={false}
             style={styles.attemptMap}
           />
         </View>
       ) : null}
 
-      <ScrollView
-        style={competitive ? styles.attemptResultScroll : undefined}
-        contentContainerStyle={competitive ? styles.attemptResultScrollContent : styles.content}
-      >
+      {competitive && ghostComparison ? (
+        <View style={styles.ghostChartPane} collapsable={false}>
+          <GhostDeltaChart
+            comparison={ghostComparison}
+            isCurrentPb={analysis?.isPb === true}
+            selection={activeGhostSelection}
+            onSelect={(point) => {
+              setGhostSelection(point ? { attemptId: attempt.id, point } : null);
+            }}
+            onScrubChange={(active) => setPageScrollEnabled(!active)}
+          />
+        </View>
+      ) : null}
+
         {!competitive ? (
           <View>
             <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
@@ -422,7 +411,6 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {competitive && ghostComparison ? <GhostVsPbBlock comparison={ghostComparison} /> : null}
         {focus && !focus.eligible && focus.unavailabilityReason ? (
           <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
         ) : null}

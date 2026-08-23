@@ -32,6 +32,7 @@ export type RouteMapProps = {
   selectedMarkerId?: string | null;
   onMapPress?: (point: LatLng) => void;
   onWaitMarkerPress?: (waitId: string) => void;
+  cameraGesturesEnabled?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -65,12 +66,15 @@ function emptyProperties(kind: string, selected = false): FeatureCollection['fea
   return { kind, selected: selected ? 'yes' : 'no', waitId: '', label: '', tone: 'wait' };
 }
 
+const WAIT_MARKER_RADIUS = 8;
+const WAIT_MARKER_SELECTED_RADIUS = 11;
+const PREVIEW_MARKER_RADIUS = 13;
+
 function toGeoJson(
   path: LatLng[],
   startZone?: GeoZone | null,
   finishZone?: GeoZone | null,
   checkpoints: RouteMapCheckpoint[] = [],
-  previewPoint?: LatLng | null,
   selectedMarkerId?: string | null,
 ): FeatureCollection {
   const features: FeatureCollection['features'] = [];
@@ -115,14 +119,23 @@ function toGeoJson(
       geometry: { type: 'Point', coordinates: [checkpoint.point.longitude, checkpoint.point.latitude] },
     });
   }
-  if (previewPoint) {
-    features.push({
-      type: 'Feature',
-      properties: emptyProperties('preview'),
-      geometry: { type: 'Point', coordinates: [previewPoint.longitude, previewPoint.latitude] },
-    });
-  }
   return { type: 'FeatureCollection', features };
+}
+
+function toPreviewGeoJson(previewPoint?: LatLng | null): FeatureCollection {
+  if (!previewPoint) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: emptyProperties('preview'),
+        geometry: { type: 'Point', coordinates: [previewPoint.longitude, previewPoint.latitude] },
+      },
+    ],
+  };
 }
 
 function toWaitGeoJson(
@@ -177,16 +190,18 @@ function MapLibreRouteMap({
   selectedMarkerId,
   onMapPress,
   onWaitMarkerPress,
+  cameraGesturesEnabled = true,
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
   const data = useMemo(
-    () => toGeoJson(path, startZone, finishZone, checkpoints, previewPoint, selectedMarkerId),
-    [checkpoints, finishZone, path, previewPoint, selectedMarkerId, startZone],
+    () => toGeoJson(path, startZone, finishZone, checkpoints, selectedMarkerId),
+    [checkpoints, finishZone, path, selectedMarkerId, startZone],
   );
   const waitData = useMemo(
     () => toWaitGeoJson(waitMarkers, selectedMarkerId),
     [selectedMarkerId, waitMarkers],
   );
+  const previewData = useMemo(() => toPreviewGeoJson(previewPoint), [previewPoint]);
   const cameraPoints = useMemo(
     () => [...checkpoints, ...waitMarkers.map((marker) => ({ point: marker.point }))],
     [checkpoints, waitMarkers],
@@ -218,8 +233,8 @@ function MapLibreRouteMap({
       style={StyleSheet.absoluteFill}
       attribution
       logo
-      dragPan
-      touchZoom
+      dragPan={cameraGesturesEnabled}
+      touchZoom={cameraGesturesEnabled}
       onDidFailLoadingMap={onBasemapFailed}
       onPress={(event) => {
         const nativeEvent = event.nativeEvent as {
@@ -302,17 +317,6 @@ function MapLibreRouteMap({
             'circle-stroke-color': '#111111',
           }}
         />
-        <Layer
-          id="preview-point"
-          type="circle"
-          filter={['==', ['get', 'kind'], 'preview']}
-          paint={{
-            'circle-radius': 8,
-            'circle-color': '#7ee0ff',
-            'circle-stroke-width': 3,
-            'circle-stroke-color': '#ffffff',
-          }}
-        />
       </GeoJSONSource>
       {waitMarkers.length > 0 ? (
         <GeoJSONSource
@@ -327,7 +331,12 @@ function MapLibreRouteMap({
             type="circle"
             filter={['==', ['get', 'kind'], 'wait']}
             paint={{
-              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 11, 8],
+              'circle-radius': [
+                'case',
+                ['==', ['get', 'selected'], 'yes'],
+                WAIT_MARKER_SELECTED_RADIUS,
+                WAIT_MARKER_RADIUS,
+              ],
               'circle-color': [
                 'case',
                 ['==', ['get', 'tone'], 'more'],
@@ -361,6 +370,21 @@ function MapLibreRouteMap({
           />
         </GeoJSONSource>
       ) : null}
+      {previewPoint ? (
+        <GeoJSONSource id="ghost-preview" data={previewData}>
+          <Layer
+            id="preview-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'preview']}
+            paint={{
+              'circle-radius': PREVIEW_MARKER_RADIUS,
+              'circle-color': 'rgba(0, 0, 0, 0)',
+              'circle-stroke-width': 3,
+              'circle-stroke-color': '#7ee0ff',
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
     </Map>
   );
 }
@@ -375,6 +399,7 @@ export function RouteMap({
   selectedMarkerId = null,
   onMapPress,
   onWaitMarkerPress,
+  cameraGesturesEnabled = true,
   style,
 }: RouteMapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -413,6 +438,7 @@ export function RouteMap({
             selectedMarkerId={selectedMarkerId}
             onMapPress={onMapPress}
             onWaitMarkerPress={onWaitMarkerPress}
+            cameraGesturesEnabled={cameraGesturesEnabled}
             onBasemapFailed={() => setUseFallback(true)}
           />
         </MapErrorBoundary>

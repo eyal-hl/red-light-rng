@@ -313,23 +313,24 @@ export const styles = StyleSheet.create({
     marginBottom: 16,
   },
   attemptResultHeader: {
-    paddingTop: 56,
-    paddingHorizontal: 20,
     paddingBottom: 8,
   },
   attemptMapPane: {
-    height: 260,
-    marginHorizontal: 20,
+    height: 220,
     marginBottom: 8,
   },
   attemptMap: {
     flex: 1,
-    minHeight: 240,
+    minHeight: 200,
+  },
+  ghostChartPane: {
+    flexGrow: 0,
   },
   attemptResultScroll: {
     flex: 1,
   },
   attemptResultScrollContent: {
+    paddingTop: 56,
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
@@ -362,5 +363,52 @@ export const styles = StyleSheet.create({
   },
   waitComparisonLess: {
     color: '#7dcea0',
+  },
+  ghostChartSection: {
+    marginBottom: 8,
+  },
+  ghostChartPlot: {
+    height: 148,
+    marginTop: 4,
+    marginBottom: 8,
+    backgroundColor: '#1b1b1b',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  ghostChartPlotInner: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  ghostChartZeroLine: {
+    position: 'absolute',
+    height: 2,
+    backgroundColor: '#c5c8ce',
+    opacity: 0.85,
+  },
+  ghostChartCrosshair: {
+    position: 'absolute',
+    width: 1,
+    marginLeft: -0.5,
+    backgroundColor: '#f5f5f5',
+    opacity: 0.7,
+  },
+  ghostChartYLabel: {
+    position: 'absolute',
+    left: 4,
+    width: 38,
+  },
+  ghostChartXLabel: {
+    position: 'absolute',
+  },
+  ghostChartXLabelRight: {
+    position: 'absolute',
+  },
+  ghostChartAxisText: {
+    color: '#9aa0a6',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

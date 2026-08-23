@@ -20,6 +20,7 @@ describe('platform boundary', () => {
       'src/domain/wait-events.ts',
       'src/domain/wait-comparison.ts',
       'src/domain/ghost-comparison.ts',
+      'src/domain/ghost-chart.ts',
       'src/domain/session.ts',
       'src/persistence/location-sample-store.ts',
       'src/persistence/memory-location-sample-store.ts',
@@ -45,6 +46,7 @@ describe('platform boundary', () => {
       'src/ui/CourseEditorScreen.tsx',
       'src/ui/AttemptScreen.tsx',
       'src/ui/AttemptResultScreen.tsx',
+      'src/ui/GhostDeltaChart.tsx',
       'src/ui/HistoryScreen.tsx',
     ];
 
@@ -82,6 +84,7 @@ describe('platform boundary', () => {
       'src/domain/wait-events.ts',
       'src/domain/wait-comparison.ts',
       'src/domain/ghost-comparison.ts',
+      'src/domain/ghost-chart.ts',
       'src/persistence/schema.ts',
       'src/persistence/sqlite-route-store.ts',
       'src/persistence/memory-route-store.ts',
@@ -102,8 +105,10 @@ describe('platform boundary', () => {
 
     const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
     const style = readFileSync('src/map/openfreemap-style.ts', 'utf8');
+    const chart = readFileSync('src/ui/GhostDeltaChart.tsx', 'utf8');
     assert.match(map, /@maplibre\/maplibre-react-native/);
     assert.match(style, /tiles.openfreemap.org\/styles\/liberty/);
+    assert.doesNotMatch(chart, /@maplibre\/maplibre-react-native|maplibre/);
   });
 
   it('records background fixes only onto the active session', () => {

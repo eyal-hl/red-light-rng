@@ -177,7 +177,10 @@ export function FallbackRoutePreview({
         />
       ))}
       {projected.preview ? (
-        <View style={[styles.preview, { left: `${projected.preview.x}%`, top: `${projected.preview.y}%` }]} />
+        <View
+          accessibilityLabel="Selected route location"
+          style={[styles.preview, { left: `${projected.preview.x}%`, top: `${projected.preview.y}%` }]}
+        />
       ) : null}
       {projected.finish ? (
         <>
@@ -256,6 +259,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ff7043',
     borderWidth: 2,
     borderColor: '#111111',
+    zIndex: 2,
   },
   waitMore: {
     backgroundColor: '#f07178',
@@ -285,14 +289,15 @@ const styles = StyleSheet.create({
   },
   preview: {
     position: 'absolute',
-    width: 14,
-    height: 14,
-    marginLeft: -7,
-    marginTop: -7,
-    borderRadius: 7,
-    backgroundColor: '#7ee0ff',
-    borderWidth: 2,
-    borderColor: '#ffffff',
+    width: 26,
+    height: 26,
+    marginLeft: -13,
+    marginTop: -13,
+    borderRadius: 13,
+    backgroundColor: 'transparent',
+    borderWidth: 3,
+    borderColor: '#7ee0ff',
+    zIndex: 3,
   },
   finish: {
     position: 'absolute',
