@@ -80,6 +80,9 @@ export function HistoryScreen({
 }
 
 function historyMeta(row: HistoryRow): string {
+  if (row.incompleteLabel) {
+    return row.incompleteLabel;
+  }
   if (!row.eligible || row.officialTimeMs == null) {
     return 'Unavailable';
   }

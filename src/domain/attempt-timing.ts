@@ -191,19 +191,59 @@ function applyOffCourse(
   return next;
 }
 
+export type DepartureInspection = {
+  window: AcceptedProgressSample[];
+  latest: AcceptedProgressSample | null;
+  windowSampleCount: number;
+  advanceMeters: number | null;
+  qualifies: boolean;
+};
+
+export function inspectDeparture(
+  accepted: AcceptedProgressSample[],
+  startProgressMeters: number,
+): DepartureInspection {
+  const latest = accepted[accepted.length - 1] ?? null;
+  if (!latest) {
+    return {
+      window: [],
+      latest: null,
+      windowSampleCount: 0,
+      advanceMeters: null,
+      qualifies: false,
+    };
+  }
+  const window = accepted.filter((sample) => sample.recordedAtMs >= latest.recordedAtMs - DEPARTURE_WINDOW_MS);
+  const first = window[0];
+  const advanceMeters = first ? latest.progressMeters - first.progressMeters : null;
+  const qualifies =
+    first != null &&
+    window.length >= DEPARTURE_MIN_SAMPLES &&
+    advanceMeters != null &&
+    advanceMeters >= DEPARTURE_MIN_ADVANCE_METERS &&
+    latest.progressMeters >= startProgressMeters;
+  return {
+    window,
+    latest,
+    windowSampleCount: window.length,
+    advanceMeters,
+    qualifies,
+  };
+}
+
 function maybePromoteFromArmed(state: AttemptEngineState, course: TimingCourse): AttemptEngineState {
-  const departure = detectQualifyingDeparture(state.accepted, course.startProgressMeters);
-  if (!departure) {
+  const departure = inspectDeparture(state.accepted, course.startProgressMeters);
+  if (!departure.qualifies) {
     return state;
   }
-  if (!departure.some((sample) => progressIsInStartZone(sample.progressMeters, course))) {
+  if (!departure.window.some((sample) => progressIsInStartZone(sample.progressMeters, course))) {
     return state;
   }
   if (startLineHasPreStartRegion(course.startProgressMeters) && !state.sawPreStart) {
     return state;
   }
 
-  const startedAtMs = reconstructStartedAt(state.accepted, course.startProgressMeters, departure);
+  const startedAtMs = reconstructStartedAt(state.accepted, course.startProgressMeters, departure.window);
   const next: AttemptEngineState = {
     ...state,
     lifecycle: 'active',
@@ -211,29 +251,6 @@ function maybePromoteFromArmed(state: AttemptEngineState, course: TimingCourse):
   };
   detectCheckpointCrossings(next, course);
   return maybeFinishOrAbandon(next, course);
-}
-
-function detectQualifyingDeparture(
-  accepted: AcceptedProgressSample[],
-  startProgressMeters: number,
-): AcceptedProgressSample[] | null {
-  const latest = accepted[accepted.length - 1];
-  if (!latest) {
-    return null;
-  }
-  const window = accepted.filter((sample) => sample.recordedAtMs >= latest.recordedAtMs - DEPARTURE_WINDOW_MS);
-  const first = window[0];
-  if (!first || window.length < DEPARTURE_MIN_SAMPLES) {
-    return null;
-  }
-  const advance = latest.progressMeters - first.progressMeters;
-  if (advance < DEPARTURE_MIN_ADVANCE_METERS) {
-    return null;
-  }
-  if (latest.progressMeters < startProgressMeters) {
-    return null;
-  }
-  return window;
 }
 
 function reconstructStartedAt(

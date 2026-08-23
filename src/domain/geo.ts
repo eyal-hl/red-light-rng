@@ -14,6 +14,10 @@ function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
+export function pointInZone(point: LatLng, zone: GeoZone): boolean {
+  return haversineMeters(point, zone.center) <= zone.radiusMeters;
+}
+
 export function haversineMeters(a: LatLng, b: LatLng): number {
   const dLat = toRadians(b.latitude - a.latitude);
   const dLon = toRadians(b.longitude - a.longitude);

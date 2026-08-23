@@ -79,6 +79,9 @@ function terminalSessionInput(attempt: Attempt, stoppedAtMs: number): CompleteSe
   if (attempt.lifecycle === 'cancelled') {
     return { stoppedAtMs, captureOutcome: 'cancelled', reviewDisposition: 'discarded' };
   }
+  if (attempt.lifecycle === 'ended') {
+    return { stoppedAtMs, captureOutcome: 'interrupted', reviewDisposition: 'saved' };
+  }
   return { stoppedAtMs, captureOutcome: 'interrupted', reviewDisposition: 'discarded' };
 }
 
@@ -166,6 +169,33 @@ export class AttemptRuntime {
     await this.tracker.stopLocationUpdates();
     await this.attempts.finalizeAttempt(cancelled, terminalSessionInput(cancelled, this.now()));
     return cancelled;
+  }
+
+  async endAndInspect(): Promise<Attempt | null> {
+    const open = await this.attempts.getOpenAttempt();
+    if (!open) {
+      return null;
+    }
+    const route = await this.routes.getRoute(open.routeId);
+    let next = open;
+    if (route) {
+      const samples = await this.sessions.listSamples(open.sessionId);
+      next = applyEngine(open, route, samples).attempt;
+    }
+    if (!isOpenAttempt(next)) {
+      await this.tracker.stopLocationUpdates();
+      await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
+      return next;
+    }
+    const ended: Attempt = {
+      ...next,
+      lifecycle: 'ended',
+      validity: 'unranked',
+      resultAcknowledged: false,
+    };
+    await this.tracker.stopLocationUpdates();
+    await this.attempts.finalizeAttempt(ended, terminalSessionInput(ended, this.now()));
+    return ended;
   }
 
   async processActiveWithStartZoneStatus(): Promise<ProcessActiveAttemptResult> {

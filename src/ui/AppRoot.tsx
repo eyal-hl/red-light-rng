@@ -16,6 +16,7 @@ import type {
   RouteAttemptAnalysis,
   RouteCompetitiveSummary,
 } from '../domain/attempt-analysis';
+import type { AttemptDebugReport } from '../domain/attempt-debug';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteWorkspace } from '../product/route-workspace';
@@ -59,6 +60,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [startZoneStatus, setStartZoneStatus] = useState<StartZoneStatus>('locating');
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [attemptAnalysis, setAttemptAnalysis] = useState<FocusAttemptAnalysis | null>(null);
+  const [attemptDebug, setAttemptDebug] = useState<AttemptDebugReport | null>(null);
   const [routeSummary, setRouteSummary] = useState<RouteCompetitiveSummary | null>(null);
   const [routeAnalysis, setRouteAnalysis] = useState<RouteAttemptAnalysis | null>(null);
   const [historyMode, setHistoryMode] = useState<'chronological' | 'ranked'>('chronological');
@@ -115,10 +117,12 @@ export function AppRoot({ workspace }: AppRootProps) {
         setSelectedRoute(route);
       }
       const analysis = await workspace.analyzeAttempt(attempt.routeId, attempt.id);
+      const debug = await workspace.inspectAttempt(attempt.id);
       setActiveAttempt(null);
       setStartZoneStatus('locating');
       setAttemptResult(attempt);
       setAttemptAnalysis(analysis);
+      setAttemptDebug(debug);
       setScreen({ kind: 'attempt-result' });
     },
     [workspace],
@@ -383,6 +387,31 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [loadRouteStats, refreshHome, selectedRoute, workspace]);
 
+  const onEndAndInspectAttempt = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const ended = await workspace.endAndInspectAttempt();
+      if (!ended) {
+        setActiveAttempt(null);
+        setStartZoneStatus('locating');
+        await refreshHome();
+        if (selectedRoute) {
+          await loadRouteStats(selectedRoute.id);
+          setScreen({ kind: 'detail', routeId: selectedRoute.id });
+        } else {
+          setScreen({ kind: 'home' });
+        }
+        return;
+      }
+      await showAttemptResult(ended);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not end and inspect this attempt.');
+    } finally {
+      setBusy(false);
+    }
+  }, [loadRouteStats, refreshHome, selectedRoute, showAttemptResult, workspace]);
+
   const onAcknowledgeAttempt = useCallback(async () => {
     if (!attemptResult) {
       return;
@@ -394,6 +423,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       const routeId = attemptResult.routeId;
       setAttemptResult(null);
       setAttemptAnalysis(null);
+      setAttemptDebug(null);
       const route = await workspace.getRoute(routeId);
       if (route) {
         setSelectedRoute(route);
@@ -512,8 +542,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         const analysis = await workspace.analyzeAttempt(screen.routeId, attemptId);
+        const debug = await workspace.inspectAttempt(attemptId);
         setAttemptResult(attempt);
         setAttemptAnalysis(analysis);
+        setAttemptDebug(debug);
         setScreen({ kind: 'attempt-detail', routeId: screen.routeId, attemptId });
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
@@ -530,6 +562,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
     setAttemptResult(null);
     setAttemptAnalysis(null);
+    setAttemptDebug(null);
     await loadRouteStats(screen.routeId);
     setScreen({ kind: 'history', routeId: screen.routeId });
   }, [loadRouteStats, screen]);
@@ -561,8 +594,8 @@ export function AppRoot({ workspace }: AppRootProps) {
           void onCancelEditor();
         },
         leaveHistoryToDetail: onBackFromHistory,
-        cancelAttempt: () => {
-          void onCancelAttempt();
+        inspectAttempt: () => {
+          void onEndAndInspectAttempt();
         },
         acknowledgeAttemptResult: () => {
           void onAcknowledgeAttempt();
@@ -579,8 +612,8 @@ export function AppRoot({ workspace }: AppRootProps) {
     onBackFromHistory,
     onBackFromHistoryDetail,
     onCancel,
-    onCancelAttempt,
     onCancelEditor,
+    onEndAndInspectAttempt,
     screen.kind,
   ]);
 
@@ -679,6 +712,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           startZoneStatus={startZoneStatus}
           busy={busy}
           error={error}
+          onEndAndInspect={() => {
+            void onEndAndInspectAttempt();
+          }}
           onCancel={() => {
             void onCancelAttempt();
           }}
@@ -689,6 +725,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           route={selectedRoute}
           attempt={attemptResult}
           analysis={attemptAnalysis}
+          debug={attemptDebug}
           busy={busy}
           error={error}
           onDone={() => {
@@ -715,6 +752,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           route={selectedRoute}
           attempt={attemptResult}
           analysis={attemptAnalysis}
+          debug={attemptDebug}
           busy={busy}
           error={error}
           doneLabel="BACK"

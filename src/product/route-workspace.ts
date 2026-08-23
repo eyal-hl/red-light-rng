@@ -13,6 +13,7 @@ import {
   type FocusAttemptAnalysis,
   type RouteAttemptAnalysis,
 } from '../domain/attempt-analysis';
+import { inspectAttemptRecord, type AttemptDebugReport } from '../domain/attempt-debug';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { RouteStore } from '../persistence/route-store';
 import type { LocationTracker } from '../tracking/location-tracker';
@@ -200,6 +201,23 @@ export class RouteWorkspace {
 
   async cancelAttempt(): Promise<Attempt | null> {
     return this.attempts.cancel();
+  }
+
+  async endAndInspectAttempt(): Promise<Attempt | null> {
+    return this.attempts.endAndInspect();
+  }
+
+  async inspectAttempt(attemptId: string): Promise<AttemptDebugReport | null> {
+    const attempt = await this.attempts.getAttempt(attemptId);
+    if (!attempt) {
+      return null;
+    }
+    const route = await this.routes.getRoute(attempt.routeId);
+    if (!route) {
+      return null;
+    }
+    const samples = await this.sessions.listSamples(attempt.sessionId);
+    return inspectAttemptRecord(attempt, timingCourseFromRoute(route), samples);
   }
 
   async processActiveAttempt(): Promise<Attempt | null> {
