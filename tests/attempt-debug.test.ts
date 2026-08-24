@@ -106,6 +106,49 @@ describe('attempt debug inspection', () => {
     assert.equal(report.incompleteLabel, 'DID NOT START');
   });
 
+  it('keeps qualifyingDepartureFound after a later parked window when pre-start is still missing', () => {
+    const route = makeRoute({
+      referencePath: northPath({ points: 16, stepMeters: 20 }),
+      startProgressMeters: 40,
+    });
+    const course = timingCourseFromRoute(route);
+    const moving = traceAlongPath(course.referencePath, {
+      startProgressMeters: 60,
+      stepMeters: 5,
+      count: 10,
+    });
+    const parkedAt = moving[moving.length - 1]!;
+    const parked = Array.from({ length: 8 }, (_, index) =>
+      sample({
+        id: `parked-${index}`,
+        sessionId: parkedAt.sessionId,
+        recordedAtMs: parkedAt.recordedAtMs + (index + 1) * 1000,
+        latitude: parkedAt.latitude,
+        longitude: parkedAt.longitude,
+        speedMetersPerSecond: 0,
+      }),
+    );
+    const samples = [...moving, ...parked];
+    const movingReport = inspectAttempt(course, moving);
+    const parkedReport = inspectAttemptRecord(
+      { lifecycle: 'ended', startedAtMs: null },
+      course,
+      samples,
+    );
+
+    assert.equal(movingReport.engine.lifecycle, 'armed');
+    assert.equal(movingReport.qualifyingDepartureFound, true);
+    assert.ok((movingReport.departure.advanceMeters ?? 0) >= movingReport.departure.minAdvanceMeters);
+
+    assert.equal(parkedReport.engine.lifecycle, 'armed');
+    assert.equal(parkedReport.preStartRequired, true);
+    assert.equal(parkedReport.sawPreStart, false);
+    assert.equal(parkedReport.qualifyingDepartureFound, true);
+    assert.equal(parkedReport.incompleteLabel, 'DID NOT START');
+    assert.ok((parkedReport.departure.advanceMeters ?? 0) < parkedReport.departure.minAdvanceMeters);
+    assert.equal(parkedReport.reconstructedStartAtMs, null);
+  });
+
   it('explains an insufficient 18 m / 4-sample / 5 s departure window', () => {
     const route = makeRoute({ referencePath: northPath({ points: 16, stepMeters: 20 }) });
     const course = timingCourseFromRoute(route);

@@ -6,6 +6,7 @@ import {
   finishTriggerProgressMeters,
   inspectDeparture,
   progressIsInStartZone,
+  qualifyingDepartureWasFound,
   replayAttemptTrace,
   startLineHasPreStartRegion,
   type AttemptEngineState,
@@ -153,7 +154,10 @@ export function inspectAttempt(course: TimingCourse, samples: LocationSample[]):
     anyAcceptedInStartZone,
     sawPreStart: engine.sawPreStart,
     preStartRequired: startLineHasPreStartRegion(course.startProgressMeters),
-    qualifyingDepartureFound: departure.qualifies,
+    qualifyingDepartureFound: qualifyingDepartureWasFound(
+      engine.accepted,
+      course.startProgressMeters,
+    ),
     departure: {
       windowMs: DEPARTURE_WINDOW_MS,
       minSamples: DEPARTURE_MIN_SAMPLES,

@@ -231,6 +231,18 @@ export function inspectDeparture(
   };
 }
 
+export function qualifyingDepartureWasFound(
+  accepted: AcceptedProgressSample[],
+  startProgressMeters: number,
+): boolean {
+  for (let count = 1; count <= accepted.length; count += 1) {
+    if (inspectDeparture(accepted.slice(0, count), startProgressMeters).qualifies) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function maybePromoteFromArmed(state: AttemptEngineState, course: TimingCourse): AttemptEngineState {
   const departure = inspectDeparture(state.accepted, course.startProgressMeters);
   if (!departure.qualifies) {

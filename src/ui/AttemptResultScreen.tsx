@@ -336,7 +336,7 @@ function DebugTracePanel({
         <Text style={styles.statValue}>{debug.qualifyingDepartureFound ? 'yes' : 'no'}</Text>
       </View>
       <View style={styles.statRow}>
-        <Text style={styles.statLabel}>Departure window</Text>
+        <Text style={styles.statLabel}>Latest departure window</Text>
         <Text style={styles.statValue}>
           {debug.departure.windowSampleCount}/{debug.departure.minSamples} samples,{' '}
           {formatMeters(debug.departure.advanceMeters)}/{debug.departure.minAdvanceMeters} m,{' '}
