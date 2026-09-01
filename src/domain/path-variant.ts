@@ -80,6 +80,31 @@ export function isCompatiblePathVariant(
   return maxProgress - minProgress >= PATH_VARIANT_PROGRESS_COVERAGE_RATIO * courseLength;
 }
 
+function pathVariantsForJourney(
+  routes: Route[],
+  origin: Pick<Place, 'center' | 'radiusMeters'>,
+  destination: Pick<Place, 'center' | 'radiusMeters'>,
+  transportationMode: TransportationMode,
+): Route[] {
+  return routes
+    .filter((route) => routeEndpointsMatchJourney(route, origin, destination, transportationMode))
+    .sort((a, b) => {
+      if (a.createdAtMs !== b.createdAtMs) {
+        return a.createdAtMs - b.createdAtMs;
+      }
+      return a.id.localeCompare(b.id);
+    });
+}
+
+export function selectJourneyPathVariant(
+  routes: Route[],
+  origin: Pick<Place, 'center' | 'radiusMeters'>,
+  destination: Pick<Place, 'center' | 'radiusMeters'>,
+  transportationMode: TransportationMode,
+): Route | null {
+  return pathVariantsForJourney(routes, origin, destination, transportationMode)[0] ?? null;
+}
+
 export function findCompatiblePathVariant(
   routes: Route[],
   origin: Place,
@@ -88,14 +113,7 @@ export function findCompatiblePathVariant(
   samples: LocationSample[],
   window: { startedAtMs: number; finishedAtMs: number },
 ): Route | null {
-  const candidates = routes
-    .filter((route) => routeEndpointsMatchJourney(route, origin, destination, transportationMode))
-    .sort((a, b) => {
-      if (a.createdAtMs !== b.createdAtMs) {
-        return a.createdAtMs - b.createdAtMs;
-      }
-      return a.id.localeCompare(b.id);
-    });
+  const candidates = pathVariantsForJourney(routes, origin, destination, transportationMode);
   for (const route of candidates) {
     if (isCompatiblePathVariant(route, samples, window)) {
       return route;

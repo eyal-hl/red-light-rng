@@ -413,6 +413,69 @@ describe('path-free destination and finish', () => {
     assert.notEqual(state.destinationPlaceId, HOME.id);
     assert.notEqual(state.lifecycle, 'completed');
   });
+
+  it('finishes a nearby Home → Work commute using samples after the origin crossing', () => {
+    const nearbyWork = makePlace({
+      id: 'place-work-nearby',
+      name: 'Work',
+      center: offset(HOME.center.latitude, HOME.center.longitude, 90, 0),
+      createdAtMs: 2,
+    });
+    const samples = completeJourneySamples({
+      origin: HOME,
+      destination: nearbyWork,
+      sessionId: 'nearby-90',
+    });
+    const state = replay(samples, [HOME, nearbyWork], samples[0]!.recordedAtMs);
+    assert.equal(state.lifecycle, 'completed');
+    assert.equal(state.originPlaceId, HOME.id);
+    assert.equal(state.destinationPlaceId, nearbyWork.id);
+    const workWatch = state.destinations.find((item) => item.placeId === nearbyWork.id);
+    assert.equal(workWatch?.seenEligibleOutside, true);
+    assert.ok((workWatch?.maxDistanceMeters ?? 0) >= nearbyWork.radiusMeters + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS);
+    assert.ok(state.startedAtMs != null);
+    assert.ok(state.finishedAtMs != null);
+    assert.ok((state.finishedAtMs ?? 0) > (state.startedAtMs ?? 0));
+  });
+
+  it('finishes an 85 m Home → Work path whose eligibility only appears before promotion', () => {
+    const nearbyWork = makePlace({
+      id: 'place-work-85',
+      name: 'Work',
+      center: offset(HOME.center.latitude, HOME.center.longitude, 85, 0),
+      createdAtMs: 2,
+    });
+    const samples = completeJourneySamples({
+      origin: HOME,
+      destination: nearbyWork,
+      sessionId: 'nearby-85',
+      speedMps: 4,
+    });
+    const state = replay(samples, [HOME, nearbyWork], samples[0]!.recordedAtMs);
+    assert.equal(state.lifecycle, 'completed');
+    assert.equal(state.destinationPlaceId, nearbyWork.id);
+    const workWatch = state.destinations.find((item) => item.placeId === nearbyWork.id);
+    assert.equal(workWatch?.seenEligibleOutside, true);
+  });
+
+  it('finishes a walking-speed nearby Home → Work commute', () => {
+    const nearbyWork = makePlace({
+      id: 'place-work-walk',
+      name: 'Work',
+      center: offset(HOME.center.latitude, HOME.center.longitude, 90, 0),
+      createdAtMs: 2,
+    });
+    const samples = completeJourneySamples({
+      origin: HOME,
+      destination: nearbyWork,
+      sessionId: 'nearby-walk',
+      speedMps: 1.4,
+    });
+    const state = replay(samples, [HOME, nearbyWork], samples[0]!.recordedAtMs);
+    assert.equal(state.lifecycle, 'completed');
+    assert.equal(state.originPlaceId, HOME.id);
+    assert.equal(state.destinationPlaceId, nearbyWork.id);
+  });
 });
 
 describe('place timing lifecycle caps', () => {

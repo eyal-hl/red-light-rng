@@ -289,10 +289,40 @@ function startZoneFromCandidate(
   };
 }
 
+function lastAcceptedBefore(
+  samples: AcceptedPlaceSample[],
+  atMs: number,
+): AcceptedPlaceSample | null {
+  for (let index = samples.length - 1; index >= 0; index -= 1) {
+    const sample = samples[index];
+    if (sample && sample.recordedAtMs < atMs) {
+      return sample;
+    }
+  }
+  return null;
+}
+
+function ingestActiveTrace(
+  state: PlaceEngineState,
+  places: PlaceTimingPlace[],
+  samples: AcceptedPlaceSample[],
+  context: PlaceTimingContext,
+): PlaceEngineState {
+  let current = state;
+  for (const sample of samples) {
+    if (current.lifecycle !== 'active') {
+      return current;
+    }
+    current = ingestActive(current, places, sample, sample.recordedAtMs, context);
+  }
+  return current;
+}
+
 function promoteToActive(
   state: PlaceEngineState,
   origin: PlaceTimingPlace,
   places: PlaceTimingPlace[],
+  context: PlaceTimingContext,
 ): PlaceEngineState {
   const next = cloneEngine(state);
   next.lifecycle = 'active';
@@ -302,7 +332,18 @@ function promoteToActive(
     .filter((place) => place.status === 'active' && place.id !== origin.id)
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((place) => emptyDestinationWatch(place.id));
-  return next;
+
+  const startedAtMs = next.startedAtMs;
+  if (startedAtMs == null) {
+    return next;
+  }
+
+  // Destination eligibility and arrival watch the official journey window, which
+  // begins at the interpolated outward crossing — not at promotion. Samples
+  // between those two instants must still be able to satisfy radius + 10 m.
+  const postStart = next.accepted.filter((sample) => sample.recordedAtMs >= startedAtMs);
+  next.lastAccepted = lastAcceptedBefore(next.accepted, startedAtMs) ?? next.lastAccepted;
+  return ingestActiveTrace(next, places, postStart, context);
 }
 
 function originForDeparture(
@@ -372,8 +413,7 @@ function ingestArmed(
       (next.maxRadialFromOriginMeters ?? 0) >= origin.radiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
     ) {
       next.lastInsideOrigin = false;
-      next.lastAccepted = accepted;
-      return promoteToActive(next, origin, places);
+      return promoteToActive(next, origin, places, context);
     }
   }
 

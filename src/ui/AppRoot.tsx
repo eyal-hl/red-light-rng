@@ -10,6 +10,7 @@ import {
 } from '../domain/course-editor';
 import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import { selectJourneyPathVariant } from '../domain/path-variant';
 import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
@@ -110,14 +111,12 @@ export function AppRoot({ workspace }: AppRootProps) {
       setDestinationPlace(loaded.destination);
       setJourneySummary(loaded.summary);
       setJourneyHistory(loaded.history);
-      const variant =
-        loaded.routes.find(
-          (route) =>
-            route.transportationMode === pool.transportationMode &&
-            (route.name === loaded.summary.title ||
-              (route.startZone.center.latitude === loaded.origin.center.latitude &&
-                route.finishZone.center.latitude === loaded.destination.center.latitude)),
-        ) ?? loaded.routes[0] ?? null;
+      const variant = selectJourneyPathVariant(
+        loaded.routes,
+        loaded.origin,
+        loaded.destination,
+        pool.transportationMode,
+      );
       if (variant) {
         setSelectedRoute(variant);
         const analyzed = await workspace.analyzeRoute(variant.id);
@@ -492,12 +491,24 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!attemptResult) {
         return;
       }
+      const stayOnDetail = screen.kind === 'attempt-detail';
       setBusy(true);
       setError(null);
       try {
         const updated = await workspace.setAttemptTransportationMode(attemptResult.id, mode);
         if (updated) {
           await showAttemptResult(updated);
+          if (stayOnDetail && updated.originPlaceId && updated.destinationPlaceId) {
+            setScreen({
+              kind: 'attempt-detail',
+              pool: {
+                originPlaceId: updated.originPlaceId,
+                destinationPlaceId: updated.destinationPlaceId,
+                transportationMode: updated.transportationMode,
+              },
+              attemptId: updated.id,
+            });
+          }
         }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not change transportation mode.');
@@ -505,7 +516,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setBusy(false);
       }
     },
-    [attemptResult, showAttemptResult, workspace],
+    [attemptResult, screen.kind, showAttemptResult, workspace],
   );
 
   const leaveToHome = useCallback(() => {
@@ -1060,6 +1071,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           doneLabel="BACK"
           onDone={() => {
             void onBackFromHistoryDetail();
+          }}
+          onChangeMode={(mode) => {
+            void onChangeResultMode(mode);
           }}
         />
       ) : null}
