@@ -16,7 +16,7 @@ export type SystemBackAction =
   | 'cancelRecording'
   | 'cancelEditor'
   | 'leaveHistoryToDetail'
-  | 'cancelAttempt'
+  | 'inspectAttempt'
   | 'acknowledgeAttemptResult'
   | 'leaveAttemptDetailToHistory';
 
@@ -25,7 +25,7 @@ export type SystemBackActions = {
   cancelRecording: () => void;
   cancelEditor: () => void;
   leaveHistoryToDetail: () => void;
-  cancelAttempt: () => void;
+  inspectAttempt: () => void;
   acknowledgeAttemptResult: () => void;
   leaveAttemptDetailToHistory: () => void;
 };
@@ -49,7 +49,7 @@ export function systemBackAction(kind: AppScreenKind): SystemBackAction {
     case 'history':
       return 'leaveHistoryToDetail';
     case 'attempt':
-      return 'cancelAttempt';
+      return 'inspectAttempt';
     case 'attempt-result':
       return 'acknowledgeAttemptResult';
     case 'attempt-detail':

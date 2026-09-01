@@ -7,8 +7,13 @@ import {
   shouldShowPersistedUnrankedWarning,
   type FocusAttemptAnalysis,
 } from '../domain/attempt-analysis';
-import { type Attempt } from '../domain/attempt';
+import { incompleteAttemptLabel, type Attempt } from '../domain/attempt';
 import { checkpointMapPoints } from '../domain/course-layout';
+import {
+  nearestDebugSample,
+  type AttemptDebugReport,
+  type AttemptDebugSample,
+} from '../domain/attempt-debug';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
 import { type GhostChartSelection } from '../domain/ghost-chart';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
@@ -36,11 +41,55 @@ type AttemptResultScreenProps = {
   route: Route | null;
   attempt: Attempt;
   analysis: FocusAttemptAnalysis | null;
+  debug?: AttemptDebugReport | null;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
   onDone: () => void;
 };
+
+function qualityLabel(quality: AttemptDebugSample['match']['quality']): string {
+  switch (quality) {
+    case 'accepted':
+      return 'accepted';
+    case 'poor_accuracy':
+      return 'poor accuracy';
+    case 'off_course':
+      return 'off course';
+    case 'out_of_window':
+      return 'out of window';
+    case 'unprojected':
+      return 'unprojected';
+  }
+}
+
+function incompleteSubtitle(attempt: Attempt, debug: AttemptDebugReport | null | undefined): string {
+  if (attempt.lifecycle === 'abandoned') {
+    return 'This attempt left the course and was not ranked.';
+  }
+  if (attempt.lifecycle === 'cancelled') {
+    return 'This attempt was cancelled and is not an official run.';
+  }
+  const label = debug?.incompleteLabel ?? incompleteAttemptLabel(attempt);
+  if (label === 'DID NOT START') {
+    return 'DID NOT START — automatic start was never recognized.';
+  }
+  if (label === 'DID NOT FINISH') {
+    return 'DID NOT FINISH — automatic finish was never recognized.';
+  }
+  return 'This attempt is not available for current-layout comparison.';
+}
+
+function formatMeters(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return '—';
+  }
+  return `${Math.round(value)} m`;
+}
+
+function formatCoordinate(value: number): string {
+  return value.toFixed(5);
+}
 
 function deltaStyle(deltaMs: number | null) {
   if (deltaMs == null || deltaMs === 0) {
@@ -205,10 +254,189 @@ function MovementBreakdownBlock({
   );
 }
 
+function DebugTracePanel({
+  debug,
+  selectedSample,
+  onSelectSample,
+}: {
+  debug: AttemptDebugReport;
+  selectedSample: AttemptDebugSample | null;
+  onSelectSample: (sampleId: string) => void;
+}) {
+  const selectedIndex = selectedSample
+    ? debug.samples.findIndex((entry) => entry.sample.id === selectedSample.sample.id)
+    : -1;
+  const previous = selectedIndex > 0 ? debug.samples[selectedIndex - 1] : null;
+  const next =
+    selectedIndex >= 0 && selectedIndex < debug.samples.length - 1 ? debug.samples[selectedIndex + 1] : null;
+  const rejectedTotal =
+    debug.rejectedByQuality.poor_accuracy +
+    debug.rejectedByQuality.off_course +
+    debug.rejectedByQuality.out_of_window +
+    debug.rejectedByQuality.unprojected;
+
+  return (
+    <View style={styles.debugPanel}>
+      <Text style={styles.sectionLabel}>TRACE DEBUG</Text>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Raw samples</Text>
+        <Text style={styles.statValue}>{debug.rawSampleCount}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Accepted</Text>
+        <Text style={styles.statValue}>{debug.acceptedCount}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Rejected</Text>
+        <Text style={styles.statValue}>{rejectedTotal}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Poor accuracy</Text>
+        <Text style={styles.statValue}>{debug.rejectedByQuality.poor_accuracy}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Off course</Text>
+        <Text style={styles.statValue}>{debug.rejectedByQuality.off_course}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Out of window</Text>
+        <Text style={styles.statValue}>{debug.rejectedByQuality.out_of_window}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Unprojected</Text>
+        <Text style={styles.statValue}>{debug.rejectedByQuality.unprojected}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>First / last</Text>
+        <Text style={styles.statValue}>
+          {debug.firstRecordedAtMs == null ? '—' : formatTimeOfDay(debug.firstRecordedAtMs)}
+          {' → '}
+          {debug.lastRecordedAtMs == null ? '—' : formatTimeOfDay(debug.lastRecordedAtMs)}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Accepted progress</Text>
+        <Text style={styles.statValue}>
+          {formatMeters(debug.acceptedProgressMinMeters)} – {formatMeters(debug.acceptedProgressMaxMeters)}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Start-zone evidence</Text>
+        <Text style={styles.statValue}>{debug.anyAcceptedInStartZone ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>sawPreStart</Text>
+        <Text style={styles.statValue}>
+          {debug.sawPreStart ? 'yes' : 'no'}
+          {debug.preStartRequired ? ' (required)' : ' (not required)'}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Qualifying departure</Text>
+        <Text style={styles.statValue}>{debug.qualifyingDepartureFound ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Latest departure window</Text>
+        <Text style={styles.statValue}>
+          {debug.departure.windowSampleCount}/{debug.departure.minSamples} samples,{' '}
+          {formatMeters(debug.departure.advanceMeters)}/{debug.departure.minAdvanceMeters} m,{' '}
+          {debug.departure.windowMs / 1000}s
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Reconstructed start</Text>
+        <Text style={styles.statValue}>
+          {debug.reconstructedStartAtMs == null ? '—' : formatTimeOfDay(debug.reconstructedStartAtMs)}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Finish trigger after start</Text>
+        <Text style={styles.statValue}>{debug.finishTriggerReachedAfterStart ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Engine lifecycle</Text>
+        <Text style={styles.statValue}>{debug.engine.lifecycle}</Text>
+      </View>
+      {selectedSample ? (
+        <View style={styles.debugSampleCard}>
+          <Text style={styles.sectionLabel}>
+            SAMPLE {selectedIndex + 1} / {debug.samples.length}
+          </Text>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Time</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(selectedSample.sample.recordedAtMs)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Accuracy</Text>
+            <Text style={styles.statValue}>
+              {selectedSample.sample.horizontalAccuracyMeters == null
+                ? '—'
+                : `${Math.round(selectedSample.sample.horizontalAccuracyMeters)} m`}
+            </Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Location</Text>
+            <Text style={styles.statValue}>
+              {formatCoordinate(selectedSample.sample.latitude)}, {formatCoordinate(selectedSample.sample.longitude)}
+            </Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Match</Text>
+            <Text style={styles.statValue}>
+              {selectedSample.match.accepted ? 'accepted' : 'rejected'} · {qualityLabel(selectedSample.match.quality)}
+            </Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Progress</Text>
+            <Text style={styles.statValue}>{formatMeters(selectedSample.match.progressMeters)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Distance from path</Text>
+            <Text style={styles.statValue}>{formatMeters(selectedSample.match.distanceFromPathMeters)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Zones</Text>
+            <Text style={styles.statValue}>
+              {selectedSample.inStartZone ? 'start' : '—'} / {selectedSample.inFinishZone ? 'finish' : '—'}
+            </Text>
+          </View>
+          <View style={styles.debugSampleNav}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!previous}
+              onPress={() => {
+                if (previous) {
+                  onSelectSample(previous.sample.id);
+                }
+              }}
+              style={[styles.button, styles.secondaryButton, !previous ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>PREV</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!next}
+              onPress={() => {
+                if (next) {
+                  onSelectSample(next.sample.id);
+                }
+              }}
+              style={[styles.button, styles.secondaryButton, !next ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>NEXT</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function AttemptResultScreen({
   route,
   attempt,
   analysis,
+  debug = null,
   busy,
   error,
   doneLabel = 'DONE',
@@ -236,6 +464,7 @@ export function AttemptResultScreen({
     point: GhostChartSelection;
   } | null>(null);
   const [pageScrollEnabled, setPageScrollEnabled] = useState(true);
+  const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
   const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
   const activeGhostSelection = ghostSelection?.attemptId === attempt.id ? ghostSelection.point : null;
@@ -299,6 +528,13 @@ export function AttemptResultScreen({
       ];
     }),
   ];
+  const selectedDebugSample =
+    debug?.samples.find((entry) => entry.sample.id === selectedSampleId) ?? debug?.samples[0] ?? null;
+  const debugSamples = (debug?.samples ?? []).map((entry) => ({
+    id: entry.sample.id,
+    point: { latitude: entry.sample.latitude, longitude: entry.sample.longitude },
+    accepted: entry.match.accepted,
+  }));
 
   return (
     <View style={styles.screen}>
@@ -331,7 +567,7 @@ export function AttemptResultScreen({
         </View>
       ) : null}
 
-      {competitive && route ? (
+      {route ? (
         <View style={styles.attemptMapPane} collapsable={false}>
           <RouteMap
             path={route.referencePath}
@@ -341,6 +577,11 @@ export function AttemptResultScreen({
             waitMarkers={waitMarkers}
             selectedMarkerId={selectedWaitId}
             previewPoint={ghostMapPoint}
+            recordedPath={debug?.recordedPath ?? []}
+            debugSamples={debugSamples}
+            selectedSampleId={selectedDebugSample?.sample.id ?? null}
+            officialStartPoint={debug?.officialStartPoint ?? null}
+            officialFinishPoint={debug?.officialFinishPoint ?? null}
             onWaitMarkerPress={(markerId) => {
               const location = displayedComparisonLocations.find((entry) => entry.id === markerId);
               if (location) {
@@ -350,6 +591,13 @@ export function AttemptResultScreen({
               selectWait(markerId);
             }}
             onMapPress={(point) => {
+              if (debug) {
+                const tappedSample = nearestDebugSample(debug.samples, point);
+                if (tappedSample) {
+                  setSelectedSampleId(tappedSample.sample.id);
+                  return;
+                }
+              }
               const tappedWaitId = waitEventIdNearPoint(visibleWaitEvents, point);
               if (tappedWaitId) {
                 selectWait(tappedWaitId);
@@ -386,16 +634,13 @@ export function AttemptResultScreen({
         {!competitive ? (
           <View>
             <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
-            <Text style={styles.title}>{route?.name ?? 'Attempt'}</Text>
-            <Text style={styles.subtitle}>
-              {attempt.lifecycle === 'abandoned'
-                ? 'This attempt left the course and was not ranked.'
-                : attempt.lifecycle === 'cancelled'
-                  ? 'This attempt was cancelled and is not an official run.'
-                  : 'This attempt is not available for current-layout comparison.'}
+            <Text style={styles.title}>
+              {debug?.incompleteLabel ?? incompleteAttemptLabel(attempt) ?? route?.name ?? 'Attempt'}
             </Text>
+            <Text style={styles.subtitle}>{incompleteSubtitle(attempt, debug)}</Text>
           </View>
         ) : null}
+        {debug ? <DebugTracePanel debug={debug} selectedSample={selectedDebugSample} onSelectSample={setSelectedSampleId} /> : null}
         {competitive && focus?.movement ? (
           <MovementBreakdownBlock
             breakdown={focus.movement}

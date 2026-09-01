@@ -1,4 +1,4 @@
-export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 'abandoned';
+export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 'abandoned' | 'ended';
 
 export type AttemptValidity = 'pending' | 'valid' | 'unranked';
 
@@ -37,4 +37,13 @@ export function officialTimeMs(attempt: Attempt): number | null {
 
 export function isOfficialAttempt(attempt: Attempt): boolean {
   return attempt.lifecycle === 'completed' && attempt.validity === 'valid';
+}
+
+export type IncompleteAttemptLabel = 'DID NOT START' | 'DID NOT FINISH';
+
+export function incompleteAttemptLabel(attempt: Pick<Attempt, 'lifecycle' | 'startedAtMs'>): IncompleteAttemptLabel | null {
+  if (attempt.lifecycle !== 'ended') {
+    return null;
+  }
+  return attempt.startedAtMs == null ? 'DID NOT START' : 'DID NOT FINISH';
 }

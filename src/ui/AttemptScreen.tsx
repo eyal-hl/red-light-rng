@@ -12,6 +12,7 @@ type AttemptScreenProps = {
   startZoneStatus: StartZoneStatus;
   busy: boolean;
   error: string | null;
+  onEndAndInspect: () => void;
   onCancel: () => void;
 };
 
@@ -31,6 +32,7 @@ export function AttemptScreen({
   startZoneStatus,
   busy,
   error,
+  onEndAndInspect,
   onCancel,
 }: AttemptScreenProps) {
   const armed = attempt.lifecycle === 'armed';
@@ -89,6 +91,14 @@ export function AttemptScreen({
         <Text style={styles.mutedText}>You can lock your phone and put it in your pocket.</Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            onPress={onEndAndInspect}
+            style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+          >
+            <Text style={styles.buttonText}>END & INSPECT</Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             disabled={busy}

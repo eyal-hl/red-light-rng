@@ -411,4 +411,22 @@ export const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
+  debugPanel: {
+    marginTop: 8,
+    marginBottom: 16,
+    paddingTop: 8,
+  },
+  debugSampleCard: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#1b1b1b',
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  debugSampleNav: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
 });

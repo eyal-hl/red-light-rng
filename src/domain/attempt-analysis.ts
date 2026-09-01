@@ -1,4 +1,4 @@
-import type { Attempt } from './attempt';
+import { incompleteAttemptLabel, type Attempt, type IncompleteAttemptLabel } from './attempt';
 import {
   finishTriggerProgressMeters,
   replayAttemptTrace,
@@ -92,6 +92,8 @@ export type HistoryRow = {
   isPb: boolean;
   eligible: boolean;
   unavailabilityReason: AttemptUnavailabilityReason | null;
+  lifecycle: Attempt['lifecycle'];
+  incompleteLabel: IncompleteAttemptLabel | null;
 };
 
 export type RouteAttemptAnalysis = {
@@ -299,7 +301,14 @@ export function analyzeRouteAttempts(course: TimingCourse, traces: AttemptTrace[
     .map((trace) => derived.find((item) => item.attemptId === trace.attempt.id))
     .filter((item): item is CurrentLayoutAttempt => item != null)
     .filter((item) => shouldShowInHistory(item, traces.find((trace) => trace.attempt.id === item.attemptId)?.attempt))
-    .map((item) => toHistoryRow(item, rankById, pb?.attemptId ?? null));
+    .map((item) =>
+      toHistoryRow(
+        item,
+        rankById,
+        pb?.attemptId ?? null,
+        traces.find((trace) => trace.attempt.id === item.attemptId)?.attempt,
+      ),
+    );
 
   const chronologicalHistory = [...historyRows].sort((a, b) => {
     const aTime = a.finishedAtMs ?? a.armedAtMs;
@@ -618,6 +627,9 @@ function shouldShowInHistory(derived: CurrentLayoutAttempt, attempt: Attempt | u
   if (derived.eligible) {
     return true;
   }
+  if (attempt.lifecycle === 'ended') {
+    return true;
+  }
   if (attempt.lifecycle === 'cancelled' || attempt.lifecycle === 'abandoned' || attempt.lifecycle === 'armed') {
     return false;
   }
@@ -636,6 +648,7 @@ function toHistoryRow(
   item: CurrentLayoutAttempt,
   rankById: Map<string, number>,
   pbAttemptId: string | null,
+  attempt: Attempt | undefined,
 ): HistoryRow {
   return {
     attemptId: item.attemptId,
@@ -646,6 +659,8 @@ function toHistoryRow(
     isPb: pbAttemptId === item.attemptId,
     eligible: item.eligible,
     unavailabilityReason: item.unavailabilityReason,
+    lifecycle: attempt?.lifecycle ?? 'completed',
+    incompleteLabel: attempt ? incompleteAttemptLabel(attempt) : null,
   };
 }
 

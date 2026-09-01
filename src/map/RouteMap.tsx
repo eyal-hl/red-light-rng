@@ -22,6 +22,12 @@ export type RouteMapWaitMarker = {
   tone?: RouteMapWaitMarkerTone;
 };
 
+export type RouteMapDebugSample = {
+  id: string;
+  point: LatLng;
+  accepted: boolean;
+};
+
 export type RouteMapProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
@@ -30,6 +36,11 @@ export type RouteMapProps = {
   waitMarkers?: RouteMapWaitMarker[];
   previewPoint?: LatLng | null;
   selectedMarkerId?: string | null;
+  recordedPath?: LatLng[];
+  debugSamples?: RouteMapDebugSample[];
+  selectedSampleId?: string | null;
+  officialStartPoint?: LatLng | null;
+  officialFinishPoint?: LatLng | null;
   onMapPress?: (point: LatLng) => void;
   onWaitMarkerPress?: (waitId: string) => void;
   cameraGesturesEnabled?: boolean;
@@ -40,7 +51,15 @@ type FeatureCollection = {
   type: 'FeatureCollection';
   features: {
     type: 'Feature';
-    properties: { kind: string; selected: string; waitId: string; label: string; tone: string };
+    properties: {
+      kind: string;
+      selected: string;
+      waitId: string;
+      label: string;
+      tone: string;
+      sampleId: string;
+      accepted: string;
+    };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
       | { type: 'Polygon'; coordinates: number[][][] }
@@ -63,7 +82,15 @@ function circlePolygon(center: LatLng, radiusMeters: number, steps = 32): number
 }
 
 function emptyProperties(kind: string, selected = false): FeatureCollection['features'][number]['properties'] {
-  return { kind, selected: selected ? 'yes' : 'no', waitId: '', label: '', tone: 'wait' };
+  return {
+    kind,
+    selected: selected ? 'yes' : 'no',
+    waitId: '',
+    label: '',
+    tone: 'wait',
+    sampleId: '',
+    accepted: 'no',
+  };
 }
 
 const WAIT_MARKER_RADIUS = 8;
@@ -146,12 +173,14 @@ function toWaitGeoJson(
     type: 'FeatureCollection',
     features: waitMarkers.map((marker) => ({
       type: 'Feature' as const,
-        properties: {
+      properties: {
         kind: 'wait',
         selected: selectedMarkerId === marker.id ? 'yes' : 'no',
         waitId: marker.id,
         label: marker.label,
         tone: marker.tone ?? 'wait',
+        sampleId: '',
+        accepted: 'no',
       },
       geometry: {
         type: 'Point' as const,
@@ -159,6 +188,78 @@ function toWaitGeoJson(
       },
     })),
   };
+}
+
+function toRecordedPathGeoJson(recordedPath: LatLng[]): FeatureCollection {
+  if (recordedPath.length < 2) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: emptyProperties('recorded-path'),
+        geometry: {
+          type: 'LineString',
+          coordinates: recordedPath.map((point) => [point.longitude, point.latitude]),
+        },
+      },
+    ],
+  };
+}
+
+function toDebugSampleGeoJson(
+  debugSamples: RouteMapDebugSample[],
+  selectedSampleId?: string | null,
+): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: debugSamples.map((sample) => ({
+      type: 'Feature' as const,
+      properties: {
+        kind: 'debug-sample',
+        selected: selectedSampleId === sample.id ? 'yes' : 'no',
+        waitId: '',
+        label: '',
+        tone: 'wait',
+        sampleId: sample.id,
+        accepted: sample.accepted ? 'yes' : 'no',
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [sample.point.longitude, sample.point.latitude],
+      },
+    })),
+  };
+}
+
+function toOfficialPointGeoJson(
+  officialStartPoint?: LatLng | null,
+  officialFinishPoint?: LatLng | null,
+): FeatureCollection {
+  const features: FeatureCollection['features'] = [];
+  if (officialStartPoint) {
+    features.push({
+      type: 'Feature',
+      properties: emptyProperties('official-start'),
+      geometry: {
+        type: 'Point',
+        coordinates: [officialStartPoint.longitude, officialStartPoint.latitude],
+      },
+    });
+  }
+  if (officialFinishPoint) {
+    features.push({
+      type: 'Feature',
+      properties: emptyProperties('official-finish'),
+      geometry: {
+        type: 'Point',
+        coordinates: [officialFinishPoint.longitude, officialFinishPoint.latitude],
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -188,6 +289,11 @@ function MapLibreRouteMap({
   waitMarkers = [],
   previewPoint,
   selectedMarkerId,
+  recordedPath = [],
+  debugSamples = [],
+  selectedSampleId = null,
+  officialStartPoint = null,
+  officialFinishPoint = null,
   onMapPress,
   onWaitMarkerPress,
   cameraGesturesEnabled = true,
@@ -202,9 +308,25 @@ function MapLibreRouteMap({
     [selectedMarkerId, waitMarkers],
   );
   const previewData = useMemo(() => toPreviewGeoJson(previewPoint), [previewPoint]);
+  const recordedData = useMemo(() => toRecordedPathGeoJson(recordedPath), [recordedPath]);
+  const debugData = useMemo(
+    () => toDebugSampleGeoJson(debugSamples, selectedSampleId),
+    [debugSamples, selectedSampleId],
+  );
+  const officialData = useMemo(
+    () => toOfficialPointGeoJson(officialStartPoint, officialFinishPoint),
+    [officialFinishPoint, officialStartPoint],
+  );
   const cameraPoints = useMemo(
-    () => [...checkpoints, ...waitMarkers.map((marker) => ({ point: marker.point }))],
-    [checkpoints, waitMarkers],
+    () => [
+      ...checkpoints,
+      ...waitMarkers.map((marker) => ({ point: marker.point })),
+      ...recordedPath.map((point) => ({ point })),
+      ...debugSamples.map((sample) => ({ point: sample.point })),
+      ...(officialStartPoint ? [{ point: officialStartPoint }] : []),
+      ...(officialFinishPoint ? [{ point: officialFinishPoint }] : []),
+    ],
+    [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, recordedPath, waitMarkers],
   );
   const initialBounds = useMemo(
     () => courseCameraBounds(path, startZone, finishZone, cameraPoints),
@@ -370,6 +492,62 @@ function MapLibreRouteMap({
           />
         </GeoJSONSource>
       ) : null}
+      {recordedPath.length >= 2 ? (
+        <GeoJSONSource id="recorded-path" data={recordedData}>
+          <Layer
+            id="recorded-path-line"
+            type="line"
+            filter={['==', ['get', 'kind'], 'recorded-path']}
+            paint={{ 'line-color': '#ffb74d', 'line-width': 3, 'line-opacity': 0.9 }}
+          />
+        </GeoJSONSource>
+      ) : null}
+      {debugSamples.length > 0 ? (
+        <GeoJSONSource id="debug-samples" data={debugData}>
+          <Layer
+            id="debug-sample-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'debug-sample']}
+            paint={{
+              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 7, 4],
+              'circle-color': [
+                'case',
+                ['==', ['get', 'accepted'], 'yes'],
+                '#7dcea0',
+                '#f07178',
+              ],
+              'circle-stroke-width': ['case', ['==', ['get', 'selected'], 'yes'], 3, 1],
+              'circle-stroke-color': '#ffffff',
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
+      {officialStartPoint || officialFinishPoint ? (
+        <GeoJSONSource id="official-points" data={officialData}>
+          <Layer
+            id="official-start-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'official-start']}
+            paint={{
+              'circle-radius': 8,
+              'circle-color': '#66bb6a',
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#ffffff',
+            }}
+          />
+          <Layer
+            id="official-finish-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'official-finish']}
+            paint={{
+              'circle-radius': 8,
+              'circle-color': '#ef9a9a',
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#ffffff',
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
       {previewPoint ? (
         <GeoJSONSource id="ghost-preview" data={previewData}>
           <Layer
@@ -397,6 +575,11 @@ export function RouteMap({
   waitMarkers = [],
   previewPoint = null,
   selectedMarkerId = null,
+  recordedPath = [],
+  debugSamples = [],
+  selectedSampleId = null,
+  officialStartPoint = null,
+  officialFinishPoint = null,
   onMapPress,
   onWaitMarkerPress,
   cameraGesturesEnabled = true,
@@ -413,6 +596,11 @@ export function RouteMap({
         waitMarkers={waitMarkers}
         selectedMarkerId={selectedMarkerId}
         previewPoint={previewPoint}
+        recordedPath={recordedPath}
+        debugSamples={debugSamples}
+        selectedSampleId={selectedSampleId}
+        officialStartPoint={officialStartPoint}
+        officialFinishPoint={officialFinishPoint}
       />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
       {onMapPress && !onWaitMarkerPress ? (
@@ -436,6 +624,11 @@ export function RouteMap({
             waitMarkers={waitMarkers}
             previewPoint={previewPoint}
             selectedMarkerId={selectedMarkerId}
+            recordedPath={recordedPath}
+            debugSamples={debugSamples}
+            selectedSampleId={selectedSampleId}
+            officialStartPoint={officialStartPoint}
+            officialFinishPoint={officialFinishPoint}
             onMapPress={onMapPress}
             onWaitMarkerPress={onWaitMarkerPress}
             cameraGesturesEnabled={cameraGesturesEnabled}

@@ -15,6 +15,12 @@ type FallbackWaitMarker = {
   tone?: 'wait' | 'more' | 'less';
 };
 
+type FallbackDebugSample = {
+  id: string;
+  point: LatLng;
+  accepted: boolean;
+};
+
 type FallbackRoutePreviewProps = {
   path: LatLng[];
   startZone?: GeoZone | null;
@@ -23,6 +29,11 @@ type FallbackRoutePreviewProps = {
   waitMarkers?: FallbackWaitMarker[];
   selectedMarkerId?: string | null;
   previewPoint?: LatLng | null;
+  recordedPath?: LatLng[];
+  debugSamples?: FallbackDebugSample[];
+  selectedSampleId?: string | null;
+  officialStartPoint?: LatLng | null;
+  officialFinishPoint?: LatLng | null;
 };
 
 type Point = { x: number; y: number };
@@ -34,6 +45,10 @@ function project(
   checkpoints: FallbackCheckpoint[] = [],
   waitMarkers: FallbackWaitMarker[] = [],
   previewPoint?: LatLng | null,
+  recordedPath: LatLng[] = [],
+  debugSamples: FallbackDebugSample[] = [],
+  officialStartPoint?: LatLng | null,
+  officialFinishPoint?: LatLng | null,
 ): {
   points: Point[];
   start: Point | null;
@@ -43,8 +58,12 @@ function project(
   checkpointPoints: Point[];
   waitPoints: { id: string; point: Point; tone?: 'wait' | 'more' | 'less' }[];
   preview: Point | null;
+  recordedPoints: Point[];
+  debugPoints: { id: string; point: Point; accepted: boolean }[];
+  officialStart: Point | null;
+  officialFinish: Point | null;
 } {
-  const coords = [...path];
+  const coords = [...path, ...recordedPath];
   if (startZone) {
     coords.push(startZone.center, ...geoZoneExtentPoints(startZone));
   }
@@ -57,8 +76,17 @@ function project(
   for (const wait of waitMarkers) {
     coords.push(wait.point);
   }
+  for (const sample of debugSamples) {
+    coords.push(sample.point);
+  }
   if (previewPoint) {
     coords.push(previewPoint);
+  }
+  if (officialStartPoint) {
+    coords.push(officialStartPoint);
+  }
+  if (officialFinishPoint) {
+    coords.push(officialFinishPoint);
   }
   if (coords.length === 0) {
     return {
@@ -70,6 +98,10 @@ function project(
       checkpointPoints: [],
       waitPoints: [],
       preview: null,
+      recordedPoints: [],
+      debugPoints: [],
+      officialStart: null,
+      officialFinish: null,
     };
   }
 
@@ -104,6 +136,14 @@ function project(
     checkpointPoints: checkpoints.map((checkpoint) => toPoint(checkpoint.point)),
     waitPoints: waitMarkers.map((wait) => ({ id: wait.id, point: toPoint(wait.point), tone: wait.tone })),
     preview: previewPoint ? toPoint(previewPoint) : null,
+    recordedPoints: recordedPath.map(toPoint),
+    debugPoints: debugSamples.map((sample) => ({
+      id: sample.id,
+      point: toPoint(sample.point),
+      accepted: sample.accepted,
+    })),
+    officialStart: officialStartPoint ? toPoint(officialStartPoint) : null,
+    officialFinish: officialFinishPoint ? toPoint(officialFinishPoint) : null,
   };
 }
 
@@ -115,10 +155,38 @@ export function FallbackRoutePreview({
   waitMarkers = [],
   selectedMarkerId = null,
   previewPoint = null,
+  recordedPath = [],
+  debugSamples = [],
+  selectedSampleId = null,
+  officialStartPoint = null,
+  officialFinishPoint = null,
 }: FallbackRoutePreviewProps) {
   const projected = useMemo(
-    () => project(path, startZone, finishZone, checkpoints, waitMarkers, previewPoint),
-    [checkpoints, finishZone, path, previewPoint, startZone, waitMarkers],
+    () =>
+      project(
+        path,
+        startZone,
+        finishZone,
+        checkpoints,
+        waitMarkers,
+        previewPoint,
+        recordedPath,
+        debugSamples,
+        officialStartPoint,
+        officialFinishPoint,
+      ),
+    [
+      checkpoints,
+      debugSamples,
+      finishZone,
+      officialFinishPoint,
+      officialStartPoint,
+      path,
+      previewPoint,
+      recordedPath,
+      startZone,
+      waitMarkers,
+    ],
   );
 
   return (
@@ -127,6 +195,23 @@ export function FallbackRoutePreview({
         <View
           key={`${point.x}-${point.y}-${index}`}
           style={[styles.dot, { left: `${point.x}%`, top: `${point.y}%` }]}
+        />
+      ))}
+      {projected.recordedPoints.map((point, index) => (
+        <View
+          key={`recorded-${point.x}-${point.y}-${index}`}
+          style={[styles.recordedDot, { left: `${point.x}%`, top: `${point.y}%` }]}
+        />
+      ))}
+      {projected.debugPoints.map((sample) => (
+        <View
+          key={`debug-${sample.id}`}
+          style={[
+            styles.debugSample,
+            sample.accepted ? styles.debugAccepted : styles.debugRejected,
+            selectedSampleId === sample.id ? styles.debugSelected : null,
+            { left: `${sample.point.x}%`, top: `${sample.point.y}%` },
+          ]}
         />
       ))}
       {projected.start ? (
@@ -176,6 +261,21 @@ export function FallbackRoutePreview({
           ]}
         />
       ))}
+      {projected.officialStart ? (
+        <View
+          accessibilityLabel="Official start"
+          style={[styles.officialStart, { left: `${projected.officialStart.x}%`, top: `${projected.officialStart.y}%` }]}
+        />
+      ) : null}
+      {projected.officialFinish ? (
+        <View
+          accessibilityLabel="Official finish"
+          style={[
+            styles.officialFinish,
+            { left: `${projected.officialFinish.x}%`, top: `${projected.officialFinish.y}%` },
+          ]}
+        />
+      ) : null}
       {projected.preview ? (
         <View
           accessibilityLabel="Selected route location"
@@ -309,5 +409,63 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderWidth: 3,
     borderColor: '#8a2f2f',
+  },
+  recordedDot: {
+    position: 'absolute',
+    width: 5,
+    height: 5,
+    marginLeft: -2.5,
+    marginTop: -2.5,
+    borderRadius: 2.5,
+    backgroundColor: '#ffb74d',
+  },
+  debugSample: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    marginLeft: -4,
+    marginTop: -4,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#ffffff',
+    zIndex: 2,
+  },
+  debugAccepted: {
+    backgroundColor: '#7dcea0',
+  },
+  debugRejected: {
+    backgroundColor: '#f07178',
+  },
+  debugSelected: {
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    marginTop: -7,
+    borderRadius: 7,
+    borderWidth: 2,
+  },
+  officialStart: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    marginLeft: -6,
+    marginTop: -6,
+    borderRadius: 6,
+    backgroundColor: '#66bb6a',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 3,
+  },
+  officialFinish: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    marginLeft: -6,
+    marginTop: -6,
+    borderRadius: 6,
+    backgroundColor: '#ef9a9a',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 3,
   },
 });

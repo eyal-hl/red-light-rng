@@ -28,8 +28,8 @@ function recordActions(): { calls: SystemBackAction[]; actions: SystemBackAction
       leaveHistoryToDetail: () => {
         calls.push('leaveHistoryToDetail');
       },
-      cancelAttempt: () => {
-        calls.push('cancelAttempt');
+      inspectAttempt: () => {
+        calls.push('inspectAttempt');
       },
       acknowledgeAttemptResult: () => {
         calls.push('acknowledgeAttemptResult');
@@ -70,7 +70,7 @@ describe('system back policy', () => {
   it('returns nested editor, attempt, and result screens to route detail via their existing leave actions', () => {
     const nested: Array<[AppScreenKind, SystemBackAction]> = [
       ['editor', 'cancelEditor'],
-      ['attempt', 'cancelAttempt'],
+      ['attempt', 'inspectAttempt'],
       ['attempt-result', 'acknowledgeAttemptResult'],
     ];
 
@@ -119,7 +119,7 @@ describe('system back policy', () => {
     assert.match(appRoot, /cancelRecording: \(\) => \{\s*void onCancel\(\);/s);
     assert.match(appRoot, /cancelEditor: \(\) => \{\s*void onCancelEditor\(\);/s);
     assert.match(appRoot, /leaveHistoryToDetail: onBackFromHistory/);
-    assert.match(appRoot, /cancelAttempt: \(\) => \{\s*void onCancelAttempt\(\);/s);
+    assert.match(appRoot, /inspectAttempt: \(\) => \{\s*void onEndAndInspectAttempt\(\);/s);
     assert.match(appRoot, /acknowledgeAttemptResult: \(\) => \{\s*void onAcknowledgeAttempt\(\);/s);
     assert.match(appRoot, /leaveAttemptDetailToHistory: \(\) => \{\s*void onBackFromHistoryDetail\(\);/s);
     assert.match(review, /onPress=\{onBack\}/);
