@@ -38,15 +38,17 @@ Start with Expo's location/task APIs. If field testing shows that one platform r
 
 The initial application is a single local-first mobile system with several conceptual responsibilities:
 
-1. **Route model** — saved reference path, transportation mode, start/end zones, checkpoints, and later route variants.
-2. **Run/recording recorder** — background location sampling and lifecycle state for route creation and, later, attempts.
-3. **Location adapter** — shared interface over Expo/native background location behavior.
-4. **Course matching** — determines progress along a saved route and whether an attempt remains on-course.
-5. **Timing engine** — detects start, checkpoint crossing, finish, segment times, and total time.
-6. **Analytics engine** — PBs, Golds, Sum of Best, ranking, moving/waiting time, continuous deltas, and post-run highlights.
-7. **Local persistence** — stores routes, checkpoints, runs/recordings, raw telemetry, and derived/cached results in SQLite.
-8. **UI** — route management before a run and analysis/history after it. Active-run UI should remain minimal.
-9. **Map rendering** — renders project-owned geometry through an isolated `RouteMap`-style boundary; map-SDK types must not leak into domain/persistence/timing code.
+1. **Place model** — saved named endpoints with radius and archive state.
+2. **Journey model** — directional origin + destination + transportation mode pools, official endpoint timing, PB/rank/history.
+3. **Route / path-variant model** — optional reference path, start/end zones, checkpoints used for compatible-path analytics only.
+4. **Run/recording recorder** — background location sampling and lifecycle state for path-variant creation and official attempts.
+5. **Location adapter** — shared interface over Expo/native background location behavior.
+6. **Course matching** — optional progress along a saved path variant; never the competitive validity gate for an A→B journey.
+7. **Timing engine** — path-free place start/finish plus optional variant checkpoint crossings re-anchored to the journey window.
+8. **Analytics engine** — journey PBs/ranking always; Gold/Sum-of-Best/ghost/wait when a compatible variant exists.
+9. **Local persistence** — stores places, settings, routes, runs/recordings, raw telemetry, and derived/cached results in SQLite.
+10. **UI** — place/settings management and journey analysis before/after a run. Active-run UI should remain minimal.
+11. **Map rendering** — renders project-owned geometry through an isolated `RouteMap`-style boundary; map-SDK types must not leak into domain/persistence/timing code.
 
 These are conceptual boundaries, not a requirement to create nine modules immediately.
 
@@ -121,16 +123,18 @@ The system should eventually model:
 - progress along a reference path;
 - an accepted corridor/tolerance around that path;
 - checkpoint crossing based on geography/progress rather than exact coordinate equality;
-- invalidation or separate classification for material route deviations.
+- optional path-variant matching for splits/ghost when a recorded path is compatible;
+- path divergence never invalidating an otherwise valid A→B journey.
 
-Continuous progress along the reference route is important because it enables position-based ghost/delta analysis, not just checkpoint-based comparison.
+Continuous progress along a compatible path variant enables position-based ghost/delta analysis, not just checkpoint-based comparison. Unmatched paths still compete on journey official time.
 
 ## Timing principles
 
-- Arming a route does **not** start the timer.
-- Arming may start the OS background-location tracking session while the app is foregrounded.
-- Start timing is based on inferred physical departure along the course.
-- Finish timing occurs when the course finish condition is crossed; parking/stopping afterward should not count.
+- Pressing **START** does **not** start the timer.
+- START may start the OS background-location tracking session while the app is foregrounded.
+- Start timing is based on inferred physical departure from a saved place.
+- Finish timing occurs when another saved place is entered after becoming eligible; parking/stopping afterward should not count.
+- Path choice between those places does not invalidate the attempt.
 - Detection may occur slightly after the true event; when possible, the event timestamp should be reconstructed from recorded samples rather than using the moment the software made the decision.
 
 Route-creation start/end zones are provisional derived setup data, not official competitive timing decisions. They may use simple deterministic quality/movement filtering and should remain recomputable from preserved source telemetry until a later ticket adds explicit timing/editing behavior.
@@ -143,7 +147,7 @@ Current architectural assumptions:
 
 - Android locked/background recording has been field-validated for the current development phase.
 - iOS remains an intended supported target but is explicitly unvalidated until a physical iPhone is available.
-- V0.1 uses explicit foreground user actions (route recording now; `ARM` for timed attempts later) before the phone goes into a pocket/locks.
+- V0.1 uses explicit foreground user actions (path-variant recording; global `START` for timed attempts) before the phone goes into a pocket/locks.
 - The app then continues recording location while backgrounded/locked.
 - The initial implementation should not depend on the OS relaunching an app that the user force-terminated.
 - Fully passive detection from a terminated/not-opened app is a later problem and may require different platform-specific strategies.

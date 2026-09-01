@@ -2,63 +2,64 @@
 
 This document describes the intended product journey and run lifecycle. It is deliberately more behavioral than visual; screen design can evolve without changing these invariants.
 
-## First-time route creation
+## Saved places
 
-1. User chooses to create a new route.
-2. App records a real traversal and stores the raw GPS trace.
-3. User names the route and chooses a transportation mode/category.
-4. The recorded path becomes the initial reference course.
-5. Start and finish boundaries are derived/confirmed.
-6. The route is saved locally.
-7. Checkpoints may be added immediately or later.
+The user configures named places once from a Places surface: create from current location or the map, name them, adjust center and radius, rename, and archive/remove.
 
-The onboarding should not require the user to perfectly design every split before useful data can be collected.
+Creating or editing places is not part of START.
 
-## Adding/editing checkpoints
+## Optional path-variant recording
 
-From a saved route, the user can add, move, or remove geographic checkpoints on the map.
+The user may still record a GPS path and save it as a named path variant (formerly a competitive route). That geometry can later supply splits and ghost analysis for compatible journeys. It is not required before START, and it is not selected in the live flow.
 
-When checkpoints change, historical runs with sufficient telemetry should be reprocessed so the new split layout applies retroactively.
-
-This is an important product property: collected runs should become more useful over time rather than being locked to the setup choices made on day one.
+Checkpoints may be added to a path variant immediately or later. Historical compatible attempts are reprocessed against the new layout, re-anchored to each attempt's journey timing window.
 
 ## Starting an attempt
 
-A route detail screen should expose the useful pre-run context, for example:
+Home exposes one global **START** and a list of journey pools that already have history.
 
 ```text
-Home → Work
-PB                  12:42
-Last                 13:04
-Attempts                28
-Sum of Best          11:58
+START
+Walk (settings)
 
-[ ARM RUN ]
+JOURNEYS
+Home → Work          PB 12:42
+Work → Home          PB 13:10
 ```
 
-Tapping **ARM RUN** does not start official timing.
+There is no pre-run route picker, destination picker, or mode chooser on START. Transportation mode is the persisted active mode from Settings.
+
+Tapping **START** does not start official timing.
 
 The user should then be able to put the phone in their pocket and leave it there.
 
 ## Armed / waiting-for-start state
 
-While armed, the app observes location/movement and waits for evidence of a genuine start.
+While armed, the app observes location and evaluates active saved places.
 
-Start detection should eventually combine signals such as:
+```text
+IN START ZONE — HOME
+```
 
-- user is in/near the route start region;
-- user exits the start region;
-- movement becomes sustained rather than GPS drift;
-- speed is plausible for the route category;
-- heading/trajectory broadly follows the saved course.
+or
 
-The exact thresholds are implementation details and should be tuned from recorded data.
+```text
+OUTSIDE START ZONE
+```
 
-Important behaviors:
+Overlapping places pick the nearest center, then the lowest stable place id. The candidate is re-evaluated on every accepted sample until a qualifying departure pins the origin.
 
-- GPS drift alone should not begin an attempt.
-- Time spent locking a door, standing near the start, or unfolding the scooter should not count merely because the route was armed.
-- Detection may confirm the start after the physical event; official `started_at` should be reconstructed from the recorded samples where possible.
+Start detection is path-free:
+
+- accepted samples must pass the 45 m accuracy gate;
+- official `startedAtMs` is the interpolated outward radius crossing;
+- confirmation requires at least 4 accepted samples after that crossing and radial distance of `origin_radius + 18 m`;
+- returning inside the origin radius resets the candidate;
+- there is no maximum confirmation-time or speed requirement, so walking qualifies.
+
+GPS drift alone should not begin an attempt. Time spent locking a door near Home should not count merely because START was pressed. Detection may confirm the start after the physical event; official `started_at` is reconstructed from recorded samples.
+
+If no qualifying departure occurs within 30 minutes of START, the attempt ends as `DID NOT START` with telemetry preserved for inspect.
 
 ## Active run
 
@@ -68,99 +69,64 @@ A minimal state is enough:
 
 ```text
 RUN ACTIVE
-Home → Work
+Home → ?
 Started automatically at 08:42:13
 
-[ Cancel Run ]
+[ END & INSPECT ]  [ Cancel ]
 ```
 
-Do not make the run depend on:
+No destination is predicted. Do not make the run depend on a live timer, split deltas, checkpoint buttons, a visible map, or a manual stop.
 
-- reading a live timer;
-- watching split deltas;
-- operating checkpoint buttons;
-- keeping a map visible;
-- manually stopping the run.
+The app records location in the background. Path divergence must not fail the attempt as the wrong route.
 
-The app records location in the background and detects checkpoints automatically.
-
-## Checkpoint crossing
-
-As route progress crosses a configured checkpoint, the timing engine records the crossing time from telemetry.
-
-No user interaction is required.
-
-Checkpoint detection should tolerate ordinary GPS noise and should not require touching an exact coordinate.
+An active attempt that lasts 2 hours from official start, or that returns to the origin and stays inside it for 30 seconds after previously reaching `max(50 m, 2 × origin_radius)`, ends as `DID NOT FINISH`.
 
 ## Finish
 
-The attempt ends automatically when the finish condition is crossed while following the expected course.
+The attempt ends automatically when the first other saved place that has been seen at least `destination_radius + 10 m` outside is then crossed inbound and confirmed (3 inside samples spanning at least 2 seconds).
 
-The official finish should correspond to completing the course, not to:
+The origin is never a competitive destination.
 
-- slowing down afterward;
-- parking the scooter;
-- walking into a building;
-- taking the phone out of a pocket;
-- pressing a stop button.
+The official finish corresponds to entering that place, not to parking, walking into a building, taking the phone out, or pressing stop.
 
 After finish, background recording can stop once enough post-finish context exists to finalize the result safely.
 
 ## Post-run result
 
-The result screen is the main reward surface.
-
-A representative layout:
+The result screen is the main reward surface. The headline is always the journey official time and journey-pool PB, never a separate path-variant clock.
 
 ```text
 HOME → WORK
 12:57
 +0:15 vs PB
 4th fastest of 31 attempts
-
-              TIME       Δ PB
-Home
- ↓
-Katznelson    1:48       -0:04
-                         GOLD
- ↓
-Park          2:31       +0:19
- ↓
-Bridge        3:06       -0:07
- ↓
-Office        5:32       +0:07
-
-PB            12:42
-Today         12:57
-Sum of Best   11:58
 ```
 
-The result should emphasize what happened, not merely present raw numbers.
+If a compatible path variant exists, splits/Gold/Sum of Best/ghost may appear, re-anchored so displayed split durations sum to 12:57.
 
-Examples:
+If the path does not match a variant:
 
-- "New Gold on split 1 by 4s."
-- "Split 2 cost 19s vs your PB run."
-- "Splits 1 + 3 were 11s faster than your PB."
-- "You spent 31s stationary at this intersection."
-- "Without stopped time, this would have been your fastest moving-time attempt."
+```text
+Path analytics unavailable — different/unmatched path
+```
+
+The attempt remains valid in the Home → Work pool.
+
+The result screen can correct transportation mode. That reassigns the attempt to the matching journey pool without duplicating it.
 
 ## History
 
-A route should expose both:
+A journey pool exposes chronological and ranked attempt history. Selecting an attempt opens its analysis and debug trace.
 
-- chronological attempt history;
-- ranked attempts by official time.
-
-Selecting an attempt opens its full split/analysis detail and, later, its continuous delta/map view.
+Incomplete START sessions remain inspectable as DID NOT START / DID NOT FINISH.
 
 ## Future passive flow
 
-The long-term goal is to remove even the arming step when confidence is high enough:
+The long-term goal is to remove even the START step when confidence is high enough:
 
-1. App recognizes departure from a known route start.
-2. Movement/course matches a known category.
+1. App recognizes departure from a known saved place.
+2. Movement matches a known transportation mode.
 3. Attempt starts automatically.
-4. User opens the app only after arriving.
+4. User opens the app only after arriving at another saved place.
 
-This is intentionally not required for V0.1. The armed workflow exists so real-world data can be collected before solving passive recognition.
+This is intentionally not required for V0.1. The armed START workflow exists so real-world data can be collected before solving passive recognition.

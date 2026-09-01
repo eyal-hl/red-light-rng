@@ -1,15 +1,15 @@
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
-import { describeUnavailability, type HistoryRow, type RouteAttemptAnalysis } from '../domain/attempt-analysis';
+import { describeUnavailability, type HistoryRow } from '../domain/attempt-analysis';
 import { formatAttemptStamp, formatElapsed, formatOrdinal } from '../domain/duration';
-import type { Route } from '../domain/route';
 import { styles } from './styles';
 
 type HistoryMode = 'chronological' | 'ranked';
 
 type HistoryScreenProps = {
-  route: Route;
-  analysis: RouteAttemptAnalysis;
+  title: string;
+  rows: HistoryRow[];
+  rankedRows: HistoryRow[];
   mode: HistoryMode;
   busy: boolean;
   error: string | null;
@@ -19,8 +19,9 @@ type HistoryScreenProps = {
 };
 
 export function HistoryScreen({
-  route,
-  analysis,
+  title,
+  rows,
+  rankedRows,
   mode,
   busy,
   error,
@@ -28,15 +29,15 @@ export function HistoryScreen({
   onBack,
   onOpenAttempt,
 }: HistoryScreenProps) {
-  const rows = mode === 'ranked' ? analysis.rankedHistory : analysis.chronologicalHistory;
+  const visible = mode === 'ranked' ? rankedRows : rows;
 
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <Pressable accessibilityRole="button" onPress={onBack}>
-          <Text style={styles.kicker}>← ROUTE</Text>
+          <Text style={styles.kicker}>← JOURNEY</Text>
         </Pressable>
-        <Text style={styles.title}>{route.name}</Text>
+        <Text style={styles.title}>{title}</Text>
         <Text style={styles.subtitle}>Attempt history</Text>
         <View style={styles.toggleRow}>
           <Pressable
@@ -54,10 +55,10 @@ export function HistoryScreen({
             <Text style={styles.toggleChipText}>Ranked</Text>
           </Pressable>
         </View>
-        {rows.length === 0 ? (
-          <Text style={styles.emptyText}>No attempts to show for this layout.</Text>
+        {visible.length === 0 ? (
+          <Text style={styles.emptyText}>No attempts to show for this journey.</Text>
         ) : (
-          rows.map((row) => (
+          visible.map((row) => (
             <Pressable
               key={row.attemptId}
               accessibilityRole="button"

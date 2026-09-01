@@ -54,5 +54,19 @@ export function createExpoLocationPlatform(): LocationPlatform {
     async isUpdating() {
       return Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
     },
+    async getCurrentPosition() {
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last?.coords) {
+          return { latitude: last.coords.latitude, longitude: last.coords.longitude };
+        }
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        return { latitude: current.coords.latitude, longitude: current.coords.longitude };
+      } catch {
+        return null;
+      }
+    },
   };
 }

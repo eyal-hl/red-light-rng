@@ -74,11 +74,42 @@ export class MemoryAttemptStore implements AttemptStore {
     return latest ? cloneAttempt(latest) : null;
   }
 
+  async listAttempts(): Promise<Attempt[]> {
+    return [...this.attempts.values()]
+      .sort((a, b) => b.armedAtMs - a.armedAtMs)
+      .map((attempt) => cloneAttempt(attempt));
+  }
+
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
     return [...this.attempts.values()]
       .filter((attempt) => attempt.routeId === routeId)
       .sort((a, b) => b.armedAtMs - a.armedAtMs)
       .map((attempt) => cloneAttempt(attempt));
+  }
+
+  async listAttemptsForJourney(
+    originPlaceId: string,
+    destinationPlaceId: string,
+    transportationMode: string,
+  ): Promise<Attempt[]> {
+    return [...this.attempts.values()]
+      .filter(
+        (attempt) =>
+          attempt.originPlaceId === originPlaceId &&
+          attempt.destinationPlaceId === destinationPlaceId &&
+          attempt.transportationMode === transportationMode,
+      )
+      .sort((a, b) => b.armedAtMs - a.armedAtMs)
+      .map((attempt) => cloneAttempt(attempt));
+  }
+
+  async isPlaceReferenced(placeId: string): Promise<boolean> {
+    for (const attempt of this.attempts.values()) {
+      if (attempt.originPlaceId === placeId || attempt.destinationPlaceId === placeId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async acknowledgeResult(attemptId: string): Promise<void> {

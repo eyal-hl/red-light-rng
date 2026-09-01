@@ -6,57 +6,46 @@ The roadmap is staged around learning, not feature count. Each phase should prov
 
 Goal: prove that repeated-route speedrunning is enjoyable and that the basic timing model works in real life.
 
-### Routes
+### Optional path variants
 
-- Record a new route from GPS/location telemetry.
-- Name the route.
-- Associate a transportation mode/category.
-- Save everything locally.
-- Show the saved route on a map.
+- Record a GPS path, name it, and save it locally as optional geometry.
+- Show it on a map and edit checkpoints.
+- Historical compatible journeys can be recalculated when checkpoints change, using retained raw telemetry, re-anchored to journey start/finish.
 
-### Checkpoints / splits
+### Places
 
-- Start and finish boundaries exist automatically.
-- User can add, move, and delete geographic checkpoints on the saved route.
-- Historical runs can be recalculated when checkpoints change, using retained raw telemetry.
+- Create, name, recenter, resize, archive, and delete unused saved places.
+- Seed places from existing route endpoints on migration.
 
-### Attempts
+### Journeys
 
-- Select a saved route and tap `ARM RUN`.
-- Arming does not begin official timing.
-- Detect actual start semi-automatically from movement/course signals.
-- Record location in the background while the phone remains in a pocket.
-- Detect checkpoints automatically.
-- Detect finish automatically.
-- Cancel an armed/active attempt if needed.
-- Persist the completed attempt and raw GPS trace.
-- Material route deviation may make an attempt invalid/unranked rather than silently comparing a different course.
+- One global `START` with no route, destination, or mode picker in the live flow.
+- Detect origin from saved places; pin after a path-free qualifying departure.
+- Detect destination as the first other saved place entered after eligibility.
+- Persist completed journeys and raw GPS traces.
+- Competitive identity is origin + destination + transportation mode.
+- Different physical paths between the same endpoints remain valid.
+- Path divergence never produces a wrong-route failure.
+- Armed attempts cap at 30 minutes (`DID NOT START`); active attempts cap at 2 hours or return-to-origin (`DID NOT FINISH`).
 
 ### Results
 
-- Official total time.
-- Personal Best.
-- Delta vs PB.
-- Delta vs previous attempt.
-- Rank among historical attempts.
-- Split/segment times.
-- Segment comparison vs PB run.
-- Gold segments.
-- Sum of Best.
+- Official total time from place-boundary crossings.
+- Journey Personal Best, delta vs PB, delta vs previous, and rank.
+- Split/segment times, Gold, and Sum of Best only for a compatible path variant, summing to the headline time.
 
 ### History
 
-- Chronological run history.
-- Ranked run history.
-- Open a run for full split breakdown.
+- Chronological and ranked journey history.
+- Open a run for analysis and place-timing debug.
 
 ### Explicitly not required for V0.1
 
-- Fully passive automatic route detection.
-- Continuous route delta chart.
-- Moving/waiting-time analysis.
-- Automatic checkpoint suggestions.
-- Route variants.
+- Fully passive automatic detection with no START.
+- Home → Home competitive loops.
+- Automatic clustering/creation of new path variants.
+- Cross-path ghost/progress normalization.
+- Continuous route delta chart as a V0.1 requirement (already exists for compatible variants).
 - Time-of-day/weekday analysis.
 - Accounts/cloud/social features.
 - AI narration.
@@ -118,7 +107,7 @@ Goal: reduce setup/interaction and learn patterns from historical runs.
 ### Passive recognition
 
 - Recognize departure along a known route without requiring explicit arming when confidence is high.
-- Distinguish opposite-direction routes/categories such as Home → Work and Work → Home.
+- Distinguish opposite-direction journeys such as Home → Work and Work → Home (already separate journey pools; later work may start them without START).
 - Avoid recording unrelated movement as a run.
 
 ### Smarter course model

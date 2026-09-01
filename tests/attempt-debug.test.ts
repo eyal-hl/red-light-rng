@@ -211,8 +211,8 @@ describe('end and inspect workspace flow', () => {
     assert.equal(ended?.lifecycle, 'ended');
     assert.equal(await sessions.countSamples('id-2'), 3);
     const debug = await workspace.inspectAttempt(ended!.id);
-    assert.equal(debug?.rawSampleCount, 3);
-    assert.equal(debug?.samples.length, 3);
-    assert.equal(debug?.incompleteLabel, 'DID NOT START');
+    assert.equal(debug?.place.rawSampleCount, 3);
+    assert.equal(debug?.place.samples.length, 3);
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT START');
   });
 });

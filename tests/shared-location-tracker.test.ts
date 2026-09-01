@@ -48,6 +48,9 @@ class FakeLocationPlatform implements LocationPlatform {
   async isUpdating() {
     return this.updating;
   }
+  async getCurrentPosition() {
+    return { latitude: 32.08, longitude: 34.78 };
+  }
 }
 
 const SAMPLE_FIX = {

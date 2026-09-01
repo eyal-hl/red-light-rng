@@ -1,0 +1,334 @@
+import {
+  incompleteAttemptLabel,
+  isJourneyCompetitive,
+  officialTimeMs,
+  type Attempt,
+  type IncompleteAttemptLabel,
+} from './attempt';
+import {
+  analyzeFocusAttempt,
+  deriveAnchoredLayoutAttempt,
+  type FocusAttemptAnalysis,
+  type HistoryRow,
+} from './attempt-analysis';
+import type { LocationSample } from './location-sample';
+import type { Place } from './place';
+import { isCompatiblePathVariant } from './path-variant';
+import type { Route, TransportationMode } from './route';
+import { journeyPoolKey, journeyTitle, type JourneyPoolId } from './journey';
+
+export const PATH_ANALYTICS_UNAVAILABLE_MESSAGE = 'Path analytics unavailable — different/unmatched path';
+
+export type JourneyAttemptTrace = {
+  attempt: Attempt;
+  samples: LocationSample[];
+};
+
+export type JourneyPoolSummary = {
+  originPlaceId: string;
+  destinationPlaceId: string;
+  originName: string;
+  destinationName: string;
+  title: string;
+  transportationMode: TransportationMode;
+  rankedAttemptCount: number;
+  pbAttemptId: string | null;
+  pbTimeMs: number | null;
+  lastAttemptId: string | null;
+  lastTimeMs: number | null;
+  lastFinishedAtMs: number | null;
+};
+
+export type JourneyHistoryRow = HistoryRow & {
+  originPlaceId: string | null;
+  destinationPlaceId: string | null;
+};
+
+export type JourneyFocusAnalysis = {
+  summary: JourneyPoolSummary;
+  officialTimeMs: number | null;
+  rank: number | null;
+  isPb: boolean;
+  previousAttemptId: string | null;
+  previousTimeMs: number | null;
+  deltaVsPreviousMs: number | null;
+  pbBeforeThisTimeMs: number | null;
+  deltaVsPbMs: number | null;
+  pathAnalytics: FocusAttemptAnalysis | null;
+  pathUnavailable: boolean;
+};
+
+function competitiveTime(attempt: Attempt): number {
+  return officialTimeMs(attempt) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function compareJourneyCompetitive(a: Attempt, b: Attempt): number {
+  const aTime = competitiveTime(a);
+  const bTime = competitiveTime(b);
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+  const aStarted = a.startedAtMs ?? a.armedAtMs;
+  const bStarted = b.startedAtMs ?? b.armedAtMs;
+  if (aStarted !== bStarted) {
+    return aStarted - bStarted;
+  }
+  if (a.armedAtMs !== b.armedAtMs) {
+    return a.armedAtMs - b.armedAtMs;
+  }
+  return a.id.localeCompare(b.id);
+}
+
+function compareJourneyChronological(a: Attempt, b: Attempt): number {
+  const aTime = a.finishedAtMs ?? a.armedAtMs;
+  const bTime = b.finishedAtMs ?? b.armedAtMs;
+  if (aTime !== bTime) {
+    return bTime - aTime;
+  }
+  if (a.armedAtMs !== b.armedAtMs) {
+    return b.armedAtMs - a.armedAtMs;
+  }
+  return b.id.localeCompare(a.id);
+}
+
+export function attemptJourneyPool(attempt: Attempt): JourneyPoolId | null {
+  if (!attempt.originPlaceId || !attempt.destinationPlaceId) {
+    return null;
+  }
+  return {
+    originPlaceId: attempt.originPlaceId,
+    destinationPlaceId: attempt.destinationPlaceId,
+    transportationMode: attempt.transportationMode,
+  };
+}
+
+export function filterTracesForJourney(
+  traces: JourneyAttemptTrace[],
+  pool: JourneyPoolId,
+): JourneyAttemptTrace[] {
+  return traces.filter((trace) => {
+    const id = attemptJourneyPool(trace.attempt);
+    return (
+      id != null &&
+      id.originPlaceId === pool.originPlaceId &&
+      id.destinationPlaceId === pool.destinationPlaceId &&
+      id.transportationMode === pool.transportationMode
+    );
+  });
+}
+
+export function summarizeJourneyPool(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+): JourneyPoolSummary {
+  const inPool = filterTracesForJourney(traces, pool);
+  const competitive = inPool.map((trace) => trace.attempt).filter(isJourneyCompetitive);
+  const ranked = [...competitive].sort(compareJourneyCompetitive);
+  const chronological = [...competitive].sort(compareJourneyChronological);
+  const pb = ranked[0] ?? null;
+  const last = chronological[0] ?? null;
+  return {
+    originPlaceId: pool.originPlaceId,
+    destinationPlaceId: pool.destinationPlaceId,
+    originName: origin.name,
+    destinationName: destination.name,
+    title: journeyTitle(origin.name, destination.name),
+    transportationMode: pool.transportationMode,
+    rankedAttemptCount: competitive.length,
+    pbAttemptId: pb?.id ?? null,
+    pbTimeMs: pb ? officialTimeMs(pb) : null,
+    lastAttemptId: last?.id ?? null,
+    lastTimeMs: last ? officialTimeMs(last) : null,
+    lastFinishedAtMs: last?.finishedAtMs ?? null,
+  };
+}
+
+export function listJourneyPools(
+  traces: JourneyAttemptTrace[],
+  placesById: Map<string, Place>,
+): JourneyPoolSummary[] {
+  const keys = new Map<string, JourneyPoolId>();
+  for (const trace of traces) {
+    const pool = attemptJourneyPool(trace.attempt);
+    if (!pool) {
+      continue;
+    }
+    keys.set(journeyPoolKey(pool), pool);
+  }
+  const summaries: JourneyPoolSummary[] = [];
+  for (const pool of keys.values()) {
+    const origin = placesById.get(pool.originPlaceId);
+    const destination = placesById.get(pool.destinationPlaceId);
+    if (!origin || !destination) {
+      continue;
+    }
+    summaries.push(summarizeJourneyPool(pool, origin, destination, traces));
+  }
+  return summaries.sort((a, b) => a.title.localeCompare(b.title) || a.transportationMode.localeCompare(b.transportationMode));
+}
+
+export function journeyHistoryRows(
+  pool: JourneyPoolId,
+  traces: JourneyAttemptTrace[],
+): JourneyHistoryRow[] {
+  const inPool = filterTracesForJourney(traces, pool);
+  const competitive = inPool.map((trace) => trace.attempt).filter(isJourneyCompetitive);
+  const ranked = [...competitive].sort(compareJourneyCompetitive);
+  const rankById = new Map(ranked.map((attempt, index) => [attempt.id, index + 1]));
+  const pbId = ranked[0]?.id ?? null;
+  return inPool
+    .map((trace) => trace.attempt)
+    .filter((attempt) => isJourneyCompetitive(attempt) || attempt.lifecycle === 'ended')
+    .map((attempt) => {
+      const eligible = isJourneyCompetitive(attempt);
+      return {
+        attemptId: attempt.id,
+        armedAtMs: attempt.armedAtMs,
+        finishedAtMs: attempt.finishedAtMs,
+        officialTimeMs: officialTimeMs(attempt),
+        rank: rankById.get(attempt.id) ?? null,
+        isPb: pbId === attempt.id,
+        eligible,
+        unavailabilityReason: eligible ? null : attempt.lifecycle === 'ended' ? 'not_completed' : 'not_valid',
+        lifecycle: attempt.lifecycle,
+        incompleteLabel: incompleteAttemptLabel(attempt),
+        originPlaceId: attempt.originPlaceId,
+        destinationPlaceId: attempt.destinationPlaceId,
+      } satisfies JourneyHistoryRow;
+    })
+    .sort((a, b) => {
+      const aTime = a.finishedAtMs ?? a.armedAtMs;
+      const bTime = b.finishedAtMs ?? b.armedAtMs;
+      if (aTime !== bTime) {
+        return bTime - aTime;
+      }
+      return b.armedAtMs - a.armedAtMs;
+    });
+}
+
+function previousCompetitiveAttempt(competitive: Attempt[], focus: Attempt): Attempt | null {
+  const earlier = competitive
+    .filter((item) => item.id !== focus.id)
+    .filter((item) => compareJourneyChronological(item, focus) > 0)
+    .sort(compareJourneyChronological);
+  return earlier[0] ?? null;
+}
+
+function pbBeforeAttempt(ranked: Attempt[], focus: Attempt): Attempt | null {
+  const earlier = ranked.filter((item) => item.id !== focus.id && compareJourneyChronological(item, focus) > 0);
+  return [...earlier].sort(compareJourneyCompetitive)[0] ?? null;
+}
+
+function headlineDelta(
+  focusTimeMs: number | null,
+  currentPbTimeMs: number | null,
+  previousPbTimeMs: number | null,
+  isPb: boolean,
+): number | null {
+  if (focusTimeMs == null) {
+    return null;
+  }
+  if (isPb) {
+    if (previousPbTimeMs == null) {
+      return null;
+    }
+    return focusTimeMs - previousPbTimeMs;
+  }
+  if (currentPbTimeMs == null) {
+    return null;
+  }
+  return focusTimeMs - currentPbTimeMs;
+}
+
+export function analyzeJourneyFocus(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+  focusAttemptId: string,
+  routes: Route[],
+): JourneyFocusAnalysis | null {
+  const inPool = filterTracesForJourney(traces, pool);
+  const focusTrace = inPool.find((trace) => trace.attempt.id === focusAttemptId);
+  if (!focusTrace) {
+    return null;
+  }
+  const summary = summarizeJourneyPool(pool, origin, destination, traces);
+  const competitive = inPool.map((trace) => trace.attempt).filter(isJourneyCompetitive);
+  const ranked = [...competitive].sort(compareJourneyCompetitive);
+  const focus = focusTrace.attempt;
+  const focusTime = officialTimeMs(focus);
+  const rankIndex = ranked.findIndex((item) => item.id === focus.id);
+  const isPb = summary.pbAttemptId === focus.id;
+  const previous = previousCompetitiveAttempt(competitive, focus);
+  const pbBefore = pbBeforeAttempt(ranked, focus);
+  const variantTraces = inPool.filter((trace) => {
+    if (!isJourneyCompetitive(trace.attempt) || !trace.attempt.routeId) {
+      return false;
+    }
+    const route = routes.find((item) => item.id === trace.attempt.routeId);
+    if (!route || !trace.attempt.startedAtMs || !trace.attempt.finishedAtMs) {
+      return false;
+    }
+    return isCompatiblePathVariant(route, trace.samples, {
+      startedAtMs: trace.attempt.startedAtMs,
+      finishedAtMs: trace.attempt.finishedAtMs,
+    });
+  });
+  const focusRoute = focus.routeId ? routes.find((route) => route.id === focus.routeId) ?? null : null;
+  const focusCompatible =
+    focusRoute != null &&
+    focus.startedAtMs != null &&
+    focus.finishedAtMs != null &&
+    isCompatiblePathVariant(focusRoute, focusTrace.samples, {
+      startedAtMs: focus.startedAtMs,
+      finishedAtMs: focus.finishedAtMs,
+    });
+  const sameVariantTraces = focusRoute
+    ? variantTraces.filter((trace) => trace.attempt.routeId === focusRoute.id)
+    : [];
+  const pathAnalytics =
+    focusCompatible && focusRoute
+      ? analyzeFocusAttempt(
+          {
+            referencePath: focusRoute.referencePath,
+            startProgressMeters: focusRoute.startProgressMeters,
+            finishProgressMeters: focusRoute.finishProgressMeters,
+            startZone: focusRoute.startZone,
+            finishZone: focusRoute.finishZone,
+            checkpoints: focusRoute.checkpoints,
+          },
+          sameVariantTraces,
+          focus.id,
+          deriveAnchoredLayoutAttempt,
+        )
+      : null;
+
+  return {
+    summary,
+    officialTimeMs: focusTime,
+    rank: rankIndex >= 0 ? rankIndex + 1 : null,
+    isPb,
+    previousAttemptId: previous?.id ?? null,
+    previousTimeMs: previous ? officialTimeMs(previous) : null,
+    deltaVsPreviousMs:
+      focusTime != null && previous != null && officialTimeMs(previous) != null
+        ? focusTime - (officialTimeMs(previous) as number)
+        : null,
+    pbBeforeThisTimeMs: pbBefore ? officialTimeMs(pbBefore) : null,
+    deltaVsPbMs: headlineDelta(focusTime, summary.pbTimeMs, pbBefore ? officialTimeMs(pbBefore) : null, isPb),
+    pathAnalytics,
+    pathUnavailable: isJourneyCompetitive(focus) && pathAnalytics == null,
+  };
+}
+
+export function incompleteAttempts(traces: JourneyAttemptTrace[]): Attempt[] {
+  return traces
+    .map((trace) => trace.attempt)
+    .filter((attempt) => attempt.lifecycle === 'ended')
+    .sort((a, b) => b.armedAtMs - a.armedAtMs);
+}
+
+export type { IncompleteAttemptLabel };

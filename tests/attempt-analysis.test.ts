@@ -106,6 +106,9 @@ function detourNearStartThenFinish(
 function makeAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | 'sessionId'>): Attempt {
   return {
     routeId: 'route-1',
+    originPlaceId: 'place-home',
+    destinationPlaceId: 'place-work',
+    transportationMode: 'scooter',
     lifecycle: 'completed',
     validity: 'valid',
     armedAtMs: 1_700_000_000_000,

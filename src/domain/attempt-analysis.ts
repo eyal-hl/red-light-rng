@@ -1,5 +1,6 @@
 import { incompleteAttemptLabel, type Attempt, type IncompleteAttemptLabel } from './attempt';
 import {
+  checkpointCrossingsForWindow,
   finishTriggerProgressMeters,
   replayAttemptTrace,
   START_PROGRESS_NOISE_METERS,
@@ -46,7 +47,7 @@ export type SegmentTiming = {
 
 export type CurrentLayoutAttempt = {
   attemptId: string;
-  routeId: string;
+  routeId: string | null;
   armedAtMs: number;
   recordedFinishedAtMs: number | null;
   layoutIdentity: string;
@@ -273,9 +274,96 @@ export function deriveCurrentLayoutAttempt(
   };
 }
 
-export function analyzeRouteAttempts(course: TimingCourse, traces: AttemptTrace[]): RouteAttemptAnalysis {
+export function deriveAnchoredLayoutAttempt(
+  course: TimingCourse,
+  attempt: Attempt,
+  samples: LocationSample[],
+): CurrentLayoutAttempt {
   const layoutIdentity = courseLayoutIdentity(course);
-  const derived = traces.map((trace) => deriveCurrentLayoutAttempt(course, trace.attempt, trace.samples));
+  const specs = segmentSpecsForCourse(course);
+  const unavailable = (reason: AttemptUnavailabilityReason): CurrentLayoutAttempt => ({
+    attemptId: attempt.id,
+    routeId: attempt.routeId,
+    armedAtMs: attempt.armedAtMs,
+    recordedFinishedAtMs: attempt.finishedAtMs,
+    layoutIdentity,
+    eligible: false,
+    unavailabilityReason: reason,
+    startedAtMs: null,
+    finishedAtMs: null,
+    officialTimeMs: null,
+    movement: null,
+    waitEvents: [],
+    segments: specs.map((spec) => unavailableSegment(spec)),
+  });
+
+  if (attempt.lifecycle !== 'completed' || attempt.startedAtMs == null || attempt.finishedAtMs == null) {
+    return unavailable('not_completed');
+  }
+  if (samples.length === 0) {
+    return unavailable('missing_telemetry');
+  }
+
+  const engine = replayAttemptTrace(course, samples);
+  if (engine.accepted.length === 0) {
+    return unavailable('replay_incomplete');
+  }
+
+  const startedAtMs = attempt.startedAtMs;
+  const finishedAtMs = attempt.finishedAtMs;
+  const crossings = checkpointCrossingsForWindow(engine.accepted, course, startedAtMs, finishedAtMs);
+  const anchoredEngine: AttemptEngineState = {
+    ...engine,
+    startedAtMs,
+    finishedAtMs,
+    crossings,
+  };
+  const segments = deriveSegmentTimings(specs, interiorCheckpoints(course), anchoredEngine);
+  const officialTimeMs = Math.max(0, finishedAtMs - startedAtMs);
+  const timeline =
+    officialTimeMs > 0
+      ? analyzeAttemptMovementTimeline({
+          course,
+          samples,
+          startedAtMs,
+          finishedAtMs,
+        })
+      : { breakdown: emptyMovementBreakdown(officialTimeMs), intervals: [] };
+  const waitEvents = deriveWaitEvents({
+    intervals: timeline.intervals,
+    startedAtMs,
+    referencePath: course.referencePath,
+  });
+  return {
+    attemptId: attempt.id,
+    routeId: attempt.routeId,
+    armedAtMs: attempt.armedAtMs,
+    recordedFinishedAtMs: attempt.finishedAtMs,
+    layoutIdentity,
+    eligible: true,
+    unavailabilityReason: null,
+    startedAtMs,
+    finishedAtMs,
+    officialTimeMs,
+    movement: timeline.breakdown,
+    waitEvents,
+    segments,
+  };
+}
+
+export type LayoutAttemptDerive = (
+  course: TimingCourse,
+  attempt: Attempt,
+  samples: LocationSample[],
+) => CurrentLayoutAttempt;
+
+export function analyzeRouteAttempts(
+  course: TimingCourse,
+  traces: AttemptTrace[],
+  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
+): RouteAttemptAnalysis {
+  const layoutIdentity = courseLayoutIdentity(course);
+  const derived = traces.map((trace) => derive(course, trace.attempt, trace.samples));
   const competitive = derived.filter((item) => item.eligible && item.officialTimeMs != null);
   const ranked = [...competitive].sort(compareCompetitive);
   const chronological = [...competitive].sort(compareChronological);
@@ -340,8 +428,9 @@ export function analyzeFocusAttempt(
   course: TimingCourse,
   traces: AttemptTrace[],
   focusAttemptId: string,
+  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
 ): FocusAttemptAnalysis | null {
-  const routeAnalysis = analyzeRouteAttempts(course, traces);
+  const routeAnalysis = analyzeRouteAttempts(course, traces, derive);
   const focus = routeAnalysis.derived.find((item) => item.attemptId === focusAttemptId);
   if (!focus) {
     return null;

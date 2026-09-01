@@ -3,6 +3,10 @@ export type AppScreenKind =
   | 'home'
   | 'recording'
   | 'review'
+  | 'places'
+  | 'place-editor'
+  | 'settings'
+  | 'journey'
   | 'detail'
   | 'editor'
   | 'history'
@@ -14,6 +18,8 @@ export type SystemBackAction =
   | 'none'
   | 'leaveToHome'
   | 'cancelRecording'
+  | 'leavePlaceEditor'
+  | 'leaveDetailToJourney'
   | 'cancelEditor'
   | 'leaveHistoryToDetail'
   | 'inspectAttempt'
@@ -23,6 +29,8 @@ export type SystemBackAction =
 export type SystemBackActions = {
   leaveToHome: () => void;
   cancelRecording: () => void;
+  leavePlaceEditor: () => void;
+  leaveDetailToJourney: () => void;
   cancelEditor: () => void;
   leaveHistoryToDetail: () => void;
   inspectAttempt: () => void;
@@ -39,9 +47,15 @@ export function systemBackAction(kind: AppScreenKind): SystemBackAction {
     case 'loading':
     case 'home':
       return 'none';
-    case 'detail':
+    case 'places':
+    case 'settings':
+    case 'journey':
     case 'review':
       return 'leaveToHome';
+    case 'place-editor':
+      return 'leavePlaceEditor';
+    case 'detail':
+      return 'leaveDetailToJourney';
     case 'recording':
       return 'cancelRecording';
     case 'editor':

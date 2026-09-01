@@ -3,22 +3,23 @@ import {
   type Attempt,
   type AttemptCheckpointCrossing,
 } from '../domain/attempt';
-import {
-  replayAttemptTrace,
-  type AttemptEngineState,
-  type TimingCourse,
-} from '../domain/attempt-timing';
-import { validateCourseLayout } from '../domain/course-layout';
+import { checkpointCrossingsForWindow, replayAttemptTrace } from '../domain/attempt-timing';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
-import type { Route } from '../domain/route';
+import type { Place } from '../domain/place';
 import {
-  deriveStartZoneStatus,
-  type StartZoneStatus,
-} from '../domain/start-zone-status';
+  derivePlaceStartZoneStatus,
+  replayPlaceTrace,
+  type PlaceStartZoneStatus,
+} from '../domain/place-timing';
+import { findCompatiblePathVariant } from '../domain/path-variant';
+import type { TransportationMode } from '../domain/route';
+import { timingCourseFromRoute } from '../domain/attempt-analysis';
 import type { AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
+import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
+import type { SettingsStore } from '../persistence/settings-store';
 import type { LocationPlatform, LocationTracker } from '../tracking/location-tracker';
 
 export type ArmAttemptResult =
@@ -27,49 +28,19 @@ export type ArmAttemptResult =
 
 export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
-  startZoneStatus: StartZoneStatus;
+  startZoneStatus: PlaceStartZoneStatus;
 };
 
-function toTimingCourse(route: Route): TimingCourse {
-  return {
-    referencePath: route.referencePath,
-    startProgressMeters: route.startProgressMeters,
-    finishProgressMeters: route.finishProgressMeters,
-    startZone: route.startZone,
-    finishZone: route.finishZone,
-    checkpoints: route.checkpoints,
-  };
-}
+const LOCATING_START_ZONE: PlaceStartZoneStatus = {
+  status: 'locating',
+  placeId: null,
+  placeName: null,
+  distanceMeters: null,
+  overlapTieBreak: null,
+};
 
 function crossingId(attemptId: string, checkpointId: string): string {
   return `${attemptId}:${checkpointId}`;
-}
-
-function applyEngine(
-  attempt: Attempt,
-  route: Route,
-  samples: LocationSample[],
-): { attempt: Attempt; engine: AttemptEngineState } {
-  const engine = replayAttemptTrace(toTimingCourse(route), samples);
-  const crossings: AttemptCheckpointCrossing[] = engine.crossings.map((crossing) => ({
-    id: crossingId(attempt.id, crossing.checkpointId),
-    attemptId: attempt.id,
-    checkpointId: crossing.checkpointId,
-    checkpointName: crossing.checkpointName,
-    checkpointProgressMeters: crossing.checkpointProgressMeters,
-    crossedAtMs: crossing.crossedAtMs,
-  }));
-  return {
-    attempt: {
-      ...attempt,
-      lifecycle: engine.lifecycle,
-      validity: engine.validity,
-      startedAtMs: engine.startedAtMs,
-      finishedAtMs: engine.finishedAtMs,
-      crossings,
-    },
-    engine,
-  };
 }
 
 function terminalSessionInput(attempt: Attempt, stoppedAtMs: number): CompleteSessionInput {
@@ -92,32 +63,16 @@ export class AttemptRuntime {
     private readonly sessions: LocationSampleStore,
     private readonly routes: RouteStore,
     private readonly attempts: AttemptStore,
+    private readonly places: PlaceStore,
+    private readonly settings: SettingsStore,
     private readonly now: () => number = () => Date.now(),
     private readonly createAttemptId: () => string = createId,
   ) {}
 
-  async arm(routeId: string): Promise<ArmAttemptResult> {
-    const route = await this.routes.getRoute(routeId);
-    if (!route) {
-      return { ok: false, reason: 'This route is no longer available.' };
-    }
-    const validation = validateCourseLayout({
-      startZone: route.startZone,
-      finishZone: route.finishZone,
-      startProgressMeters: route.startProgressMeters,
-      finishProgressMeters: route.finishProgressMeters,
-      checkpoints: route.checkpoints,
-    });
-    if (!validation.valid) {
-      return { ok: false, reason: validation.reason ?? 'This course cannot be armed.' };
-    }
-    if (route.referencePath.length < 2 || route.finishProgressMeters <= route.startProgressMeters) {
-      return { ok: false, reason: 'This course cannot be armed.' };
-    }
-
+  async start(): Promise<ArmAttemptResult> {
     const active = await this.sessions.getActiveSession();
     if (active) {
-      return { ok: false, reason: 'Finish or cancel the current recording before arming a run.' };
+      return { ok: false, reason: 'Finish or cancel the current recording before starting a run.' };
     }
     const pending = await this.sessions.findPendingRouteCreation();
     if (pending) {
@@ -134,9 +89,13 @@ export class AttemptRuntime {
       return { ok: false, reason: 'Could not start attempt tracking.' };
     }
 
+    const transportationMode = await this.settings.getActiveTransportationMode();
     const attempt: Attempt = {
       id: this.createAttemptId(),
-      routeId: route.id,
+      routeId: null,
+      originPlaceId: null,
+      destinationPlaceId: null,
+      transportationMode,
       sessionId: session.id,
       lifecycle: 'armed',
       validity: 'pending',
@@ -176,12 +135,8 @@ export class AttemptRuntime {
     if (!open) {
       return null;
     }
-    const route = await this.routes.getRoute(open.routeId);
-    let next = open;
-    if (route) {
-      const samples = await this.sessions.listSamples(open.sessionId);
-      next = applyEngine(open, route, samples).attempt;
-    }
+    const samples = await this.sessions.listSamples(open.sessionId);
+    let next = await this.applyPlaceEngine(open, samples);
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
       await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
@@ -203,31 +158,23 @@ export class AttemptRuntime {
     if (!open) {
       return {
         attempt: await this.attempts.getUnacknowledgedResult(),
-        startZoneStatus: 'locating',
-      };
-    }
-    const route = await this.routes.getRoute(open.routeId);
-    if (!route) {
-      return {
-        attempt: await this.abandon(open, 'unranked'),
-        startZoneStatus: 'locating',
+        startZoneStatus: LOCATING_START_ZONE,
       };
     }
     const samples = await this.sessions.listSamples(open.sessionId);
-    const course = toTimingCourse(route);
-    const applied = applyEngine(open, route, samples);
-    const next = applied.attempt;
-    const startZoneStatus =
-      next.lifecycle === 'armed'
-        ? deriveStartZoneStatus(course, samples, applied.engine)
-        : 'locating';
+    const places = await this.placesForAttempt(open);
+    const next = await this.applyPlaceEngine(open, samples, places);
+    const engine = replayPlaceTrace(places, samples, { armedAtMs: open.armedAtMs, nowMs: this.now() });
+    const armedStatus =
+      next.lifecycle === 'armed' ? derivePlaceStartZoneStatus(places, samples, engine) : LOCATING_START_ZONE;
+
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
       await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
-      return { attempt: next, startZoneStatus };
+      return { attempt: next, startZoneStatus: armedStatus };
     }
     await this.attempts.saveAttempt(next);
-    return { attempt: next, startZoneStatus };
+    return { attempt: next, startZoneStatus: armedStatus };
   }
 
   async processActive(): Promise<Attempt | null> {
@@ -266,8 +213,122 @@ export class AttemptRuntime {
     return this.attempts.getAttempt(attemptId);
   }
 
+  async listAttempts(): Promise<Attempt[]> {
+    return this.attempts.listAttempts();
+  }
+
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
     return this.attempts.listAttemptsForRoute(routeId);
+  }
+
+  async listAttemptsForJourney(
+    originPlaceId: string,
+    destinationPlaceId: string,
+    transportationMode: TransportationMode,
+  ): Promise<Attempt[]> {
+    return this.attempts.listAttemptsForJourney(originPlaceId, destinationPlaceId, transportationMode);
+  }
+
+  async setAttemptTransportationMode(
+    attemptId: string,
+    transportationMode: TransportationMode,
+  ): Promise<Attempt | null> {
+    const attempt = await this.attempts.getAttempt(attemptId);
+    if (!attempt) {
+      return null;
+    }
+    const next: Attempt = { ...attempt, transportationMode };
+    const withVariant = await this.associateVariant(next, await this.sessions.listSamples(attempt.sessionId));
+    await this.attempts.saveAttempt(withVariant);
+    return withVariant;
+  }
+
+  private async placesForAttempt(attempt: Attempt): Promise<Place[]> {
+    const active = await this.places.listActivePlaces();
+    const extraIds = [attempt.originPlaceId, attempt.destinationPlaceId].filter(
+      (id): id is string => id != null && !active.some((place) => place.id === id),
+    );
+    const extras: Place[] = [];
+    for (const id of extraIds) {
+      const place = await this.places.getPlace(id);
+      if (place) {
+        extras.push(place);
+      }
+    }
+    return [...active, ...extras];
+  }
+
+  private async applyPlaceEngine(
+    attempt: Attempt,
+    samples: LocationSample[],
+    places?: Place[],
+  ): Promise<Attempt> {
+    const resolvedPlaces = places ?? (await this.placesForAttempt(attempt));
+    const engine = replayPlaceTrace(resolvedPlaces, samples, {
+      armedAtMs: attempt.armedAtMs,
+      nowMs: this.now(),
+    });
+    const next: Attempt = {
+      ...attempt,
+      lifecycle: engine.lifecycle,
+      validity: engine.validity,
+      originPlaceId: engine.originPlaceId,
+      destinationPlaceId: engine.destinationPlaceId,
+      startedAtMs: engine.startedAtMs,
+      finishedAtMs: engine.finishedAtMs,
+    };
+    if (next.lifecycle === 'completed' && next.startedAtMs != null && next.finishedAtMs != null) {
+      return this.associateVariant(next, samples);
+    }
+    return next;
+  }
+
+  private async associateVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
+    if (
+      attempt.originPlaceId == null ||
+      attempt.destinationPlaceId == null ||
+      attempt.startedAtMs == null ||
+      attempt.finishedAtMs == null
+    ) {
+      return { ...attempt, routeId: null, crossings: [] };
+    }
+    const origin = await this.places.getPlace(attempt.originPlaceId);
+    const destination = await this.places.getPlace(attempt.destinationPlaceId);
+    if (!origin || !destination) {
+      return { ...attempt, routeId: null, crossings: [] };
+    }
+    const routes = await this.routes.listRoutes();
+    const variant = findCompatiblePathVariant(
+      routes,
+      origin,
+      destination,
+      attempt.transportationMode,
+      samples,
+      { startedAtMs: attempt.startedAtMs, finishedAtMs: attempt.finishedAtMs },
+    );
+    if (!variant) {
+      return { ...attempt, routeId: null, crossings: [] };
+    }
+    const course = timingCourseFromRoute(variant);
+    const engine = replayAttemptTrace(course, samples);
+    const crossings: AttemptCheckpointCrossing[] = checkpointCrossingsForWindow(
+      engine.accepted,
+      course,
+      attempt.startedAtMs,
+      attempt.finishedAtMs,
+    ).map((crossing) => ({
+      id: crossingId(attempt.id, crossing.checkpointId),
+      attemptId: attempt.id,
+      checkpointId: crossing.checkpointId,
+      checkpointName: crossing.checkpointName,
+      checkpointProgressMeters: crossing.checkpointProgressMeters,
+      crossedAtMs: crossing.crossedAtMs,
+    }));
+    return {
+      ...attempt,
+      routeId: variant.id,
+      crossings,
+    };
   }
 
   private async abandon(open: Attempt, validity: 'unranked'): Promise<Attempt> {

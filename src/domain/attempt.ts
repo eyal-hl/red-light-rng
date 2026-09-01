@@ -1,3 +1,5 @@
+import type { TransportationMode } from './route';
+
 export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 'abandoned' | 'ended';
 
 export type AttemptValidity = 'pending' | 'valid' | 'unranked';
@@ -13,7 +15,10 @@ export type AttemptCheckpointCrossing = {
 
 export type Attempt = {
   id: string;
-  routeId: string;
+  routeId: string | null;
+  originPlaceId: string | null;
+  destinationPlaceId: string | null;
+  transportationMode: TransportationMode;
   sessionId: string;
   lifecycle: AttemptLifecycle;
   validity: AttemptValidity;
@@ -37,6 +42,17 @@ export function officialTimeMs(attempt: Attempt): number | null {
 
 export function isOfficialAttempt(attempt: Attempt): boolean {
   return attempt.lifecycle === 'completed' && attempt.validity === 'valid';
+}
+
+export function isJourneyCompetitive(attempt: Attempt): boolean {
+  return (
+    attempt.lifecycle === 'completed' &&
+    attempt.validity === 'valid' &&
+    attempt.originPlaceId != null &&
+    attempt.destinationPlaceId != null &&
+    attempt.startedAtMs != null &&
+    attempt.finishedAtMs != null
+  );
 }
 
 export type IncompleteAttemptLabel = 'DID NOT START' | 'DID NOT FINISH';

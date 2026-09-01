@@ -41,18 +41,22 @@ The initial use case is travel by electric scooter. The product should not requi
 ## DEC-003 — Armed automatic recording before passive detection
 
 **Status:** Accepted  
-**Date:** 2026-08-14
+**Date:** 2026-08-14  
+**Updated:** 2026-09-01
 
 ### Decision
-V0.1 requires the user to select/arm a route before travel. Arming begins observation but does not begin official timing. Actual start and finish are detected from route/location behavior.
+V0.1 requires an explicit **START** before travel. START begins observation but does not begin official timing. Actual start and finish are detected from saved-place geometry and location behavior, not from selecting a route, destination, or transportation mode in the live flow.
+
+There is one global START. The app evaluates active saved places, shows `IN START ZONE — <PLACE>` or `OUTSIDE START ZONE`, and pins the origin only after a qualifying path-free departure. The destination is the first other saved place that becomes eligible and is then entered. Fully passive recognition with no START remains a later milestone.
 
 ### Why
-This dramatically reduces ambiguity while preserving the important phone-in-pocket experience. Fully passive route recognition can come later after real data exists.
+This dramatically reduces ambiguity while preserving the phone-in-pocket experience. Fully passive route recognition can come later after real data exists. Requiring a pre-run route picker would fight the product goal: get from meaningful point A to meaningful point B as fast as possible, on any physical path.
 
 ### Consequences
 - Run lifecycle includes an `armed/waiting for start` state.
 - Arming time is not the run start time.
-- Fully automatic route recognition belongs to a later milestone.
+- Official competitive identity is a directional journey: origin place + destination place + transportation mode.
+- Fully automatic recognition without START belongs to a later milestone.
 
 ---
 
@@ -103,25 +107,31 @@ Scooter, bicycle, walking, running, and other modes must not compete against one
 They are fundamentally different categories, analogous to separate speedrun categories.
 
 ### Consequences
-- Transportation mode is part of route/category identity.
+- Transportation mode is part of journey/category identity (`origin_place_id + destination_place_id + transportation_mode`).
 - PBs, Golds, rankings, and Sum of Best are calculated within the relevant category.
+- The live START flow does not choose a mode; a persisted active mode is used and can be corrected after the run.
 
 ---
 
-## DEC-007 — Materially different courses should not share a PB
+## DEC-007 — Path variants are optional analytics, not competitive identity
 
 **Status:** Accepted  
-**Date:** 2026-08-14
+**Date:** 2026-08-14  
+**Updated:** 2026-09-01  
+**Supersedes:** the earlier rule that material course deviation invalidates/unranks an otherwise valid A→B attempt.
 
 ### Decision
-A materially deviated course should not silently count against the same route PB. V0.1 may mark such attempts invalid/unranked; later versions may learn recurring route variants as separate categories.
+A materially different physical path between the same saved-place endpoints must still count in the same directional journey + mode PB/rank/history pool.
+
+Existing route/course geometry remains as an optional **path variant**. Compatible-path analytics (splits, Gold, Sum of Best, ghost, wait/movement that require matched progress) may be attached when the path matches a known variant, re-anchored to the journey `startedAtMs`/`finishedAtMs`. Failure to match a variant means only **path-specific analytics unavailable**. It must never produce a user-facing wrong-route failure or remove the attempt from the journey leaderboard.
 
 ### Why
-Comparing different courses undermines the speedrun model.
+The competitive product is endpoint speedrunning: get from A to B as fast as possible. Comparing only traces that follow one polyline would punish ordinary street choice and GPS noise.
 
 ### Consequences
-- Course matching/tolerance is part of run validity.
-- Route variants are explicitly a later product feature.
+- Journey official time is always the path-free endpoint window.
+- Path-variant analytics are secondary and must not use a second hidden timing clock.
+- Automatic clustering of new path variants is out of scope until a later ticket.
 
 ---
 

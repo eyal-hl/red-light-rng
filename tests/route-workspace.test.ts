@@ -2,13 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { applyMigrations } from '../src/persistence/migrations';
-import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
-import { AttemptRuntime } from '../src/product/attempt-runtime';
-import { RouteWorkspace } from '../src/product/route-workspace';
-import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
-import { TrackingSessionService } from '../src/tracking/tracking-session-service';
 import {
   addCheckpointFromPending,
   createCourseEditorDraft,
@@ -20,7 +15,7 @@ import {
 import { pointAtProgress } from '../src/domain/path-projection';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 import { movingTrace } from './helpers/samples';
-import { createMemoryWorkspace, FakeLocationPlatform } from './helpers/workspace';
+import { createMemoryWorkspace, createSqliteWorkspace } from './helpers/workspace';
 
 describe('RouteWorkspace', () => {
   it('saves derived route geometry separately from raw telemetry and keeps source samples after delete', async () => {
@@ -107,29 +102,12 @@ describe('RouteWorkspace', () => {
   it('persists a saved route through a sqlite reload of the same database', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    const sessions = new SqliteLocationSampleStore(async () => sql);
-    const routes = new SqliteRouteStore(async () => sql);
-    const attemptStore = new SqliteAttemptStore(async () => sql);
-    const platform = new FakeLocationPlatform();
-    const trackingSessions = new TrackingSessionService(sessions, () => 'sql-session');
-    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const attemptRuntime = new AttemptRuntime(
-      tracker,
-      platform,
-      sessions,
-      routes,
-      attemptStore,
-      () => 1_700_000_100_000,
-      () => 'sql-attempt',
-    );
-    const workspace = new RouteWorkspace(
-      tracker,
-      sessions,
-      routes,
-      attemptRuntime,
-      () => 1_700_000_100_000,
-      () => 'sql-route',
-    );
+    const { workspace, sessions } = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'sql-session',
+      routeId: 'sql-route',
+      attemptId: 'sql-attempt',
+    });
 
     await workspace.startRouteRecording();
     await sessions.appendSamples(movingTrace({ sessionId: 'sql-session', points: 14, stepMeters: 18 }));
@@ -150,29 +128,12 @@ describe('RouteWorkspace', () => {
   it('deletes sqlite route rows and cascaded reference points while keeping source samples', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    const sessions = new SqliteLocationSampleStore(async () => sql);
-    const routes = new SqliteRouteStore(async () => sql);
-    const attemptStore = new SqliteAttemptStore(async () => sql);
-    const platform = new FakeLocationPlatform();
-    const trackingSessions = new TrackingSessionService(sessions, () => 'sql-session');
-    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const attemptRuntime = new AttemptRuntime(
-      tracker,
-      platform,
-      sessions,
-      routes,
-      attemptStore,
-      () => 1_700_000_100_000,
-      () => 'sql-attempt',
-    );
-    const workspace = new RouteWorkspace(
-      tracker,
-      sessions,
-      routes,
-      attemptRuntime,
-      () => 1_700_000_100_000,
-      () => 'sql-route',
-    );
+    const { workspace, sessions } = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'sql-session',
+      routeId: 'sql-route',
+      attemptId: 'sql-attempt',
+    });
 
     await workspace.startRouteRecording();
     await sessions.appendSamples(movingTrace({ sessionId: 'sql-session', points: 14, stepMeters: 18 }));

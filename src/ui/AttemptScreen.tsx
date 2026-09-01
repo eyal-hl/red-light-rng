@@ -2,32 +2,34 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import { formatTimeOfDay } from '../domain/duration';
-import type { Route } from '../domain/route';
-import type { StartZoneStatus } from '../domain/start-zone-status';
+import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import { styles } from './styles';
 
 type AttemptScreenProps = {
-  route: Route | null;
+  originName: string | null;
   attempt: Attempt;
-  startZoneStatus: StartZoneStatus;
+  startZoneStatus: PlaceStartZoneStatus;
   busy: boolean;
   error: string | null;
   onEndAndInspect: () => void;
   onCancel: () => void;
 };
 
-function startZoneLabel(status: StartZoneStatus): string {
-  if (status === 'inside') {
+function startZoneLabel(status: PlaceStartZoneStatus): string {
+  if (status.status === 'inside' && status.placeName) {
+    return `IN START ZONE — ${status.placeName.toUpperCase()}`;
+  }
+  if (status.status === 'inside') {
     return 'IN START ZONE';
   }
-  if (status === 'outside') {
+  if (status.status === 'outside') {
     return 'OUTSIDE START ZONE';
   }
   return 'LOCATING…';
 }
 
 export function AttemptScreen({
-  route,
+  originName,
   attempt,
   startZoneStatus,
   busy,
@@ -36,22 +38,20 @@ export function AttemptScreen({
   onCancel,
 }: AttemptScreenProps) {
   const armed = attempt.lifecycle === 'armed';
+  const activeTitle = originName ? `${originName} → ?` : 'Journey';
 
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.kicker}>{armed ? 'ARMED' : 'RUN ACTIVE'}</Text>
-        <Text style={styles.title}>
-          {armed ? 'Waiting for start' : route?.name ?? 'Attempt'}
-        </Text>
+        <Text style={styles.title}>{armed ? 'Waiting for start' : activeTitle}</Text>
         {armed ? (
           <Text style={styles.subtitle}>
-            {route?.name ?? 'Saved route'}. Put the phone away. Official timing starts after genuine
-            departure.
+            Put the phone away. Official timing starts after genuine departure from a saved place.
           </Text>
         ) : (
           <View>
-            <Text style={styles.subtitle}>{route?.name ?? 'Saved route'}</Text>
+            <Text style={styles.subtitle}>{activeTitle}</Text>
             {attempt.startedAtMs != null ? (
               <Text style={styles.statusText}>
                 Started automatically at {formatTimeOfDay(attempt.startedAtMs)}
@@ -67,9 +67,9 @@ export function AttemptScreen({
             <View
               style={[
                 attemptStyles.startZoneStatusDot,
-                startZoneStatus === 'inside'
+                startZoneStatus.status === 'inside'
                   ? attemptStyles.startZoneStatusDotInside
-                  : startZoneStatus === 'outside'
+                  : startZoneStatus.status === 'outside'
                     ? attemptStyles.startZoneStatusDotOutside
                     : attemptStyles.startZoneStatusDotLocating,
               ]}
@@ -77,9 +77,9 @@ export function AttemptScreen({
             <Text
               style={[
                 attemptStyles.startZoneStatusText,
-                startZoneStatus === 'inside'
+                startZoneStatus.status === 'inside'
                   ? attemptStyles.startZoneStatusTextInside
-                  : startZoneStatus === 'outside'
+                  : startZoneStatus.status === 'outside'
                     ? attemptStyles.startZoneStatusTextOutside
                     : attemptStyles.startZoneStatusTextLocating,
               ]}

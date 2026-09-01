@@ -51,6 +51,9 @@ describe('attempt persistence', () => {
     await attempts.createAttempt({
       id: 'attempt-1',
       routeId: route.id,
+      originPlaceId: null,
+      destinationPlaceId: null,
+      transportationMode: 'scooter',
       sessionId: 'attempt-session',
       lifecycle: 'completed',
       validity: 'valid',
@@ -88,7 +91,7 @@ describe('attempt persistence', () => {
     assert.doesNotMatch(fk?.sql ?? '', /route_checkpoint/);
   });
 
-  it('deletes attempt rows with the route while keeping the attempt recording samples', async () => {
+  it('keeps attempt rows when a path-variant route is deleted', async () => {
     const sql = await insertSourceSession('source-1');
     const routes = new SqliteRouteStore(async () => sql);
     const attempts = new SqliteAttemptStore(async () => sql);
@@ -97,6 +100,9 @@ describe('attempt persistence', () => {
     await attempts.createAttempt({
       id: 'attempt-1',
       routeId: route.id,
+      originPlaceId: null,
+      destinationPlaceId: null,
+      transportationMode: 'scooter',
       sessionId: 'attempt-session',
       lifecycle: 'completed',
       validity: 'valid',
@@ -107,7 +113,9 @@ describe('attempt persistence', () => {
       crossings: [],
     });
     await routes.deleteRoute(route.id);
-    assert.equal(await attempts.getAttempt('attempt-1'), null);
+    const remaining = await attempts.getAttempt('attempt-1');
+    assert.equal(remaining?.id, 'attempt-1');
+    assert.equal(remaining?.routeId, null);
     const session = await sql.getFirst<{ id: string }>('SELECT id FROM tracking_session WHERE id = ?', [
       'attempt-session',
     ]);
@@ -118,7 +126,7 @@ describe('attempt persistence', () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
     const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(version?.user_version, 4);
+    assert.equal(version?.user_version, 5);
     const attemptTable = await sql.getFirst<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attempt'`,
     );
