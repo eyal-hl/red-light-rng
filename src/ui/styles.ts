@@ -364,6 +364,44 @@ export const styles = StyleSheet.create({
   waitComparisonLess: {
     color: '#7dcea0',
   },
+  explanationSection: {
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  explanationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  explanationChildRow: {
+    paddingLeft: 16,
+    marginBottom: 4,
+  },
+  explanationDuration: {
+    color: '#f5f5f5',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  explanationChildDuration: {
+    color: '#c5c8ce',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  explanationLabel: {
+    color: '#c5c8ce',
+    fontSize: 15,
+    marginLeft: 12,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  explanationChildLabel: {
+    color: '#9aa0a6',
+    fontSize: 13,
+    marginLeft: 12,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
   ghostChartSection: {
     marginBottom: 8,
   },
