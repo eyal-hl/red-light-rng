@@ -1,5 +1,6 @@
 import { haversineMeters, type LatLng } from './geo';
 import {
+  PLACE_ROUTE_MATCH_DISTANCE_METERS,
   PLACE_SEED_CENTER_TOLERANCE_METERS,
   PLACE_SEED_RADIUS_TOLERANCE_METERS,
   type Place,
@@ -71,6 +72,39 @@ function matchingExistingPlace(places: Place[], endpoint: SeedEndpoint): Place |
   })[0] ?? null;
 }
 
+/**
+ * Live route/path-variant identity: radius and route-derived names are not identity.
+ * Prefer the nearest active Place within 25 m; otherwise the nearest archived Place.
+ * Stable id breaks exact distance ties.
+ */
+export function findPlaceForRouteEndpoint(
+  places: readonly Place[],
+  center: LatLng,
+  maxDistanceMeters: number = PLACE_ROUTE_MATCH_DISTANCE_METERS,
+): Place | null {
+  const matches = places.filter(
+    (place) => haversineMeters(place.center, center) <= maxDistanceMeters,
+  );
+  if (matches.length === 0) {
+    return null;
+  }
+  return (
+    [...matches].sort((a, b) => {
+      const aActive = a.status === 'active' ? 0 : 1;
+      const bActive = b.status === 'active' ? 0 : 1;
+      if (aActive !== bActive) {
+        return aActive - bActive;
+      }
+      const distanceA = haversineMeters(a.center, center);
+      const distanceB = haversineMeters(b.center, center);
+      if (distanceA !== distanceB) {
+        return distanceA - distanceB;
+      }
+      return a.id.localeCompare(b.id);
+    })[0] ?? null
+  );
+}
+
 export function ensurePlacesForRoute(
   existingPlaces: Place[],
   route: Route,
@@ -103,7 +137,7 @@ export function ensurePlacesForRoute(
   let startPlaceId = '';
   let finishPlaceId = '';
   for (const endpoint of endpoints) {
-    const existing = matchingExistingPlace(known, endpoint);
+    const existing = findPlaceForRouteEndpoint(known, endpoint.center);
     const place =
       existing ??
       ({

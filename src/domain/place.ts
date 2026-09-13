@@ -20,6 +20,10 @@ export type Place = {
 export const DEFAULT_PLACE_RADIUS_METERS = DEFAULT_ZONE_RADIUS_METERS;
 export const PLACE_SEED_CENTER_TOLERANCE_METERS = 10;
 export const PLACE_SEED_RADIUS_TOLERANCE_METERS = 10;
+/** Migration-only duplicate repair: complete-linkage neighborhood, ignoring radius. */
+export const PLACE_REPAIR_DISTANCE_METERS = 25;
+/** Live route/path-variant sync: match an existing Place by center only. */
+export const PLACE_ROUTE_MATCH_DISTANCE_METERS = 25;
 
 export const INVALID_PLACE_NAME_REASON = 'Every place needs a name.';
 export const INVALID_PLACE_RADIUS_REASON = `Place radius must be between ${MIN_ZONE_RADIUS_METERS} and ${MAX_ZONE_RADIUS_METERS} m.`;
@@ -57,4 +61,20 @@ export function validatePlaceInput(input: { name: string; radiusMeters: number }
 
 export function isActivePlace(place: Place): boolean {
   return place.status === 'active';
+}
+
+export function partitionPlacesByStatus(places: readonly Place[]): {
+  active: Place[];
+  archived: Place[];
+} {
+  const active: Place[] = [];
+  const archived: Place[] = [];
+  for (const place of places) {
+    if (place.status === 'archived') {
+      archived.push(place);
+    } else {
+      active.push(place);
+    }
+  }
+  return { active, archived };
 }

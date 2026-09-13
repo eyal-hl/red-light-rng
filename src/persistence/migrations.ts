@@ -1,4 +1,6 @@
 import { pathDistanceMeters } from '../domain/geo';
+import type { Place } from '../domain/place';
+import { planPlaceDuplicateRepair, rewriteRepairedPlaceId } from '../domain/place-repair';
 import { seedPlacesFromRoutes } from '../domain/place-seeding';
 import type { Route, TransportationMode } from '../domain/route';
 import {
@@ -399,6 +401,56 @@ export const MIGRATIONS: Migration[] = [
             row.id,
           ],
         );
+      }
+    },
+  },
+  {
+    version: 8,
+    async up(sql) {
+      const rows = await sql.getAll<{
+        id: string;
+        name: string;
+        latitude: number;
+        longitude: number;
+        radius_meters: number;
+        status: string;
+        created_at_ms: number;
+      }>('SELECT * FROM place');
+      const places: Place[] = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        center: { latitude: row.latitude, longitude: row.longitude },
+        radiusMeters: row.radius_meters,
+        status: row.status === 'archived' ? 'archived' : 'active',
+        createdAtMs: row.created_at_ms,
+      }));
+      const plan = planPlaceDuplicateRepair(places);
+      if (plan.obsoletePlaceIds.length === 0) {
+        return;
+      }
+
+      const attempts = await sql.getAll<{
+        id: string;
+        origin_place_id: string | null;
+        destination_place_id: string | null;
+      }>('SELECT id, origin_place_id, destination_place_id FROM attempt');
+      for (const attempt of attempts) {
+        const originPlaceId = rewriteRepairedPlaceId(attempt.origin_place_id, plan);
+        const destinationPlaceId = rewriteRepairedPlaceId(attempt.destination_place_id, plan);
+        if (
+          originPlaceId === attempt.origin_place_id &&
+          destinationPlaceId === attempt.destination_place_id
+        ) {
+          continue;
+        }
+        await sql.run(
+          'UPDATE attempt SET origin_place_id = ?, destination_place_id = ? WHERE id = ?',
+          [originPlaceId, destinationPlaceId, attempt.id],
+        );
+      }
+
+      for (const placeId of plan.obsoletePlaceIds) {
+        await sql.run('DELETE FROM place WHERE id = ?', [placeId]);
       }
     },
   },

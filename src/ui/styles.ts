@@ -70,6 +70,9 @@ export const styles = StyleSheet.create({
     letterSpacing: 1.1,
     marginBottom: 12,
   },
+  archivedSection: {
+    marginTop: 8,
+  },
   emptyText: {
     color: '#9aa0a6',
     fontSize: 15,
