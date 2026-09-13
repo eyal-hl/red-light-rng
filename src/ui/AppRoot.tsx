@@ -32,6 +32,7 @@ import { ReviewScreen } from './ReviewScreen';
 import { RouteDetailScreen } from './RouteDetailScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { styles } from './styles';
+import { resolveAttemptDisplayRoute } from './attempt-display-route';
 import { handleSystemBack, type AppScreenKind } from './system-back';
 
 const LOCATING_ZONE: PlaceStartZoneStatus = {
@@ -147,12 +148,7 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const showAttemptResult = useCallback(
     async (attempt: Attempt) => {
-      if (attempt.routeId) {
-        const route = await workspace.getRoute(attempt.routeId);
-        setSelectedRoute(route);
-      } else {
-        setSelectedRoute(null);
-      }
+      setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
       let focus: JourneyFocusAnalysis | null = null;
       if (attempt.originPlaceId && attempt.destinationPlaceId) {
         const analyzed = await workspace.analyzeJourney(
@@ -548,6 +544,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError('This attempt is no longer available.');
           return;
         }
+        setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
         const analyzed = await workspace.analyzeJourney(screen.pool, attemptId);
         const debug = await workspace.inspectAttempt(attemptId);
         setAttemptResult(attempt);

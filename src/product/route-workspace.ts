@@ -247,6 +247,7 @@ export class RouteWorkspace {
     await this.routes.createRoute(route);
     await this.sessions.setReviewDisposition(sessionId, 'saved');
     await this.syncPlacesForRoute(route);
+    await this.attempts.recomputeAllPathVariants();
     return { ok: true, route };
   }
 

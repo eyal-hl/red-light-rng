@@ -118,4 +118,80 @@ describe('path variant persistence', () => {
     assert.equal(loaded?.pathVariants.length, 0);
     assert.equal(loaded?.summary.rankedAttemptCount, 3);
   });
+
+  it('assigns unique compatible attempts when an explicit path variant is saved', async () => {
+    const { workspace, sessions, attempts, places } = createMemoryWorkspace({
+      now: () => 9_000,
+    });
+    await places.createPlace(HOME);
+    await places.createPlace(WORK);
+
+    const attemptSamples = pathSamples('session-existing', 0);
+    sessions.seedSession(
+      {
+        id: attemptSamples[0]!.sessionId,
+        startedAtMs: attemptSamples[0]!.recordedAtMs,
+        stoppedAtMs: attemptSamples[attemptSamples.length - 1]!.recordedAtMs,
+        isActive: false,
+        purpose: 'attempt',
+        captureOutcome: 'finished',
+        reviewDisposition: 'saved',
+        lastSampleAtMs: attemptSamples[attemptSamples.length - 1]!.recordedAtMs,
+        backgroundPermissionConfirmed: true,
+      },
+      attemptSamples,
+    );
+    await attempts.createAttempt({
+      id: 'attempt-existing',
+      routeId: null,
+      originPlaceId: HOME.id,
+      destinationPlaceId: WORK.id,
+      transportationMode: 'scooter',
+      sessionId: attemptSamples[0]!.sessionId,
+      lifecycle: 'completed',
+      validity: 'valid',
+      armedAtMs: attemptSamples[0]!.recordedAtMs - 5_000,
+      startedAtMs: attemptSamples[0]!.recordedAtMs,
+      finishedAtMs: attemptSamples[attemptSamples.length - 1]!.recordedAtMs,
+      resultAcknowledged: true,
+      crossings: [],
+    });
+
+    const before = await workspace.loadJourney({
+      originPlaceId: HOME.id,
+      destinationPlaceId: WORK.id,
+      transportationMode: 'scooter',
+    });
+    assert.equal(before?.pathVariants.length, 0);
+    assert.equal(before?.summary.rankedAttemptCount, 1);
+    assert.ok(before?.summary.pbTimeMs != null);
+    assert.equal((await attempts.getAttempt('attempt-existing'))?.routeId, null);
+
+    await workspace.startRouteRecording();
+    await sessions.appendSamples(pathSamples('id-1', 0));
+    await workspace.finishRecording();
+    const saved = await workspace.saveRoute('id-1', 'Main road', 'scooter');
+    assert.equal(saved.ok, true);
+    if (!saved.ok) {
+      return;
+    }
+
+    const assigned = await attempts.getAttempt('attempt-existing');
+    assert.equal(assigned?.routeId, saved.route.id);
+    assert.equal(assigned?.originPlaceId, HOME.id);
+    assert.equal(assigned?.destinationPlaceId, WORK.id);
+    assert.equal(assigned?.validity, 'valid');
+
+    const after = await workspace.loadJourney({
+      originPlaceId: HOME.id,
+      destinationPlaceId: WORK.id,
+      transportationMode: 'scooter',
+    });
+    assert.equal(after?.pathVariants.length, 1);
+    assert.equal(after?.pathVariants[0]?.route.id, saved.route.id);
+    assert.equal(after?.pathVariants[0]?.attemptCount, 1);
+    assert.equal(after?.summary.rankedAttemptCount, before?.summary.rankedAttemptCount);
+    assert.equal(after?.summary.pbTimeMs, before?.summary.pbTimeMs);
+    assert.equal(await sessions.countSamples('session-existing'), attemptSamples.length);
+  });
 });
