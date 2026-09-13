@@ -10,6 +10,7 @@ import {
 } from '../domain/course-editor';
 import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import { selectJourneyPathVariant } from '../domain/path-variant';
 import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
@@ -77,6 +78,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [originPlace, setOriginPlace] = useState<Place | null>(null);
   const [destinationPlace, setDestinationPlace] = useState<Place | null>(null);
   const [journeySummary, setJourneySummary] = useState<JourneyPoolSummary | null>(null);
+  const [journeyStatistics, setJourneyStatistics] = useState<JourneyPoolStatistics>(() =>
+    computeJourneyStatistics([], 0),
+  );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
   const [originName, setOriginName] = useState<string | null>(null);
@@ -110,6 +114,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setOriginPlace(loaded.origin);
       setDestinationPlace(loaded.destination);
       setJourneySummary(loaded.summary);
+      setJourneyStatistics(loaded.statistics);
       setJourneyHistory(loaded.history);
       const variant = selectJourneyPathVariant(
         loaded.routes,
@@ -980,6 +985,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           origin={originPlace}
           destination={destinationPlace}
           summary={journeySummary}
+          statistics={journeyStatistics}
           history={journeyHistory}
           pathVariant={selectedRoute}
           busy={busy}
@@ -1047,6 +1053,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'history' && journeySummary ? (
         <HistoryScreen
           title={journeySummary.title}
+          statistics={journeyStatistics}
           rows={journeyHistory}
           rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
           mode={historyMode}

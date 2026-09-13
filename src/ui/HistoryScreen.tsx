@@ -2,12 +2,15 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { describeUnavailability, type HistoryRow } from '../domain/attempt-analysis';
 import { formatAttemptStamp, formatElapsed, formatOrdinal } from '../domain/duration';
+import type { JourneyPoolStatistics } from '../domain/journey-statistics';
+import { JourneyStatisticsDashboard } from './JourneyStatisticsDashboard';
 import { styles } from './styles';
 
 type HistoryMode = 'chronological' | 'ranked';
 
 type HistoryScreenProps = {
   title: string;
+  statistics: JourneyPoolStatistics;
   rows: HistoryRow[];
   rankedRows: HistoryRow[];
   mode: HistoryMode;
@@ -20,6 +23,7 @@ type HistoryScreenProps = {
 
 export function HistoryScreen({
   title,
+  statistics,
   rows,
   rankedRows,
   mode,
@@ -39,6 +43,7 @@ export function HistoryScreen({
         </Pressable>
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.subtitle}>Attempt history</Text>
+        <JourneyStatisticsDashboard statistics={statistics} />
         <View style={styles.toggleRow}>
           <Pressable
             accessibilityRole="button"

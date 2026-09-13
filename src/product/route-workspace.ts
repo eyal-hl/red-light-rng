@@ -33,6 +33,7 @@ import {
   type JourneyHistoryRow,
   type JourneyPoolSummary,
 } from '../domain/journey-analysis';
+import { computeJourneyPoolStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPoolId } from '../domain/journey';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
@@ -479,6 +480,7 @@ export class RouteWorkspace {
     origin: Place;
     destination: Place;
     summary: JourneyPoolSummary;
+    statistics: JourneyPoolStatistics;
     history: JourneyHistoryRow[];
     routes: Route[];
   } | null> {
@@ -493,6 +495,7 @@ export class RouteWorkspace {
       origin,
       destination,
       summary: summarizeJourneyPool(pool, origin, destination, traces),
+      statistics: computeJourneyPoolStatistics(pool, traces, this.now()),
       history: journeyHistoryRows(pool, traces),
       routes,
     };

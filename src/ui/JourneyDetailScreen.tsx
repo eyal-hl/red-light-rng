@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { formatElapsed } from '../domain/duration';
 import { placeZone } from '../domain/place';
 import type { JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import type { JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { Place } from '../domain/place';
 import {
   transportationModeIcon,
@@ -10,12 +11,14 @@ import {
   type Route,
 } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
+import { durationOrDash, JourneyStatRow, JourneyStatisticsDashboard } from './JourneyStatisticsDashboard';
 import { styles } from './styles';
 
 type JourneyDetailScreenProps = {
   origin: Place;
   destination: Place;
   summary: JourneyPoolSummary;
+  statistics: JourneyPoolStatistics;
   history: JourneyHistoryRow[];
   pathVariant: Route | null;
   busy: boolean;
@@ -29,6 +32,7 @@ export function JourneyDetailScreen({
   origin,
   destination,
   summary,
+  statistics,
   history,
   pathVariant,
   busy,
@@ -56,22 +60,10 @@ export function JourneyDetailScreen({
             checkpoints={[]}
           />
         </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>PB</Text>
-          <Text style={styles.statValue}>
-            {summary.pbTimeMs == null ? '—' : formatElapsed(summary.pbTimeMs)}
-          </Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Last</Text>
-          <Text style={styles.statValue}>
-            {summary.lastTimeMs == null ? '—' : formatElapsed(summary.lastTimeMs)}
-          </Text>
-        </View>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Attempts</Text>
-          <Text style={styles.statValue}>{summary.rankedAttemptCount}</Text>
-        </View>
+        <JourneyStatRow label="PB" value={durationOrDash(statistics.pbTimeMs ?? summary.pbTimeMs)} />
+        <JourneyStatRow label="Last" value={durationOrDash(statistics.latestTimeMs ?? summary.lastTimeMs)} />
+        <JourneyStatRow label="Attempts" value={String(statistics.validAttemptCount)} />
+        <JourneyStatisticsDashboard statistics={statistics} />
         <Text style={styles.mutedText}>
           Any path between these places counts. This screen is history only — START from Home.
         </Text>
