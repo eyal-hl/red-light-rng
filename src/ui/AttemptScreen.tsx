@@ -2,12 +2,14 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import { formatTimeOfDay } from '../domain/duration';
+import { formatGpsReadinessLabel, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import { styles } from './styles';
 
 type AttemptScreenProps = {
   originName: string | null;
   attempt: Attempt;
+  gpsReadiness: GpsReadiness;
   startZoneStatus: PlaceStartZoneStatus;
   busy: boolean;
   error: string | null;
@@ -28,9 +30,51 @@ function startZoneLabel(status: PlaceStartZoneStatus): string {
   return 'LOCATING…';
 }
 
+function StatusRow({
+  accessibilityLabel,
+  tone,
+  label,
+}: {
+  accessibilityLabel: string;
+  tone: 'waiting' | 'poor' | 'good' | 'inside' | 'outside' | 'locating';
+  label: string;
+}) {
+  return (
+    <View accessibilityLabel={accessibilityLabel} style={attemptStyles.statusRow}>
+      <View
+        style={[
+          attemptStyles.statusDot,
+          tone === 'good' || tone === 'inside'
+            ? attemptStyles.statusDotGood
+            : tone === 'poor'
+              ? attemptStyles.statusDotPoor
+              : tone === 'outside'
+                ? attemptStyles.statusDotOutside
+                : attemptStyles.statusDotWaiting,
+        ]}
+      />
+      <Text
+        style={[
+          attemptStyles.statusText,
+          tone === 'good' || tone === 'inside'
+            ? attemptStyles.statusTextGood
+            : tone === 'poor'
+              ? attemptStyles.statusTextPoor
+              : tone === 'outside'
+                ? attemptStyles.statusTextOutside
+                : attemptStyles.statusTextWaiting,
+        ]}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 export function AttemptScreen({
   originName,
   attempt,
+  gpsReadiness,
   startZoneStatus,
   busy,
   error,
@@ -39,6 +83,7 @@ export function AttemptScreen({
 }: AttemptScreenProps) {
   const armed = attempt.lifecycle === 'armed';
   const activeTitle = originName ? `${originName} → ?` : 'Journey';
+  const readinessLabel = formatGpsReadinessLabel(gpsReadiness);
 
   return (
     <View style={styles.screen}>
@@ -60,32 +105,17 @@ export function AttemptScreen({
           </View>
         )}
         {armed ? (
-          <View
-            accessibilityLabel={`Start zone: ${startZoneLabel(startZoneStatus)}`}
-            style={attemptStyles.startZoneStatusRow}
-          >
-            <View
-              style={[
-                attemptStyles.startZoneStatusDot,
-                startZoneStatus.status === 'inside'
-                  ? attemptStyles.startZoneStatusDotInside
-                  : startZoneStatus.status === 'outside'
-                    ? attemptStyles.startZoneStatusDotOutside
-                    : attemptStyles.startZoneStatusDotLocating,
-              ]}
+          <View style={attemptStyles.statusBlock}>
+            <StatusRow
+              accessibilityLabel={`GPS readiness: ${readinessLabel}`}
+              tone={gpsReadiness.state}
+              label={readinessLabel}
             />
-            <Text
-              style={[
-                attemptStyles.startZoneStatusText,
-                startZoneStatus.status === 'inside'
-                  ? attemptStyles.startZoneStatusTextInside
-                  : startZoneStatus.status === 'outside'
-                    ? attemptStyles.startZoneStatusTextOutside
-                    : attemptStyles.startZoneStatusTextLocating,
-              ]}
-            >
-              {startZoneLabel(startZoneStatus)}
-            </Text>
+            <StatusRow
+              accessibilityLabel={`Start zone: ${startZoneLabel(startZoneStatus)}`}
+              tone={startZoneStatus.status}
+              label={startZoneLabel(startZoneStatus)}
+            />
           </View>
         ) : null}
         <Text style={styles.mutedText}>You can lock your phone and put it in your pocket.</Text>
@@ -114,39 +144,48 @@ export function AttemptScreen({
 }
 
 const attemptStyles = StyleSheet.create({
-  startZoneStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  statusBlock: {
     gap: 10,
     marginTop: -4,
     marginBottom: 20,
   },
-  startZoneStatusDot: {
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  statusDot: {
     width: 12,
     height: 12,
     borderRadius: 6,
   },
-  startZoneStatusDotInside: {
+  statusDotGood: {
     backgroundColor: '#7dcea0',
   },
-  startZoneStatusDotOutside: {
+  statusDotPoor: {
+    backgroundColor: '#e0a458',
+  },
+  statusDotOutside: {
     backgroundColor: '#f07178',
   },
-  startZoneStatusDotLocating: {
+  statusDotWaiting: {
     backgroundColor: '#9aa0a6',
   },
-  startZoneStatusText: {
+  statusText: {
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 0.8,
   },
-  startZoneStatusTextInside: {
+  statusTextGood: {
     color: '#7dcea0',
   },
-  startZoneStatusTextOutside: {
+  statusTextPoor: {
+    color: '#e0a458',
+  },
+  statusTextOutside: {
     color: '#f07178',
   },
-  startZoneStatusTextLocating: {
+  statusTextWaiting: {
     color: '#9aa0a6',
   },
 });

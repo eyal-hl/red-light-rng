@@ -12,6 +12,7 @@ import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
 import { selectJourneyPathVariant } from '../domain/path-variant';
 import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
+import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
@@ -81,6 +82,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
   const [originName, setOriginName] = useState<string | null>(null);
   const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
+  const [gpsReadiness, setGpsReadiness] = useState<GpsReadiness>(WAITING_GPS_READINESS);
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [journeyFocus, setJourneyFocus] = useState<JourneyFocusAnalysis | null>(null);
   const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
@@ -151,6 +153,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -180,6 +183,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       const debug = await workspace.inspectAttempt(attempt.id);
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(attempt);
       setJourneyFocus(focus);
       setAttemptDebug(debug);
@@ -246,6 +250,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         setStartZoneStatus(processed.startZoneStatus);
+        setGpsReadiness(processed.gpsReadiness);
         if (processed.attempt.originPlaceId) {
           const origin = await workspace.getPlace(processed.attempt.originPlaceId);
           setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
@@ -422,6 +427,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       await workspace.cancelAttempt();
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       await refreshHome();
       setScreen({ kind: 'home' });
     } catch (caught) {
@@ -439,6 +445,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!ended) {
         setActiveAttempt(null);
         setStartZoneStatus(LOCATING_ZONE);
+        setGpsReadiness(WAITING_GPS_READINESS);
         await refreshHome();
         setScreen({ kind: 'home' });
         return;
@@ -1016,6 +1023,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         <AttemptScreen
           originName={originName}
           attempt={activeAttempt}
+          gpsReadiness={gpsReadiness}
           startZoneStatus={startZoneStatus}
           busy={busy}
           error={error}
