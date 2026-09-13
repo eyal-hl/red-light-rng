@@ -80,11 +80,10 @@ describe('attempt GPS readiness', () => {
   });
 
   it('treats null accuracy as usable, matching journey timing', () => {
-    const sample = sampleAt(HOME.center, {
-      sessionId: 's',
-      recordedAtMs: 1_000,
-      accuracyMeters: null,
-    });
+    const sample = {
+      ...sampleAt(HOME.center, { sessionId: 's', recordedAtMs: 1_000 }),
+      horizontalAccuracyMeters: null,
+    };
     const result = present([sample]);
     assert.equal(result.gpsReadiness.state, 'good');
     assert.equal(result.gpsReadiness.horizontalAccuracyMeters, null);
@@ -202,7 +201,7 @@ describe('GPS readiness source boundaries', () => {
     assert.match(screen, /formatGpsReadinessLabel/);
     assert.match(screen, /GPS readiness:/);
     assert.match(screen, /Start zone:/);
-    assert.doesNotMatch(screen, /MAX_SAMPLE_ACCURACY|45/);
+    assert.doesNotMatch(screen, /MAX_SAMPLE_ACCURACY|isAccuracyAccepted/);
   });
 
   it('does not add a Home pre-START watcher or a second tracking session', () => {

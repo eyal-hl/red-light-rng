@@ -78,6 +78,28 @@ describe('armed GPS readiness runtime', () => {
     assert.equal(platform.getCurrentPositionCalls, 0);
   });
 
+  it('treats a null-accuracy attempt-stream sample as GOOD', async () => {
+    const { workspace, sessions } = await seedHomeAndWork();
+    const started = await workspace.startAttempt();
+    assert.equal(started.ok, true);
+    if (!started.ok) {
+      return;
+    }
+    await sessions.appendSamples([
+      {
+        ...sampleAt(HOME_CENTER, {
+          sessionId: started.attempt.sessionId,
+          recordedAtMs: 1_700_000_000_000,
+        }),
+        horizontalAccuracyMeters: null,
+      },
+    ]);
+    const processed = await workspace.processActiveAttemptWithStartZoneStatus();
+    assert.equal(processed.gpsReadiness.state, 'good');
+    assert.equal(processed.gpsReadiness.horizontalAccuracyMeters, null);
+    assert.equal(processed.startZoneStatus.status, 'inside');
+  });
+
   it('reports GOOD GPS while outside every saved place', async () => {
     const { workspace, sessions } = await seedHomeAndWork();
     const started = await workspace.startAttempt();
