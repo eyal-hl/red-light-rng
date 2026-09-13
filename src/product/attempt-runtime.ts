@@ -12,7 +12,9 @@ import {
   replayPlaceTrace,
   type PlaceStartZoneStatus,
 } from '../domain/place-timing';
-import { findCompatiblePathVariant } from '../domain/path-variant';
+import type { JourneyPoolId } from '../domain/journey';
+import { attemptJourneyPool } from '../domain/journey-analysis';
+import { planPathVariantRecompute } from '../domain/path-variant-discovery';
 import type { TransportationMode } from '../domain/route';
 import { timingCourseFromRoute } from '../domain/attempt-analysis';
 import type { AttemptStore } from '../persistence/attempt-store';
@@ -67,6 +69,7 @@ export class AttemptRuntime {
     private readonly settings: SettingsStore,
     private readonly now: () => number = () => Date.now(),
     private readonly createAttemptId: () => string = createId,
+    private readonly createRouteId: () => string = createId,
   ) {}
 
   async start(): Promise<ArmAttemptResult> {
@@ -237,10 +240,95 @@ export class AttemptRuntime {
     if (!attempt) {
       return null;
     }
-    const next: Attempt = { ...attempt, transportationMode };
-    const withVariant = await this.associateVariant(next, await this.sessions.listSamples(attempt.sessionId));
-    await this.attempts.saveAttempt(withVariant);
-    return withVariant;
+    const next: Attempt = { ...attempt, transportationMode, routeId: null, crossings: [] };
+    await this.attempts.saveAttempt(next);
+    await this.recomputeAllPathVariants();
+    return this.attempts.getAttempt(attemptId);
+  }
+
+  async recomputeAllPathVariants(): Promise<void> {
+    const attempts = await this.attempts.listAttempts();
+    const keys = new Map<string, JourneyPoolId>();
+    for (const attempt of attempts) {
+      const pool = attemptJourneyPool(attempt);
+      if (!pool) {
+        continue;
+      }
+      keys.set(`${pool.originPlaceId}|${pool.destinationPlaceId}|${pool.transportationMode}`, pool);
+    }
+    for (const pool of keys.values()) {
+      await this.recomputePathVariantsForPool(pool);
+    }
+  }
+
+  async recomputePathVariantsForPool(pool: JourneyPoolId, extra?: { attempt: Attempt; samples: LocationSample[] }): Promise<Attempt | null> {
+    const origin = await this.places.getPlace(pool.originPlaceId);
+    const destination = await this.places.getPlace(pool.destinationPlaceId);
+    if (!origin || !destination) {
+      return extra?.attempt ?? null;
+    }
+    const poolAttempts = await this.attempts.listAttemptsForJourney(
+      pool.originPlaceId,
+      pool.destinationPlaceId,
+      pool.transportationMode,
+    );
+    const traces = [];
+    for (const attempt of poolAttempts) {
+      if (extra && attempt.id === extra.attempt.id) {
+        continue;
+      }
+      traces.push({
+        attempt,
+        samples: await this.sessions.listSamples(attempt.sessionId),
+      });
+    }
+    if (extra) {
+      traces.push(extra);
+    }
+    const routes = await this.routes.listRoutes();
+    const plan = planPathVariantRecompute({
+      pool,
+      origin,
+      destination,
+      traces,
+      routes,
+      nowMs: this.now(),
+      createRouteId: this.createRouteId,
+    });
+    const idByPlanned = new Map<string, string>();
+    for (const route of plan.newRoutes) {
+      await this.routes.createRoute(route);
+      const saved =
+        (await this.routes.getRoute(route.id)) ??
+        (await this.routes.listRoutes()).find((item) => item.sourceRecordingId === route.sourceRecordingId);
+      idByPlanned.set(route.id, saved?.id ?? route.id);
+    }
+    const resolveRouteId = (routeId: string | null) => (routeId == null ? null : (idByPlanned.get(routeId) ?? routeId));
+    let extraResult: Attempt | null = extra?.attempt ?? null;
+    for (const assignment of plan.assignments) {
+      const routeId = resolveRouteId(assignment.routeId);
+      const trace = traces.find((item) => item.attempt.id === assignment.attemptId);
+      if (!trace) {
+        continue;
+      }
+      const assigned = await this.applyAssignment(trace.attempt, trace.samples, routeId);
+      if (extra && assignment.attemptId === extra.attempt.id) {
+        extraResult = assigned;
+        continue;
+      }
+      if (assigned.routeId !== trace.attempt.routeId || assigned.crossings.length !== trace.attempt.crossings.length) {
+        await this.attempts.saveAttempt(assigned);
+      } else {
+        const sameCrossings = assigned.crossings.every((crossing, index) => {
+          const previous = trace.attempt.crossings[index];
+          return previous != null && previous.checkpointId === crossing.checkpointId && previous.crossedAtMs === crossing.crossedAtMs;
+        });
+        if (!sameCrossings) {
+          await this.attempts.saveAttempt(assigned);
+        }
+      }
+    }
+    return extraResult;
   }
 
   private async placesForAttempt(attempt: Attempt): Promise<Place[]> {
@@ -292,20 +380,22 @@ export class AttemptRuntime {
     ) {
       return { ...attempt, routeId: null, crossings: [] };
     }
-    const origin = await this.places.getPlace(attempt.originPlaceId);
-    const destination = await this.places.getPlace(attempt.destinationPlaceId);
-    if (!origin || !destination) {
+    const classified = await this.recomputePathVariantsForPool(
+      {
+        originPlaceId: attempt.originPlaceId,
+        destinationPlaceId: attempt.destinationPlaceId,
+        transportationMode: attempt.transportationMode,
+      },
+      { attempt, samples },
+    );
+    return classified ?? { ...attempt, routeId: null, crossings: [] };
+  }
+
+  private async applyAssignment(attempt: Attempt, samples: LocationSample[], routeId: string | null): Promise<Attempt> {
+    if (routeId == null || attempt.startedAtMs == null || attempt.finishedAtMs == null) {
       return { ...attempt, routeId: null, crossings: [] };
     }
-    const routes = await this.routes.listRoutes();
-    const variant = findCompatiblePathVariant(
-      routes,
-      origin,
-      destination,
-      attempt.transportationMode,
-      samples,
-      { startedAtMs: attempt.startedAtMs, finishedAtMs: attempt.finishedAtMs },
-    );
+    const variant = await this.routes.getRoute(routeId);
     if (!variant) {
       return { ...attempt, routeId: null, crossings: [] };
     }

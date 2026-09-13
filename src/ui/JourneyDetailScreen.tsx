@@ -3,12 +3,9 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { formatElapsed } from '../domain/duration';
 import { placeZone } from '../domain/place';
 import type { JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import type { Place } from '../domain/place';
-import {
-  transportationModeIcon,
-  transportationModeLabel,
-  type Route,
-} from '../domain/route';
+import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
 import { styles } from './styles';
 
@@ -17,12 +14,12 @@ type JourneyDetailScreenProps = {
   destination: Place;
   summary: JourneyPoolSummary;
   history: JourneyHistoryRow[];
-  pathVariant: Route | null;
+  pathVariants: JourneyPathVariantSummary[];
   busy: boolean;
   error: string | null;
   onBack: () => void;
   onHistory: () => void;
-  onEditPathVariant: (() => void) | null;
+  onOpenPathVariant: (routeId: string) => void;
 };
 
 export function JourneyDetailScreen({
@@ -30,13 +27,15 @@ export function JourneyDetailScreen({
   destination,
   summary,
   history,
-  pathVariant,
+  pathVariants,
   busy,
   error,
   onBack,
   onHistory,
-  onEditPathVariant,
+  onOpenPathVariant,
 }: JourneyDetailScreenProps) {
+  const mapPath = pathVariants.length === 1 ? (pathVariants[0]?.route.referencePath ?? []) : [];
+
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -50,7 +49,7 @@ export function JourneyDetailScreen({
         </Text>
         <View style={styles.mapSlot}>
           <RouteMap
-            path={pathVariant?.referencePath ?? []}
+            path={mapPath}
             startZone={placeZone(origin)}
             finishZone={placeZone(destination)}
             checkpoints={[]}
@@ -73,8 +72,30 @@ export function JourneyDetailScreen({
           <Text style={styles.statValue}>{summary.rankedAttemptCount}</Text>
         </View>
         <Text style={styles.mutedText}>
-          Any path between these places counts. This screen is history only — START from Home.
+          Any path between these places counts. Journey PB is the headline. Path variants are optional
+          secondary analytics.
         </Text>
+        {pathVariants.length > 0 ? (
+          <View>
+            <Text style={styles.sectionLabel}>PATH VARIANTS</Text>
+            {pathVariants.map((item) => (
+              <Pressable
+                key={item.route.id}
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => onOpenPathVariant(item.route.id)}
+                style={styles.card}
+              >
+                <Text style={styles.cardTitle}>{item.route.name}</Text>
+                <Text style={styles.cardMeta}>
+                  {item.attemptCount} attempt{item.attemptCount === 1 ? '' : 's'}
+                  {item.pbTimeMs == null ? '' : ` · variant PB ${formatElapsed(item.pbTimeMs)}`}
+                  {item.typicalTimeMs == null ? '' : ` · typical ${formatElapsed(item.typicalTimeMs)}`}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         {history.slice(0, 3).map((row) => (
           <View key={row.attemptId} style={styles.card}>
             <Text style={styles.cardTitle}>
@@ -93,16 +114,6 @@ export function JourneyDetailScreen({
           >
             <Text style={styles.buttonText}>HISTORY</Text>
           </Pressable>
-          {onEditPathVariant ? (
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={onEditPathVariant}
-              style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
-            >
-              <Text style={styles.buttonText}>EDIT PATH VARIANT</Text>
-            </Pressable>
-          ) : null}
         </View>
       </ScrollView>
     </View>

@@ -485,4 +485,54 @@ describe('SQLite migrations', () => {
     );
     assert.equal(mode?.value, 'scooter');
   });
+
+  it('adds path-variant archive and discovery columns when upgrading from schema v5', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    const nowMs = 1_000;
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 5)) {
+      await migration.up(sql, nowMs);
+      await sql.exec(`PRAGMA user_version = ${migration.version}`);
+    }
+    const before = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(before?.user_version, 5);
+
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['src-main', 1000, 2000],
+    );
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters,
+         start_progress_m, finish_progress_m
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['route-main', 'Main road', 'scooter', 2000, 'src-main', 32.08, 34.78, 30, 32.09, 34.78, 30, 0, 300],
+    );
+
+    await applyMigrations(sql, 9_000);
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const row = await sql.getFirst<{
+      status: string;
+      kind: string;
+      cluster_signature: string | null;
+      classification_version: number;
+      name: string;
+    }>('SELECT status, kind, cluster_signature, classification_version, name FROM route WHERE id = ?', [
+      'route-main',
+    ]);
+    assert.equal(row?.name, 'Main road');
+    assert.equal(row?.status, 'active');
+    assert.equal(row?.kind, 'explicit');
+    assert.equal(row?.cluster_signature, null);
+    assert.equal(row?.classification_version, 1);
+  });
 });

@@ -1,5 +1,5 @@
 import { cloneCourseLayout, type CourseLayout } from '../domain/course-layout';
-import type { Route, TransportationMode } from '../domain/route';
+import type { Route, RouteStatus, TransportationMode } from '../domain/route';
 import type { RouteStore } from './route-store';
 
 function cloneRoute(route: Route): Route {
@@ -59,6 +59,22 @@ export class MemoryRouteStore implements RouteStore {
       finishProgressMeters: nextLayout.finishProgressMeters,
       checkpoints: nextLayout.checkpoints,
     });
+  }
+
+  async renameRoute(routeId: string, name: string): Promise<void> {
+    const existing = this.routes.get(routeId);
+    if (!existing) {
+      throw new Error(`Route not found: ${routeId}`);
+    }
+    this.routes.set(routeId, { ...existing, name });
+  }
+
+  async setRouteStatus(routeId: string, status: RouteStatus): Promise<void> {
+    const existing = this.routes.get(routeId);
+    if (!existing) {
+      throw new Error(`Route not found: ${routeId}`);
+    }
+    this.routes.set(routeId, { ...existing, status });
   }
 
   async deleteRoute(routeId: string): Promise<void> {

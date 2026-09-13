@@ -9,6 +9,12 @@ import {
   type PlaceAttemptDebugReport,
 } from '../domain/place-debug';
 import type { Route, TransportationMode } from '../domain/route';
+import { validateRouteName } from '../domain/route';
+import {
+  PATH_VARIANT_CLASSIFICATION_VERSION,
+  summarizeJourneyPathVariants,
+  type JourneyPathVariantSummary,
+} from '../domain/path-variant-discovery';
 import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-derivation';
 import type { TrackingState } from '../domain/tracking-state';
 import { isOpenAttempt, type Attempt } from '../domain/attempt';
@@ -97,6 +103,7 @@ export class RouteWorkspace {
   async bootstrap(): Promise<HomeSnapshot> {
     await this.tracker.recover();
     await this.attempts.reconcile();
+    await this.attempts.recomputeAllPathVariants();
     return this.loadHome();
   }
 
@@ -232,6 +239,10 @@ export class RouteWorkspace {
       startProgressMeters: progress.startProgressMeters,
       finishProgressMeters: progress.finishProgressMeters,
       checkpoints: [],
+      status: 'active',
+      kind: 'explicit',
+      clusterSignature: null,
+      classificationVersion: PATH_VARIANT_CLASSIFICATION_VERSION,
     };
     await this.routes.createRoute(route);
     await this.sessions.setReviewDisposition(sessionId, 'saved');
@@ -263,6 +274,38 @@ export class RouteWorkspace {
 
   async deleteRoute(routeId: string): Promise<void> {
     await this.routes.deleteRoute(routeId);
+    await this.attempts.recomputeAllPathVariants();
+  }
+
+  async renamePathVariant(routeId: string, name: string): Promise<SaveRouteResult> {
+    const validation = validateRouteName(name);
+    if (!validation.valid) {
+      return { ok: false, reason: validation.reason ?? 'Every path variant needs a name.' };
+    }
+    const existing = await this.routes.getRoute(routeId);
+    if (!existing) {
+      return { ok: false, reason: 'This path variant is no longer available.' };
+    }
+    await this.routes.renameRoute(routeId, name.trim());
+    const route = await this.routes.getRoute(routeId);
+    if (!route) {
+      return { ok: false, reason: 'This path variant is no longer available.' };
+    }
+    return { ok: true, route };
+  }
+
+  async archivePathVariant(routeId: string): Promise<SaveRouteResult> {
+    const existing = await this.routes.getRoute(routeId);
+    if (!existing) {
+      return { ok: false, reason: 'This path variant is no longer available.' };
+    }
+    await this.routes.setRouteStatus(routeId, 'archived');
+    await this.attempts.recomputeAllPathVariants();
+    const route = await this.routes.getRoute(routeId);
+    if (!route) {
+      return { ok: false, reason: 'This path variant is no longer available.' };
+    }
+    return { ok: true, route };
   }
 
   async listPlaces(): Promise<Place[]> {
@@ -481,6 +524,7 @@ export class RouteWorkspace {
     summary: JourneyPoolSummary;
     history: JourneyHistoryRow[];
     routes: Route[];
+    pathVariants: JourneyPathVariantSummary[];
   } | null> {
     const origin = await this.places.getPlace(pool.originPlaceId);
     const destination = await this.places.getPlace(pool.destinationPlaceId);
@@ -495,6 +539,13 @@ export class RouteWorkspace {
       summary: summarizeJourneyPool(pool, origin, destination, traces),
       history: journeyHistoryRows(pool, traces),
       routes,
+      pathVariants: summarizeJourneyPathVariants(
+        origin,
+        destination,
+        pool.transportationMode,
+        traces,
+        routes,
+      ),
     };
   }
 

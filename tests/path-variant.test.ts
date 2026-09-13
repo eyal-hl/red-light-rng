@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  findCompatiblePathVariant,
   routeEndpointsMatchJourney,
   selectJourneyPathVariant,
 } from '../src/domain/path-variant';
 import { makePlace } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
-import { offsetLatLng } from './helpers/samples';
+import { offsetLatLng, traceAlongPath } from './helpers/samples';
 
 const HOME = makePlace({ id: 'place-home', name: 'Home' });
 const WORK = makePlace({
@@ -92,9 +93,51 @@ describe('journey path-variant selection', () => {
     assert.equal(selectJourneyPathVariant([eastWest], HOME, WORK, 'scooter'), null);
   });
 
-  it('picks the oldest matching variant when several belong to the same pool', () => {
+  it('picks the oldest active variant when several belong to the same pool', () => {
     const older = homeWorkRoute({ id: 'route-old', createdAtMs: 20 });
     const newer = homeWorkRoute({ id: 'route-new', createdAtMs: 80 });
+    const archivedOlder = homeWorkRoute({ id: 'route-archived', createdAtMs: 10, status: 'archived' });
     assert.equal(selectJourneyPathVariant([newer, older], HOME, WORK, 'scooter')?.id, older.id);
+    assert.equal(selectJourneyPathVariant([archivedOlder, newer], HOME, WORK, 'scooter')?.id, newer.id);
+  });
+
+  it('assigns a unique compatible variant and leaves dual matches unassigned', () => {
+    const main = homeWorkRoute({ id: 'route-main' });
+    const samples = traceAlongPath(main.referencePath, {
+      sessionId: 'attempt-main',
+      startMs: 1_000,
+      stepMeters: 8,
+      count: 40,
+    });
+    const window = { startedAtMs: 1_000, finishedAtMs: 1_000 + 39_000 };
+    assert.equal(
+      findCompatiblePathVariant([main], HOME, WORK, 'scooter', samples, window)?.id,
+      main.id,
+    );
+
+    const parallelPath = northPath({
+      startLat: HOME.center.latitude,
+      startLng: HOME.center.longitude,
+      points: 8,
+      stepMeters: 40,
+    }).map((point) => offsetLatLng(point.latitude, point.longitude, 0, 50));
+    const parallel = homeWorkRoute({
+      id: 'route-parallel',
+      createdAtMs: 200,
+      referencePath: parallelPath,
+      startZone: { center: parallelPath[0]!, radiusMeters: 30 },
+      finishZone: { center: parallelPath[parallelPath.length - 1]!, radiusMeters: 30 },
+    });
+    const overlap = traceAlongPath(main.referencePath, {
+      sessionId: 'attempt-overlap',
+      startMs: 1_000,
+      stepMeters: 8,
+      count: 40,
+      eastJitterMeters: 25,
+    });
+    assert.equal(
+      findCompatiblePathVariant([main, parallel], HOME, WORK, 'scooter', overlap, window),
+      null,
+    );
   });
 });

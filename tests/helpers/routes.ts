@@ -44,6 +44,10 @@ export function makeRoute(overrides: Partial<Route> = {}): Route {
     startProgressMeters: progress.startProgressMeters,
     finishProgressMeters: progress.finishProgressMeters,
     checkpoints: [],
+    status: 'active',
+    kind: 'explicit',
+    clusterSignature: null,
+    classificationVersion: 1,
     ...overrides,
   };
 }
