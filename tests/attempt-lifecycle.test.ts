@@ -2,20 +2,18 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { applyMigrations } from '../src/persistence/migrations';
-import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
-import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
-import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
-import { AttemptRuntime } from '../src/product/attempt-runtime';
 import { RouteWorkspace } from '../src/product/route-workspace';
-import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
-import { TrackingSessionService } from '../src/tracking/tracking-session-service';
 import { handleSystemBack, type SystemBackActions } from '../src/ui/system-back';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
+import { completeJourneySamples, departureOnlySamples, seedPlacesForRoute } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
 import { movingTrace, traceAlongPath } from './helpers/samples';
-import { createMemoryWorkspace, FakeLocationPlatform } from './helpers/workspace';
+import { createMemoryWorkspace, createSqliteWorkspace } from './helpers/workspace';
 
-async function saveDefaultRoute(workspace: RouteWorkspace, sessions: { appendSamples: typeof import('../src/persistence/memory-location-sample-store').MemoryLocationSampleStore.prototype.appendSamples }) {
+async function saveDefaultRoute(
+  workspace: RouteWorkspace,
+  sessions: { appendSamples: (samples: ReturnType<typeof movingTrace>) => Promise<void> },
+) {
   await workspace.startRouteRecording();
   await sessions.appendSamples(movingTrace({ sessionId: 'id-1', points: 16, stepMeters: 15 }));
   await workspace.finishRecording();
@@ -41,6 +39,12 @@ function preserveInspectBackActions(onInspect: () => void): SystemBackActions {
     leaveHistoryToDetail() {
       throw new Error('system back should not leave history from an attempt');
     },
+    leavePlaceEditor() {
+      throw new Error('system back should not leave the place editor from an attempt');
+    },
+    leaveDetailToJourney() {
+      throw new Error('system back should not leave route detail from an attempt');
+    },
     inspectAttempt: onInspect,
     acknowledgeAttemptResult() {
       throw new Error('system back should not acknowledge a result from an attempt');
@@ -51,7 +55,7 @@ function preserveInspectBackActions(onInspect: () => void): SystemBackActions {
   };
 }
 
-describe('attempt lifecycle', () => {
+describe('attempt lifecycle', { concurrency: 1 }, () => {
   it('arms without setting official started_at and uses an attempt session purpose', async () => {
     const { workspace, sessions, platform } = createMemoryWorkspace();
     const route = await saveDefaultRoute(workspace, sessions);
@@ -95,9 +99,12 @@ describe('attempt lifecycle', () => {
     if (!saved.ok) {
       return;
     }
+    const places = await second.listPlaces();
+    const origin = places.find((place) => place.name === 'Home');
+    assert.ok(origin);
     await second.armRun(saved.route.id);
     await sessions2.appendSamples(
-      traceAlongPath(saved.route.referencePath, { sessionId: 'id-2', stepMeters: 5, count: 12 }),
+      departureOnlySamples({ origin, sessionId: 'id-2', extraMeters: 40 }),
     );
     const processed = await second.processActiveAttempt();
     assert.equal(processed?.lifecycle, 'active');
@@ -153,29 +160,12 @@ describe('attempt lifecycle', () => {
   it('persists a completed attempt across sqlite reload', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    const sessions = new SqliteLocationSampleStore(async () => sql);
-    const routes = new SqliteRouteStore(async () => sql);
-    const attemptStore = new SqliteAttemptStore(async () => sql);
-    const platform = new FakeLocationPlatform();
-    const trackingSessions = new TrackingSessionService(sessions, () => 'attempt-session');
-    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const runtime = new AttemptRuntime(
-      tracker,
-      platform,
-      sessions,
-      routes,
-      attemptStore,
-      () => 1_700_000_100_000,
-      () => 'attempt-1',
-    );
-    const workspace = new RouteWorkspace(
-      tracker,
-      sessions,
-      routes,
-      runtime,
-      () => 1_700_000_100_000,
-      () => 'route-1',
-    );
+    const { workspace, sessions, routes, places, platform } = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'attempt-session',
+      routeId: 'route-1',
+      attemptId: 'attempt-1',
+    });
 
     await sessions.createSession('source', 1, 'route_creation');
     await sessions.completeSession('source', {
@@ -189,10 +179,15 @@ describe('attempt lifecycle', () => {
       referencePath: northPath({ points: 16, stepMeters: 20 }),
     });
     await routes.createRoute(route);
+    const seeded = await seedPlacesForRoute(places, route);
     const armed = await workspace.armRun(route.id);
     assert.equal(armed.ok, true);
     await sessions.appendSamples(
-      traceAlongPath(route.referencePath, { sessionId: 'attempt-session', stepMeters: 6, count: 55 }),
+      completeJourneySamples({
+        origin: seeded.origin,
+        destination: seeded.destination,
+        sessionId: 'attempt-session',
+      }),
     );
     const completed = await workspace.processActiveAttempt();
     assert.equal(completed?.lifecycle, 'completed');
@@ -200,35 +195,47 @@ describe('attempt lifecycle', () => {
     assert.ok((await sessions.countSamples('attempt-session')) > 10);
     assert.equal(platform.updating, false);
 
-    const reloadedAttempts = new SqliteAttemptStore(async () => sql);
-    const reloadedSessions = new SqliteLocationSampleStore(async () => sql);
-    const loaded = await reloadedAttempts.getAttempt('attempt-1');
+    const reloaded = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_200_000,
+      sessionId: 'unused-session',
+      routeId: 'route-2',
+      attemptId: 'attempt-2',
+    });
+    const loaded = await reloaded.attempts.getAttempt('attempt-1');
     assert.equal(loaded?.lifecycle, 'completed');
     assert.equal(loaded?.startedAtMs, completed?.startedAtMs);
     assert.equal(loaded?.finishedAtMs, completed?.finishedAtMs);
-    assert.equal(await reloadedSessions.countSamples('attempt-session'), await sessions.countSamples('attempt-session'));
-    assert.equal(await reloadedAttempts.getOpenAttempt(), null);
+    assert.equal(loaded?.originPlaceId, seeded.origin.id);
+    assert.equal(loaded?.destinationPlaceId, seeded.destination.id);
+    assert.equal(await reloaded.sessions.countSamples('attempt-session'), await sessions.countSamples('attempt-session'));
+    assert.equal(await reloaded.attempts.getOpenAttempt(), null);
   });
 
-  it('releases the active session when an attempt is abandoned', async () => {
-    const { workspace, sessions, platform } = createMemoryWorkspace();
+  it('keeps a journey active when the path diverges and still abandons when tracking fails', async () => {
+    const { workspace, sessions, platform, attemptRuntime } = createMemoryWorkspace();
     const route = await saveDefaultRoute(workspace, sessions);
+    const places = await workspace.listPlaces();
+    const origin = places.find((place) => place.name === 'Home');
+    assert.ok(origin);
     await workspace.armRun(route.id);
-    await sessions.appendSamples(
-      traceAlongPath(route.referencePath, { sessionId: 'id-2', stepMeters: 5, count: 12 }),
-    );
+    await sessions.appendSamples(departureOnlySamples({ origin, sessionId: 'id-2', extraMeters: 40 }));
     await workspace.processActiveAttempt();
     const last = (await sessions.listSamples('id-2')).at(-1)!;
     const off = movingTrace({
       sessionId: 'id-2',
       startMs: last.recordedAtMs + 1000,
-      points: 70,
-      stepMeters: 0,
+      points: 20,
+      stepMeters: 8,
       startLat: last.latitude,
       startLng: last.longitude + 0.01,
     });
     await sessions.appendSamples(off);
-    const abandoned = await workspace.processActiveAttempt();
+    const stillActive = await workspace.processActiveAttempt();
+    assert.equal(stillActive?.lifecycle, 'active');
+    assert.notEqual(stillActive?.lifecycle, 'abandoned');
+    platform.updating = false;
+    platform.servicesEnabled = false;
+    const abandoned = await attemptRuntime.reconcile();
     assert.equal(abandoned?.lifecycle, 'abandoned');
     assert.equal(abandoned?.validity, 'unranked');
     assert.equal(platform.updating, false);
@@ -259,40 +266,38 @@ describe('attempt lifecycle', () => {
     assert.ok((await sessions.countSamples('id-2')) >= 2);
     assert.equal((await sessions.getSession('id-2'))?.reviewDisposition, 'saved');
     const debug = await workspace.inspectAttempt(ended!.id);
-    assert.equal(debug?.incompleteLabel, 'DID NOT START');
-    assert.equal(debug?.rawSampleCount, await sessions.countSamples('id-2'));
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT START');
+    assert.equal(debug?.place.rawSampleCount, await sessions.countSamples('id-2'));
     assert.equal(await workspace.getOpenAttempt(), null);
-    const beforeRetry = await workspace.analyzeRoute(route.id);
-    assert.equal(beforeRetry?.analysis.chronologicalHistory.some((row) => row.attemptId === ended.id), true);
-    assert.equal(beforeRetry?.analysis.rankedHistory.some((row) => row.attemptId === ended.id), false);
+    const home = await workspace.loadHome();
+    assert.equal(home.incompleteAttempts.some((item) => item.id === ended.id), true);
     const retry = await workspace.armRun(route.id);
     assert.equal(retry.ok, true);
     assert.notEqual(retry.ok ? retry.attempt.id : null, ended.id);
-    const analysis = await workspace.analyzeRoute(route.id);
-    assert.equal(analysis?.analysis.chronologicalHistory.some((row) => row.attemptId === ended.id), true);
-    assert.equal(analysis?.analysis.rankedHistory.some((row) => row.attemptId === ended.id), false);
-    assert.equal(analysis?.analysis.summary.rankedAttemptCount, 0);
+    const afterRetry = await workspace.loadHome();
+    assert.equal(afterRetry.incompleteAttempts.some((item) => item.id === ended.id), true);
   });
 
   it('labels a started unfinished inspect as DID NOT FINISH and keeps it non-competitive', async () => {
     const { workspace, sessions } = createMemoryWorkspace();
     const route = await saveDefaultRoute(workspace, sessions);
+    const places = await workspace.listPlaces();
+    const origin = places.find((place) => place.name === 'Home');
+    assert.ok(origin);
     await workspace.armRun(route.id);
-    await sessions.appendSamples(
-      traceAlongPath(route.referencePath, { sessionId: 'id-2', stepMeters: 5, count: 18 }),
-    );
+    await sessions.appendSamples(departureOnlySamples({ origin, sessionId: 'id-2', extraMeters: 40 }));
     await workspace.processActiveAttempt();
     const ended = await workspace.endAndInspectAttempt();
     assert.equal(ended?.lifecycle, 'ended');
     assert.ok(ended?.startedAtMs != null);
     assert.equal(ended?.finishedAtMs, null);
     const debug = await workspace.inspectAttempt(ended!.id);
-    assert.equal(debug?.incompleteLabel, 'DID NOT FINISH');
-    const analysis = await workspace.analyzeRoute(route.id);
-    const row = analysis?.analysis.chronologicalHistory.find((item) => item.attemptId === ended.id);
-    assert.equal(row?.incompleteLabel, 'DID NOT FINISH');
-    assert.equal(row?.eligible, false);
-    assert.equal(analysis?.analysis.rankedHistory.length, 0);
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT FINISH');
+    const home = await workspace.loadHome();
+    const row = home.incompleteAttempts.find((item) => item.id === ended.id);
+    assert.equal(row?.id, ended.id);
+    const journeys = home.journeys.filter((item) => item.rankedAttemptCount > 0);
+    assert.equal(journeys.length, 0);
   });
 
   it('Android system back from an armed never-started attempt preserves inspect evidence', async () => {
@@ -317,10 +322,9 @@ describe('attempt lifecycle', () => {
     assert.equal(await sessions.getActiveSession(), null);
     assert.ok((await sessions.countSamples('id-2')) >= 2);
     const debug = await workspace.inspectAttempt(ended!.id);
-    assert.equal(debug?.incompleteLabel, 'DID NOT START');
-    const analysis = await workspace.analyzeRoute(route.id);
-    assert.equal(analysis?.analysis.chronologicalHistory.some((row) => row.attemptId === ended!.id), true);
-    assert.equal(analysis?.analysis.rankedHistory.some((row) => row.attemptId === ended!.id), false);
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT START');
+    const home = await workspace.loadHome();
+    assert.equal(home.incompleteAttempts.some((item) => item.id === ended!.id), true);
     const retry = await workspace.armRun(route.id);
     assert.equal(retry.ok, true);
   });
@@ -328,10 +332,11 @@ describe('attempt lifecycle', () => {
   it('Android system back from an active unfinished attempt yields DID NOT FINISH', async () => {
     const { workspace, sessions } = createMemoryWorkspace();
     const route = await saveDefaultRoute(workspace, sessions);
+    const places = await workspace.listPlaces();
+    const origin = places.find((place) => place.name === 'Home');
+    assert.ok(origin);
     await workspace.armRun(route.id);
-    await sessions.appendSamples(
-      traceAlongPath(route.referencePath, { sessionId: 'id-2', stepMeters: 5, count: 18 }),
-    );
+    await sessions.appendSamples(departureOnlySamples({ origin, sessionId: 'id-2', extraMeters: 40 }));
     await workspace.processActiveAttempt();
     let inspectPromise: Promise<Awaited<ReturnType<RouteWorkspace['endAndInspectAttempt']>>> | undefined;
     const handled = handleSystemBack('attempt', preserveInspectBackActions(() => {
@@ -343,36 +348,19 @@ describe('attempt lifecycle', () => {
     assert.ok(ended?.startedAtMs != null);
     assert.equal(ended?.finishedAtMs, null);
     const debug = await workspace.inspectAttempt(ended!.id);
-    assert.equal(debug?.incompleteLabel, 'DID NOT FINISH');
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT FINISH');
     assert.equal(await workspace.getOpenAttempt(), null);
   });
 
   it('persists an ended incomplete attempt and its ARM-session samples across sqlite reload', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    const sessions = new SqliteLocationSampleStore(async () => sql);
-    const routes = new SqliteRouteStore(async () => sql);
-    const attemptStore = new SqliteAttemptStore(async () => sql);
-    const platform = new FakeLocationPlatform();
-    const trackingSessions = new TrackingSessionService(sessions, () => 'attempt-session');
-    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const runtime = new AttemptRuntime(
-      tracker,
-      platform,
-      sessions,
-      routes,
-      attemptStore,
-      () => 1_700_000_100_000,
-      () => 'attempt-1',
-    );
-    const workspace = new RouteWorkspace(
-      tracker,
-      sessions,
-      routes,
-      runtime,
-      () => 1_700_000_100_000,
-      () => 'route-1',
-    );
+    const { workspace, sessions, routes, places } = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'attempt-session',
+      routeId: 'route-1',
+      attemptId: 'attempt-1',
+    });
 
     await sessions.createSession('source', 1, 'route_creation');
     await sessions.completeSession('source', {
@@ -386,6 +374,7 @@ describe('attempt lifecycle', () => {
       referencePath: northPath({ points: 16, stepMeters: 20 }),
     });
     await routes.createRoute(route);
+    await seedPlacesForRoute(places, route);
     const armed = await workspace.armRun(route.id);
     assert.equal(armed.ok, true);
     await sessions.appendSamples(
@@ -397,48 +386,24 @@ describe('attempt lifecycle', () => {
     const sampleCount = await sessions.countSamples('attempt-session');
     assert.ok(sampleCount >= 4);
 
-    const reloadedAttempts = new SqliteAttemptStore(async () => sql);
-    const reloadedSessions = new SqliteLocationSampleStore(async () => sql);
-    const reloadedRoutes = new SqliteRouteStore(async () => sql);
-    const reloadedPlatform = new FakeLocationPlatform();
-    const reloadedTracking = new TrackingSessionService(reloadedSessions, () => 'unused-session');
-    const reloadedTracker = new SharedLocationTracker(
-      reloadedPlatform,
-      reloadedTracking,
-      reloadedSessions,
-      () => 1_700_000_200_000,
-    );
-    const reloadedRuntime = new AttemptRuntime(
-      reloadedTracker,
-      reloadedPlatform,
-      reloadedSessions,
-      reloadedRoutes,
-      reloadedAttempts,
-      () => 1_700_000_200_000,
-      () => 'attempt-2',
-    );
-    const reloadedWorkspace = new RouteWorkspace(
-      reloadedTracker,
-      reloadedSessions,
-      reloadedRoutes,
-      reloadedRuntime,
-      () => 1_700_000_200_000,
-      () => 'route-2',
-    );
-
-    const loaded = await reloadedAttempts.getAttempt('attempt-1');
+    const reloaded = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_200_000,
+      sessionId: 'unused-session',
+      routeId: 'route-2',
+      attemptId: 'attempt-2',
+    });
+    const loaded = await reloaded.attempts.getAttempt('attempt-1');
     assert.equal(loaded?.lifecycle, 'ended');
     assert.equal(loaded?.startedAtMs, null);
     assert.equal(loaded?.resultAcknowledged, false);
-    assert.equal(await reloadedSessions.countSamples('attempt-session'), sampleCount);
-    assert.equal(await reloadedAttempts.getOpenAttempt(), null);
-    const debug = await reloadedWorkspace.inspectAttempt('attempt-1');
-    assert.equal(debug?.incompleteLabel, 'DID NOT START');
-    assert.equal(debug?.rawSampleCount, sampleCount);
-    const analysis = await reloadedWorkspace.analyzeRoute(route.id);
-    assert.equal(analysis?.analysis.chronologicalHistory.some((row) => row.attemptId === 'attempt-1'), true);
-    assert.equal(analysis?.analysis.rankedHistory.some((row) => row.attemptId === 'attempt-1'), false);
-    const retry = await reloadedWorkspace.armRun(route.id);
+    assert.equal(await reloaded.sessions.countSamples('attempt-session'), sampleCount);
+    assert.equal(await reloaded.attempts.getOpenAttempt(), null);
+    const debug = await reloaded.workspace.inspectAttempt('attempt-1');
+    assert.equal(debug?.place.incompleteLabel, 'DID NOT START');
+    assert.equal(debug?.place.rawSampleCount, sampleCount);
+    const home = await reloaded.workspace.loadHome();
+    assert.equal(home.incompleteAttempts.some((item) => item.id === 'attempt-1'), true);
+    const retry = await reloaded.workspace.armRun(route.id);
     assert.equal(retry.ok, true);
   });
 

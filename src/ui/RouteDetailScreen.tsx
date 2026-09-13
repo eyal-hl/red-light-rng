@@ -15,26 +15,20 @@ import { styles } from './styles';
 type RouteDetailScreenProps = {
   route: Route;
   summary: RouteCompetitiveSummary | null;
-  canArm: boolean;
   busy: boolean;
   error: string | null;
   onBack: () => void;
-  onArmRun: () => void;
   onEditCourse: () => void;
-  onHistory: () => void;
   onDelete: () => void;
 };
 
 export function RouteDetailScreen({
   route,
   summary,
-  canArm,
   busy,
   error,
   onBack,
-  onArmRun,
   onEditCourse,
-  onHistory,
   onDelete,
 }: RouteDetailScreenProps) {
   const distance = pathDistanceMeters(route.referencePath);
@@ -55,7 +49,7 @@ export function RouteDetailScreen({
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <Pressable accessibilityRole="button" onPress={onBack}>
-          <Text style={styles.kicker}>← YOUR ROUTES</Text>
+          <Text style={styles.kicker}>← JOURNEY</Text>
         </Pressable>
         <Text style={styles.title}>{route.name}</Text>
         <Text style={styles.subtitle}>
@@ -103,29 +97,11 @@ export function RouteDetailScreen({
           <Text style={styles.statValue}>{route.checkpoints.length}</Text>
         </View>
         <Text style={styles.mutedText}>
-          {(summary?.rankedAttemptCount ?? 0) === 0
-            ? 'No ranked attempts yet.'
-            : 'Official timing starts after you arm and depart.'}
+          This is an optional path variant. Official journey times and PBs do not depend on matching this path.
         </Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy || !canArm}
-            onPress={onArmRun}
-            style={[styles.button, styles.primaryButton, busy || !canArm ? styles.disabledButton : null]}
-          >
-            <Text style={styles.buttonText}>ARM RUN</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={onHistory}
-            style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
-          >
-            <Text style={styles.buttonText}>HISTORY</Text>
-          </Pressable>
           <Pressable
             accessibilityRole="button"
             disabled={busy}
@@ -140,7 +116,7 @@ export function RouteDetailScreen({
             onPress={confirmDelete}
             style={[styles.button, styles.dangerButton, busy ? styles.disabledButton : null]}
           >
-            <Text style={styles.buttonText}>DELETE ROUTE</Text>
+            <Text style={styles.buttonText}>DELETE PATH VARIANT</Text>
           </Pressable>
         </View>
       </ScrollView>

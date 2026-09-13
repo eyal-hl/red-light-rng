@@ -19,6 +19,13 @@ export interface AttemptStore {
   getAttemptBySessionId(sessionId: string): Promise<Attempt | null>;
   getOpenAttempt(): Promise<Attempt | null>;
   getUnacknowledgedResult(): Promise<Attempt | null>;
+  listAttempts(): Promise<Attempt[]>;
   listAttemptsForRoute(routeId: string): Promise<Attempt[]>;
+  listAttemptsForJourney(
+    originPlaceId: string,
+    destinationPlaceId: string,
+    transportationMode: string,
+  ): Promise<Attempt[]>;
+  isPlaceReferenced(placeId: string): Promise<boolean>;
   acknowledgeResult(attemptId: string): Promise<void>;
 }

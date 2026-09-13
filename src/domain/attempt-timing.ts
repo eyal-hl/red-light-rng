@@ -317,6 +317,45 @@ function reconstructDepartureAnchoredStart(window: AcceptedProgressSample[]): nu
   return first.recordedAtMs;
 }
 
+export function checkpointCrossingsForWindow(
+  accepted: AcceptedProgressSample[],
+  course: TimingCourse,
+  startedAtMs: number,
+  finishedAtMs: number,
+): DerivedCrossing[] {
+  const crossings: DerivedCrossing[] = [];
+  const pending = orderedCheckpoints(course.checkpoints).filter(
+    (checkpoint) =>
+      checkpoint.progressMeters > course.startProgressMeters &&
+      checkpoint.progressMeters < course.finishProgressMeters,
+  );
+  for (let index = 1; index < accepted.length; index += 1) {
+    const previous = accepted[index - 1];
+    const current = accepted[index];
+    if (!previous || !current) {
+      continue;
+    }
+    for (const checkpoint of pending) {
+      if (crossings.some((crossing) => crossing.checkpointId === checkpoint.id)) {
+        continue;
+      }
+      if (previous.progressMeters < checkpoint.progressMeters && current.progressMeters >= checkpoint.progressMeters) {
+        const crossedAtMs = interpolateCrossingTime(previous, current, checkpoint.progressMeters);
+        if (crossedAtMs < startedAtMs || crossedAtMs > finishedAtMs) {
+          continue;
+        }
+        crossings.push({
+          checkpointId: checkpoint.id,
+          checkpointName: checkpoint.name,
+          checkpointProgressMeters: checkpoint.progressMeters,
+          crossedAtMs,
+        });
+      }
+    }
+  }
+  return crossings;
+}
+
 function detectCheckpointCrossings(state: AttemptEngineState, course: TimingCourse): void {
   if (state.startedAtMs == null) {
     return;

@@ -1,24 +1,27 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
-import {
-  describeUnavailability,
-  segmentEndpointLabel,
-  shouldShowPersistedUnrankedWarning,
-  type FocusAttemptAnalysis,
-} from '../domain/attempt-analysis';
-import { incompleteAttemptLabel, type Attempt } from '../domain/attempt';
+import { segmentEndpointLabel } from '../domain/attempt-analysis';
+import { incompleteAttemptLabel, isJourneyCompetitive, officialTimeMs, type Attempt } from '../domain/attempt';
+import { PATH_ANALYTICS_UNAVAILABLE_MESSAGE, type JourneyFocusAnalysis } from '../domain/journey-analysis';
+import type { CombinedAttemptDebug } from '../product/route-workspace';
 import { checkpointMapPoints } from '../domain/course-layout';
 import {
   nearestDebugSample,
   type AttemptDebugReport,
   type AttemptDebugSample,
 } from '../domain/attempt-debug';
+import type { PlaceAttemptDebugReport, PlaceDebugSample } from '../domain/place-debug';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
 import { type GhostChartSelection } from '../domain/ghost-chart';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
 import { pointAtProgress } from '../domain/path-projection';
-import type { Route } from '../domain/route';
+import {
+  TRANSPORTATION_MODES,
+  transportationModeLabel,
+  type Route,
+  type TransportationMode,
+} from '../domain/route';
 import {
   formatWaitEventDuration,
   formatWaitEventLocation,
@@ -38,14 +41,16 @@ import { GhostDeltaChart } from './GhostDeltaChart';
 import { styles } from './styles';
 
 type AttemptResultScreenProps = {
+  title: string;
   route: Route | null;
   attempt: Attempt;
-  analysis: FocusAttemptAnalysis | null;
-  debug?: AttemptDebugReport | null;
+  journey: JourneyFocusAnalysis | null;
+  debug?: CombinedAttemptDebug | null;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
   onDone: () => void;
+  onChangeMode?: (mode: TransportationMode) => void;
 };
 
 function qualityLabel(quality: AttemptDebugSample['match']['quality']): string {
@@ -63,21 +68,21 @@ function qualityLabel(quality: AttemptDebugSample['match']['quality']): string {
   }
 }
 
-function incompleteSubtitle(attempt: Attempt, debug: AttemptDebugReport | null | undefined): string {
+function incompleteSubtitle(attempt: Attempt, debug: CombinedAttemptDebug | null | undefined): string {
   if (attempt.lifecycle === 'abandoned') {
-    return 'This attempt left the course and was not ranked.';
+    return 'This attempt was interrupted and is not an official run.';
   }
   if (attempt.lifecycle === 'cancelled') {
     return 'This attempt was cancelled and is not an official run.';
   }
-  const label = debug?.incompleteLabel ?? incompleteAttemptLabel(attempt);
+  const label = debug?.place.incompleteLabel ?? incompleteAttemptLabel(attempt);
   if (label === 'DID NOT START') {
     return 'DID NOT START — automatic start was never recognized.';
   }
   if (label === 'DID NOT FINISH') {
     return 'DID NOT FINISH — automatic finish was never recognized.';
   }
-  return 'This attempt is not available for current-layout comparison.';
+  return 'This attempt is not an official journey.';
 }
 
 function formatMeters(value: number | null): string {
@@ -247,6 +252,143 @@ function MovementBreakdownBlock({
           <View style={styles.statRow}>
             <Text style={styles.statLabel}>Coverage</Text>
             <Text style={styles.statValue}>{formatPercent(breakdown.coverageRatio)}</Text>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function PlaceDebugPanel({
+  debug,
+  selectedSample,
+  onSelectSample,
+}: {
+  debug: PlaceAttemptDebugReport;
+  selectedSample: PlaceDebugSample | null;
+  onSelectSample: (sampleId: string) => void;
+}) {
+  const selectedIndex = selectedSample
+    ? debug.samples.findIndex((entry) => entry.sample.id === selectedSample.sample.id)
+    : -1;
+  const previous = selectedIndex > 0 ? debug.samples[selectedIndex - 1] : null;
+  const next =
+    selectedIndex >= 0 && selectedIndex < debug.samples.length - 1 ? debug.samples[selectedIndex + 1] : null;
+
+  return (
+    <View style={styles.debugPanel}>
+      <Text style={styles.sectionLabel}>PLACE TIMING DEBUG</Text>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Raw samples</Text>
+        <Text style={styles.statValue}>{debug.rawSampleCount}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Accepted</Text>
+        <Text style={styles.statValue}>{debug.acceptedCount}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Poor accuracy</Text>
+        <Text style={styles.statValue}>{debug.rejectedPoorAccuracy}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Origin candidate</Text>
+        <Text style={styles.statValue}>
+          {debug.originCandidateName ?? '—'}
+          {debug.overlapTieBreak ? ` · ${debug.overlapTieBreak}` : ''}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Departure samples / radial</Text>
+        <Text style={styles.statValue}>
+          {debug.samplesAfterDeparture}/{debug.departureMinSamples}
+          {' · '}
+          {formatMeters(debug.maxRadialFromOriginMeters)}/{formatMeters(debug.requiredRadialMeters)}
+        </Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Qualifying departure</Text>
+        <Text style={styles.statValue}>{debug.qualifyingDeparture ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Reconstructed start</Text>
+        <Text style={styles.statValue}>
+          {debug.reconstructedStartAtMs == null ? '—' : formatTimeOfDay(debug.reconstructedStartAtMs)}
+        </Text>
+      </View>
+      {debug.destinations.map((destination) => (
+        <View key={destination.placeId}>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>{destination.name} eligible</Text>
+            <Text style={styles.statValue}>{destination.eligible ? 'yes' : 'no'}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>{destination.name} arrival</Text>
+            <Text style={styles.statValue}>
+              {destination.insideSampleCount} inside · {destination.confirmationSpanMs ?? '—'} ms
+            </Text>
+          </View>
+        </View>
+      ))}
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Armed timeout</Text>
+        <Text style={styles.statValue}>{debug.armedTimeout ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Active timeout</Text>
+        <Text style={styles.statValue}>{debug.activeTimeout ? 'yes' : 'no'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>End reason</Text>
+        <Text style={styles.statValue}>{debug.endReason ?? '—'}</Text>
+      </View>
+      <View style={styles.statRow}>
+        <Text style={styles.statLabel}>Engine lifecycle</Text>
+        <Text style={styles.statValue}>{debug.engine.lifecycle}</Text>
+      </View>
+      {selectedSample ? (
+        <View style={styles.debugSampleCard}>
+          <Text style={styles.sectionLabel}>
+            SAMPLE {selectedIndex + 1} / {debug.samples.length}
+          </Text>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Time</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(selectedSample.sample.recordedAtMs)}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Accepted</Text>
+            <Text style={styles.statValue}>{selectedSample.accepted ? 'yes' : 'poor accuracy'}</Text>
+          </View>
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Nearest place</Text>
+            <Text style={styles.statValue}>
+              {selectedSample.nearestPlaceId ?? '—'} · {formatMeters(selectedSample.nearestDistanceMeters)}
+            </Text>
+          </View>
+          <View style={styles.debugSampleNav}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!previous}
+              onPress={() => {
+                if (previous) {
+                  onSelectSample(previous.sample.id);
+                }
+              }}
+              style={[styles.button, styles.secondaryButton, !previous ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>PREV</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!next}
+              onPress={() => {
+                if (next) {
+                  onSelectSample(next.sample.id);
+                }
+              }}
+              style={[styles.button, styles.secondaryButton, !next ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>NEXT</Text>
+            </Pressable>
           </View>
         </View>
       ) : null}
@@ -433,22 +575,23 @@ function DebugTracePanel({
 }
 
 export function AttemptResultScreen({
+  title,
   route,
   attempt,
-  analysis,
+  journey,
   debug = null,
   busy,
   error,
   doneLabel = 'DONE',
   onDone,
+  onChangeMode,
 }: AttemptResultScreenProps) {
   const completed = attempt.lifecycle === 'completed';
+  const analysis = journey?.pathAnalytics ?? null;
   const focus = analysis?.focus;
-  const competitive = focus?.eligible === true;
-  const official = competitive ? focus.officialTimeMs : null;
-  const displayStartedAtMs = competitive ? focus.startedAtMs : attempt.startedAtMs;
-  const displayFinishedAtMs = competitive ? focus.finishedAtMs : attempt.finishedAtMs;
-  const waitEvents = competitive ? focus.waitEvents : [];
+  const competitive = isJourneyCompetitive(attempt);
+  const official = competitive ? (journey?.officialTimeMs ?? officialTimeMs(attempt)) : null;
+  const waitEvents = focus?.eligible === true ? focus.waitEvents : [];
   const displayableMovement = focus?.movement != null && isMovementDisplayable(focus.movement);
   const visibleWaitEvents = displayableMovement ? waitEvents : [];
   const locatedWaits = visibleWaitEvents.filter(
@@ -472,8 +615,8 @@ export function AttemptResultScreen({
     competitive && route && activeGhostSelection
       ? pointAtProgress(route.referencePath, activeGhostSelection.progressMeters)
       : null;
-  const waitingComparison = competitive ? analysis?.waitingComparison : null;
-  const ghostComparison = competitive ? analysis?.ghostComparison : null;
+  const waitingComparison = focus?.eligible === true ? analysis?.waitingComparison : null;
+  const ghostComparison = focus?.eligible === true ? analysis?.ghostComparison : null;
   const displayedComparisonLocations =
     waitingComparison?.available === true ? waitingComparison.displayedLocations : [];
   const waitToneById = new Map<string, RouteMapWaitMarkerTone>();
@@ -529,11 +672,11 @@ export function AttemptResultScreen({
     }),
   ];
   const selectedDebugSample =
-    debug?.samples.find((entry) => entry.sample.id === selectedSampleId) ?? debug?.samples[0] ?? null;
-  const debugSamples = (debug?.samples ?? []).map((entry) => ({
+    debug?.place.samples.find((entry) => entry.sample.id === selectedSampleId) ?? debug?.place.samples[0] ?? null;
+  const debugSamples = (debug?.place.samples ?? []).map((entry) => ({
     id: entry.sample.id,
     point: { latitude: entry.sample.latitude, longitude: entry.sample.longitude },
-    accepted: entry.match.accepted,
+    accepted: entry.accepted,
   }));
 
   return (
@@ -545,43 +688,43 @@ export function AttemptResultScreen({
         nestedScrollEnabled
         keyboardShouldPersistTaps="handled"
       >
-      {competitive && route ? (
+      {competitive ? (
         <View style={styles.attemptResultHeader}>
           <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
-          <Text style={styles.title}>{route.name}</Text>
+          <Text style={styles.title}>{title}</Text>
           {official != null ? <Text style={styles.title}>{formatElapsed(official)}</Text> : null}
-          {analysis?.isPb ? <Text style={styles.pbBadge}>PB</Text> : null}
-          {analysis?.deltaVsPbMs != null ? (
-            <Text style={deltaStyle(analysis.deltaVsPbMs)}>
-              {formatSignedDelta(analysis.deltaVsPbMs)} vs PB
+          {journey?.isPb ? <Text style={styles.pbBadge}>PB</Text> : null}
+          {journey?.deltaVsPbMs != null ? (
+            <Text style={deltaStyle(journey.deltaVsPbMs)}>
+              {formatSignedDelta(journey.deltaVsPbMs)} vs PB
             </Text>
           ) : null}
-          {analysis?.deltaVsPreviousMs != null ? (
-            <Text style={deltaStyle(analysis.deltaVsPreviousMs)}>
-              {formatSignedDelta(analysis.deltaVsPreviousMs)} vs previous
+          {journey?.deltaVsPreviousMs != null ? (
+            <Text style={deltaStyle(journey.deltaVsPreviousMs)}>
+              {formatSignedDelta(journey.deltaVsPreviousMs)} vs previous
             </Text>
           ) : null}
-          {analysis?.rank != null ? (
-            <Text style={styles.subtitle}>{formatRankAmong(analysis.rank, analysis.summary.rankedAttemptCount)}</Text>
+          {journey?.rank != null ? (
+            <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
           ) : null}
         </View>
       ) : null}
 
-      {route ? (
+      {route || debug?.place.recordedPath.length ? (
         <View style={styles.attemptMapPane} collapsable={false}>
           <RouteMap
-            path={route.referencePath}
-            startZone={route.startZone}
-            finishZone={route.finishZone}
+            path={route?.referencePath ?? []}
+            startZone={route?.startZone}
+            finishZone={route?.finishZone}
             checkpoints={checkpoints}
             waitMarkers={waitMarkers}
             selectedMarkerId={selectedWaitId}
             previewPoint={ghostMapPoint}
-            recordedPath={debug?.recordedPath ?? []}
+            recordedPath={debug?.place.recordedPath ?? []}
             debugSamples={debugSamples}
             selectedSampleId={selectedDebugSample?.sample.id ?? null}
-            officialStartPoint={debug?.officialStartPoint ?? null}
-            officialFinishPoint={debug?.officialFinishPoint ?? null}
+            officialStartPoint={debug?.place.officialStartPoint ?? null}
+            officialFinishPoint={debug?.place.officialFinishPoint ?? null}
             onWaitMarkerPress={(markerId) => {
               const location = displayedComparisonLocations.find((entry) => entry.id === markerId);
               if (location) {
@@ -591,12 +734,29 @@ export function AttemptResultScreen({
               selectWait(markerId);
             }}
             onMapPress={(point) => {
-              if (debug) {
-                const tappedSample = nearestDebugSample(debug.samples, point);
+              if (debug?.variant) {
+                const tappedSample = nearestDebugSample(debug.variant.samples, point);
                 if (tappedSample) {
                   setSelectedSampleId(tappedSample.sample.id);
                   return;
                 }
+              }
+              const tappedPlace = debug?.place.samples.find((entry) => entry.sample.id === selectedSampleId);
+              if (tappedPlace) {
+                setSelectedSampleId(tappedPlace.sample.id);
+              }
+              const nearestPlace = debug
+                ? debug.place.samples.reduce<{ id: string; distance: number } | null>((best, entry) => {
+                    const distance = Math.abs(entry.sample.latitude - point.latitude) + Math.abs(entry.sample.longitude - point.longitude);
+                    if (!best || distance < best.distance) {
+                      return { id: entry.sample.id, distance };
+                    }
+                    return best;
+                  }, null)
+                : null;
+              if (nearestPlace) {
+                setSelectedSampleId(nearestPlace.id);
+                return;
               }
               const tappedWaitId = waitEventIdNearPoint(visibleWaitEvents, point);
               if (tappedWaitId) {
@@ -617,11 +777,11 @@ export function AttemptResultScreen({
         </View>
       ) : null}
 
-      {competitive && ghostComparison ? (
+      {focus?.eligible === true && ghostComparison ? (
         <View style={styles.ghostChartPane} collapsable={false}>
           <GhostDeltaChart
             comparison={ghostComparison}
-            isCurrentPb={analysis?.isPb === true}
+            isCurrentPb={journey?.isPb === true}
             selection={activeGhostSelection}
             onSelect={(point) => {
               setGhostSelection(point ? { attemptId: attempt.id, point } : null);
@@ -635,13 +795,28 @@ export function AttemptResultScreen({
           <View>
             <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
             <Text style={styles.title}>
-              {debug?.incompleteLabel ?? incompleteAttemptLabel(attempt) ?? route?.name ?? 'Attempt'}
+              {debug?.place.incompleteLabel ?? incompleteAttemptLabel(attempt) ?? title}
             </Text>
             <Text style={styles.subtitle}>{incompleteSubtitle(attempt, debug)}</Text>
           </View>
         ) : null}
-        {debug ? <DebugTracePanel debug={debug} selectedSample={selectedDebugSample} onSelectSample={setSelectedSampleId} /> : null}
-        {competitive && focus?.movement ? (
+        {debug ? (
+          <PlaceDebugPanel
+            debug={debug.place}
+            selectedSample={selectedDebugSample}
+            onSelectSample={setSelectedSampleId}
+          />
+        ) : null}
+        {debug?.variant ? (
+          <DebugTracePanel
+            debug={debug.variant}
+            selectedSample={
+              debug.variant.samples.find((entry) => entry.sample.id === selectedSampleId) ?? null
+            }
+            onSelectSample={setSelectedSampleId}
+          />
+        ) : null}
+        {focus?.eligible === true && focus.movement ? (
           <MovementBreakdownBlock
             breakdown={focus.movement}
             waitEvents={visibleWaitEvents}
@@ -649,25 +824,40 @@ export function AttemptResultScreen({
             onSelectWait={selectWait}
           />
         ) : null}
-        {competitive && waitingComparison ? (
+        {focus?.eligible === true && waitingComparison ? (
           <WaitingVsPbBlock
             comparison={waitingComparison}
             selectedComparisonId={selectedComparisonId}
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {focus && !focus.eligible && focus.unavailabilityReason ? (
-          <Text style={styles.warningText}>{describeUnavailability(focus.unavailabilityReason)}</Text>
-        ) : null}
-        {shouldShowPersistedUnrankedWarning({
-          lifecycle: attempt.lifecycle,
-          persistedValidity: attempt.validity,
-          focus,
-        }) ? (
-          <Text style={styles.warningText}>Unranked — the course match was not reliable enough.</Text>
+        {journey?.pathUnavailable ? (
+          <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
         ) : null}
 
-        {competitive ? (
+        {onChangeMode ? (
+          <View>
+            <Text style={styles.sectionLabel}>TRANSPORTATION MODE</Text>
+            <View style={styles.modeRow}>
+              {TRANSPORTATION_MODES.map((item) => (
+                <Pressable
+                  key={item.id}
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => onChangeMode(item.id)}
+                  style={[
+                    styles.modeChip,
+                    item.id === attempt.transportationMode ? styles.modeChipSelected : null,
+                  ]}
+                >
+                  <Text style={styles.modeChipText}>{transportationModeLabel(item.id)}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        {focus?.eligible === true ? (
           <View>
             <Text style={styles.sectionLabel}>SPLITS</Text>
             <View style={styles.splitHeader}>
@@ -696,7 +886,7 @@ export function AttemptResultScreen({
             <View style={styles.statRow}>
               <Text style={styles.statLabel}>PB</Text>
               <Text style={styles.statValue}>
-                {analysis?.summary.pbTimeMs == null ? '—' : formatElapsed(analysis.summary.pbTimeMs)}
+                {journey?.summary.pbTimeMs == null ? '—' : formatElapsed(journey.summary.pbTimeMs)}
               </Text>
             </View>
             <View style={styles.statRow}>
@@ -710,18 +900,31 @@ export function AttemptResultScreen({
               </Text>
             </View>
           </View>
-        ) : null}
-
-        {displayStartedAtMs != null ? (
-          <View style={styles.statRow}>
-            <Text style={styles.statLabel}>Started</Text>
-            <Text style={styles.statValue}>{formatTimeOfDay(displayStartedAtMs)}</Text>
+        ) : competitive ? (
+          <View>
+            <View style={styles.statRow}>
+              <Text style={styles.statLabel}>PB</Text>
+              <Text style={styles.statValue}>
+                {journey?.summary.pbTimeMs == null ? '—' : formatElapsed(journey.summary.pbTimeMs)}
+              </Text>
+            </View>
+            <View style={styles.statRow}>
+              <Text style={styles.statLabel}>This run</Text>
+              <Text style={styles.statValue}>{official == null ? '—' : formatElapsed(official)}</Text>
+            </View>
           </View>
         ) : null}
-        {displayFinishedAtMs != null ? (
+
+        {attempt.startedAtMs != null ? (
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>Started</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(attempt.startedAtMs)}</Text>
+          </View>
+        ) : null}
+        {attempt.finishedAtMs != null ? (
           <View style={styles.statRow}>
             <Text style={styles.statLabel}>Finished</Text>
-            <Text style={styles.statValue}>{formatTimeOfDay(displayFinishedAtMs)}</Text>
+            <Text style={styles.statValue}>{formatTimeOfDay(attempt.finishedAtMs)}</Text>
           </View>
         ) : null}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}

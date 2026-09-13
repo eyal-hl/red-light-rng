@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, BackHandler, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import {
@@ -8,36 +8,49 @@ import {
   toCourseLayout,
   type CourseEditorDraft,
 } from '../domain/course-editor';
+import type { JourneyPoolId } from '../domain/journey';
+import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import { selectJourneyPathVariant } from '../domain/path-variant';
+import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
+import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
-import type { StartZoneStatus } from '../domain/start-zone-status';
-import type {
-  FocusAttemptAnalysis,
-  RouteAttemptAnalysis,
-  RouteCompetitiveSummary,
-} from '../domain/attempt-analysis';
-import type { AttemptDebugReport } from '../domain/attempt-debug';
+import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
-import type { RouteWorkspace } from '../product/route-workspace';
+import type { CombinedAttemptDebug, RouteWorkspace } from '../product/route-workspace';
 import { AttemptResultScreen } from './AttemptResultScreen';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
 import { HistoryScreen } from './HistoryScreen';
 import { HomeScreen } from './HomeScreen';
+import { JourneyDetailScreen } from './JourneyDetailScreen';
+import { PlaceEditorScreen, type PlaceEditorDraft } from './PlaceEditorScreen';
+import { PlacesScreen } from './PlacesScreen';
 import { RecordingScreen } from './RecordingScreen';
 import { ReviewScreen } from './ReviewScreen';
 import { RouteDetailScreen } from './RouteDetailScreen';
+import { SettingsScreen } from './SettingsScreen';
 import { styles } from './styles';
 import { handleSystemBack, type AppScreenKind } from './system-back';
 
+const LOCATING_ZONE: PlaceStartZoneStatus = {
+  status: 'locating',
+  placeId: null,
+  placeName: null,
+  distanceMeters: null,
+  overlapTieBreak: null,
+};
+
 type AppScreen =
-  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor' | 'history' | 'attempt-detail'> }
+  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor' | 'history' | 'attempt-detail' | 'journey' | 'place-editor'> }
   | { kind: 'review'; sessionId: string }
+  | { kind: 'journey'; pool: JourneyPoolId }
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
-  | { kind: 'history'; routeId: string }
-  | { kind: 'attempt-detail'; routeId: string; attemptId: string };
+  | { kind: 'history'; pool: JourneyPoolId }
+  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string }
+  | { kind: 'place-editor'; placeId: string | null };
 
 type AppRootProps = {
   workspace: RouteWorkspace;
@@ -45,9 +58,13 @@ type AppRootProps = {
 
 export function AppRoot({ workspace }: AppRootProps) {
   const [screen, setScreen] = useState<AppScreen>({ kind: 'loading' });
-  const [routes, setRoutes] = useState<Route[]>([]);
+  const [places, setPlaces] = useState<Place[]>([]);
+  const [journeys, setJourneys] = useState<JourneyPoolSummary[]>([]);
+  const [incomplete, setIncomplete] = useState<Attempt[]>([]);
+  const [activeMode, setActiveMode] = useState<TransportationMode>('scooter');
   const [pendingRecording, setPendingRecording] = useState<TrackingSessionRecord | null>(null);
   const [canStartNewRecording, setCanStartNewRecording] = useState(true);
+  const [canStartAttempt, setCanStartAttempt] = useState(true);
   const [trackingState, setTrackingState] = useState<TrackingState>(IDLE_TRACKING_STATE);
   const [reviewSession, setReviewSession] = useState<TrackingSessionRecord | null>(null);
   const [reviewDerivation, setReviewDerivation] = useState<RouteDerivation | null>(null);
@@ -56,34 +73,62 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [routeMode, setRouteMode] = useState<TransportationMode>('scooter');
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
+  const [placeDraft, setPlaceDraft] = useState<PlaceEditorDraft | null>(null);
+  const [originPlace, setOriginPlace] = useState<Place | null>(null);
+  const [destinationPlace, setDestinationPlace] = useState<Place | null>(null);
+  const [journeySummary, setJourneySummary] = useState<JourneyPoolSummary | null>(null);
+  const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
-  const [startZoneStatus, setStartZoneStatus] = useState<StartZoneStatus>('locating');
+  const [originName, setOriginName] = useState<string | null>(null);
+  const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
-  const [attemptAnalysis, setAttemptAnalysis] = useState<FocusAttemptAnalysis | null>(null);
-  const [attemptDebug, setAttemptDebug] = useState<AttemptDebugReport | null>(null);
+  const [journeyFocus, setJourneyFocus] = useState<JourneyFocusAnalysis | null>(null);
+  const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
   const [routeSummary, setRouteSummary] = useState<RouteCompetitiveSummary | null>(null);
-  const [routeAnalysis, setRouteAnalysis] = useState<RouteAttemptAnalysis | null>(null);
   const [historyMode, setHistoryMode] = useState<'chronological' | 'ranked'>('chronological');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadRouteStats = useCallback(
-    async (routeId: string) => {
-      const analyzed = await workspace.analyzeRoute(routeId);
-      setRouteSummary(analyzed?.analysis.summary ?? null);
-      setRouteAnalysis(analyzed?.analysis ?? null);
-      return analyzed;
+  const refreshHome = useCallback(async () => {
+    const snapshot = await workspace.loadHome();
+    setPlaces(snapshot.places);
+    setJourneys(snapshot.journeys);
+    setIncomplete(snapshot.incompleteAttempts);
+    setActiveMode(snapshot.activeTransportationMode);
+    setPendingRecording(snapshot.pendingRecording);
+    setCanStartNewRecording(snapshot.canStartNewRecording);
+    setCanStartAttempt(snapshot.canStartAttempt);
+    return snapshot;
+  }, [workspace]);
+
+  const loadJourney = useCallback(
+    async (pool: JourneyPoolId) => {
+      const loaded = await workspace.loadJourney(pool);
+      if (!loaded) {
+        return null;
+      }
+      setOriginPlace(loaded.origin);
+      setDestinationPlace(loaded.destination);
+      setJourneySummary(loaded.summary);
+      setJourneyHistory(loaded.history);
+      const variant = selectJourneyPathVariant(
+        loaded.routes,
+        loaded.origin,
+        loaded.destination,
+        pool.transportationMode,
+      );
+      if (variant) {
+        setSelectedRoute(variant);
+        const analyzed = await workspace.analyzeRoute(variant.id);
+        setRouteSummary(analyzed?.analysis.summary ?? null);
+      } else {
+        setSelectedRoute(null);
+        setRouteSummary(null);
+      }
+      return loaded;
     },
     [workspace],
   );
-
-  const refreshHome = useCallback(async () => {
-    const snapshot = await workspace.loadHome();
-    setRoutes(snapshot.routes);
-    setPendingRecording(snapshot.pendingRecording);
-    setCanStartNewRecording(snapshot.canStartNewRecording);
-    return snapshot;
-  }, [workspace]);
 
   const openReview = useCallback(
     async (sessionId: string) => {
@@ -98,12 +143,14 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const showAttempt = useCallback(
     async (attempt: Attempt) => {
-      const route = await workspace.getRoute(attempt.routeId);
-      if (route) {
-        setSelectedRoute(route);
+      if (attempt.originPlaceId) {
+        const origin = await workspace.getPlace(attempt.originPlaceId);
+        setOriginName(origin?.name ?? null);
+      } else {
+        setOriginName(null);
       }
       setActiveAttempt(attempt);
-      setStartZoneStatus('locating');
+      setStartZoneStatus(LOCATING_ZONE);
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -112,16 +159,29 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const showAttemptResult = useCallback(
     async (attempt: Attempt) => {
-      const route = await workspace.getRoute(attempt.routeId);
-      if (route) {
+      if (attempt.routeId) {
+        const route = await workspace.getRoute(attempt.routeId);
         setSelectedRoute(route);
+      } else {
+        setSelectedRoute(null);
       }
-      const analysis = await workspace.analyzeAttempt(attempt.routeId, attempt.id);
+      let focus: JourneyFocusAnalysis | null = null;
+      if (attempt.originPlaceId && attempt.destinationPlaceId) {
+        const analyzed = await workspace.analyzeJourney(
+          {
+            originPlaceId: attempt.originPlaceId,
+            destinationPlaceId: attempt.destinationPlaceId,
+            transportationMode: attempt.transportationMode,
+          },
+          attempt.id,
+        );
+        focus = analyzed?.focus ?? null;
+      }
       const debug = await workspace.inspectAttempt(attempt.id);
       setActiveAttempt(null);
-      setStartZoneStatus('locating');
+      setStartZoneStatus(LOCATING_ZONE);
       setAttemptResult(attempt);
-      setAttemptAnalysis(analysis);
+      setJourneyFocus(focus);
       setAttemptDebug(debug);
       setScreen({ kind: 'attempt-result' });
     },
@@ -130,9 +190,13 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const bootstrap = useCallback(async () => {
     const snapshot = await workspace.bootstrap();
-    setRoutes(snapshot.routes);
+    setPlaces(snapshot.places);
+    setJourneys(snapshot.journeys);
+    setIncomplete(snapshot.incompleteAttempts);
+    setActiveMode(snapshot.activeTransportationMode);
     setPendingRecording(snapshot.pendingRecording);
     setCanStartNewRecording(snapshot.canStartNewRecording);
+    setCanStartAttempt(snapshot.canStartAttempt);
     if (snapshot.activeAttempt) {
       await showAttempt(snapshot.activeAttempt);
       return;
@@ -182,10 +246,13 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         setStartZoneStatus(processed.startZoneStatus);
-        if (
-          processed.attempt.lifecycle === 'armed' ||
-          processed.attempt.lifecycle === 'active'
-        ) {
+        if (processed.attempt.originPlaceId) {
+          const origin = await workspace.getPlace(processed.attempt.originPlaceId);
+          setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
+        } else {
+          setOriginName(processed.startZoneStatus.placeName);
+        }
+        if (processed.attempt.lifecycle === 'armed' || processed.attempt.lifecycle === 'active') {
           setActiveAttempt(processed.attempt);
           return;
         }
@@ -304,16 +371,14 @@ export function AppRoot({ workspace }: AppRootProps) {
         return;
       }
       setRouteName('');
-      setSelectedRoute(result.route);
-      await loadRouteStats(result.route.id);
       await refreshHome();
-      setScreen({ kind: 'detail', routeId: result.route.id });
+      setScreen({ kind: 'home' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not save route.');
     } finally {
       setBusy(false);
     }
-  }, [loadRouteStats, refreshHome, routeMode, routeName, screen, workspace]);
+  }, [refreshHome, routeMode, routeName, screen, workspace]);
 
   const onDiscard = useCallback(async () => {
     if (screen.kind !== 'review') {
@@ -333,38 +398,22 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [refreshHome, screen, workspace]);
 
-  const onOpenRoute = useCallback(
-    async (routeId: string) => {
-      const route = await workspace.getRoute(routeId);
-      if (!route) {
-        return;
-      }
-      setSelectedRoute(route);
-      await loadRouteStats(routeId);
-      setScreen({ kind: 'detail', routeId });
-    },
-    [loadRouteStats, workspace],
-  );
-
-  const onArmRun = useCallback(async () => {
-    if (screen.kind !== 'detail') {
-      return;
-    }
+  const onStartAttempt = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const result = await workspace.armRun(screen.routeId);
+      const result = await workspace.startAttempt();
       if (!result.ok) {
         setError(result.reason);
         return;
       }
       await showAttempt(result.attempt);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not arm this run.');
+      setError(caught instanceof Error ? caught.message : 'Could not start.');
     } finally {
       setBusy(false);
     }
-  }, [screen, showAttempt, workspace]);
+  }, [showAttempt, workspace]);
 
   const onCancelAttempt = useCallback(async () => {
     setBusy(true);
@@ -372,20 +421,15 @@ export function AppRoot({ workspace }: AppRootProps) {
     try {
       await workspace.cancelAttempt();
       setActiveAttempt(null);
-      setStartZoneStatus('locating');
+      setStartZoneStatus(LOCATING_ZONE);
       await refreshHome();
-      if (selectedRoute) {
-        await loadRouteStats(selectedRoute.id);
-        setScreen({ kind: 'detail', routeId: selectedRoute.id });
-      } else {
-        setScreen({ kind: 'home' });
-      }
+      setScreen({ kind: 'home' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not cancel this attempt.');
     } finally {
       setBusy(false);
     }
-  }, [loadRouteStats, refreshHome, selectedRoute, workspace]);
+  }, [refreshHome, workspace]);
 
   const onEndAndInspectAttempt = useCallback(async () => {
     setBusy(true);
@@ -394,14 +438,9 @@ export function AppRoot({ workspace }: AppRootProps) {
       const ended = await workspace.endAndInspectAttempt();
       if (!ended) {
         setActiveAttempt(null);
-        setStartZoneStatus('locating');
+        setStartZoneStatus(LOCATING_ZONE);
         await refreshHome();
-        if (selectedRoute) {
-          await loadRouteStats(selectedRoute.id);
-          setScreen({ kind: 'detail', routeId: selectedRoute.id });
-        } else {
-          setScreen({ kind: 'home' });
-        }
+        setScreen({ kind: 'home' });
         return;
       }
       await showAttemptResult(ended);
@@ -410,7 +449,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     } finally {
       setBusy(false);
     }
-  }, [loadRouteStats, refreshHome, selectedRoute, showAttemptResult, workspace]);
+  }, [refreshHome, showAttemptResult, workspace]);
 
   const onAcknowledgeAttempt = useCallback(async () => {
     if (!attemptResult) {
@@ -420,58 +459,151 @@ export function AppRoot({ workspace }: AppRootProps) {
     setError(null);
     try {
       await workspace.acknowledgeAttemptResult(attemptResult.id);
-      const routeId = attemptResult.routeId;
+      const pool =
+        attemptResult.originPlaceId && attemptResult.destinationPlaceId
+          ? {
+              originPlaceId: attemptResult.originPlaceId,
+              destinationPlaceId: attemptResult.destinationPlaceId,
+              transportationMode: attemptResult.transportationMode,
+            }
+          : null;
       setAttemptResult(null);
-      setAttemptAnalysis(null);
+      setJourneyFocus(null);
       setAttemptDebug(null);
-      const route = await workspace.getRoute(routeId);
-      if (route) {
-        setSelectedRoute(route);
-        await loadRouteStats(routeId);
-        setScreen({ kind: 'detail', routeId });
-      } else {
-        await refreshHome();
-        setScreen({ kind: 'home' });
+      if (pool) {
+        const loaded = await loadJourney(pool);
+        if (loaded) {
+          setScreen({ kind: 'journey', pool });
+          return;
+        }
       }
+      await refreshHome();
+      setScreen({ kind: 'home' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not close this result.');
     } finally {
       setBusy(false);
     }
-  }, [attemptResult, loadRouteStats, refreshHome, workspace]);
+  }, [attemptResult, loadJourney, refreshHome, workspace]);
 
-  const onDeleteRoute = useCallback(async () => {
-    if (screen.kind !== 'detail') {
+  const onChangeResultMode = useCallback(
+    async (mode: TransportationMode) => {
+      if (!attemptResult) {
+        return;
+      }
+      const stayOnDetail = screen.kind === 'attempt-detail';
+      setBusy(true);
+      setError(null);
+      try {
+        const updated = await workspace.setAttemptTransportationMode(attemptResult.id, mode);
+        if (updated) {
+          await showAttemptResult(updated);
+          if (stayOnDetail && updated.originPlaceId && updated.destinationPlaceId) {
+            setScreen({
+              kind: 'attempt-detail',
+              pool: {
+                originPlaceId: updated.originPlaceId,
+                destinationPlaceId: updated.destinationPlaceId,
+                transportationMode: updated.transportationMode,
+              },
+              attemptId: updated.id,
+            });
+          }
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not change transportation mode.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [attemptResult, screen.kind, showAttemptResult, workspace],
+  );
+
+  const leaveToHome = useCallback(() => {
+    setError(null);
+    setScreen({ kind: 'home' });
+    void refreshHome();
+  }, [refreshHome]);
+
+  const onOpenJourney = useCallback(
+    async (originPlaceId: string, destinationPlaceId: string, transportationMode: TransportationMode) => {
+      const pool = { originPlaceId, destinationPlaceId, transportationMode };
+      const loaded = await loadJourney(pool);
+      if (!loaded) {
+        setError('This journey is no longer available.');
+        return;
+      }
+      setError(null);
+      setScreen({ kind: 'journey', pool });
+    },
+    [loadJourney],
+  );
+
+  const onOpenHistory = useCallback(async () => {
+    if (screen.kind !== 'journey') {
       return;
     }
-    setBusy(true);
-    setError(null);
-    try {
-      await workspace.deleteRoute(screen.routeId);
-      setSelectedRoute(null);
-      await refreshHome();
-      setScreen({ kind: 'home' });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not delete route.');
-    } finally {
-      setBusy(false);
+    setHistoryMode('chronological');
+    setScreen({ kind: 'history', pool: screen.pool });
+  }, [screen]);
+
+  const onOpenHistoryAttempt = useCallback(
+    async (attemptId: string) => {
+      if (screen.kind !== 'history') {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const attempt = await workspace.getAttempt(attemptId);
+        if (!attempt) {
+          setError('This attempt is no longer available.');
+          return;
+        }
+        const analyzed = await workspace.analyzeJourney(screen.pool, attemptId);
+        const debug = await workspace.inspectAttempt(attemptId);
+        setAttemptResult(attempt);
+        setJourneyFocus(analyzed?.focus ?? null);
+        setAttemptDebug(debug);
+        setScreen({ kind: 'attempt-detail', pool: screen.pool, attemptId });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [screen, workspace],
+  );
+
+  const onBackFromHistoryDetail = useCallback(async () => {
+    if (screen.kind !== 'attempt-detail') {
+      return;
     }
-  }, [refreshHome, screen, workspace]);
+    setAttemptResult(null);
+    setJourneyFocus(null);
+    setAttemptDebug(null);
+    await loadJourney(screen.pool);
+    setScreen({ kind: 'history', pool: screen.pool });
+  }, [loadJourney, screen]);
+
+  const onBackFromHistory = useCallback(() => {
+    if (screen.kind !== 'history') {
+      return;
+    }
+    const pool = screen.pool;
+    setError(null);
+    setScreen({ kind: 'journey', pool });
+    void loadJourney(pool);
+  }, [loadJourney, screen]);
 
   const onEditCourse = useCallback(async () => {
-    if (screen.kind !== 'detail') {
+    if (!selectedRoute) {
       return;
     }
-    const route = await workspace.getRoute(screen.routeId);
-    if (!route) {
-      setError('This route is no longer available.');
-      return;
-    }
-    setSelectedRoute(route);
-    setCourseDraft(createCourseEditorDraft(route));
+    setCourseDraft(createCourseEditorDraft(selectedRoute));
     setError(null);
-    setScreen({ kind: 'editor', routeId: route.id });
-  }, [screen, workspace]);
+    setScreen({ kind: 'editor', routeId: selectedRoute.id });
+  }, [selectedRoute]);
 
   const onSaveCourse = useCallback(async () => {
     if (screen.kind !== 'editor' || !courseDraft) {
@@ -488,14 +620,12 @@ export function AppRoot({ workspace }: AppRootProps) {
       setSelectedRoute(result.route);
       setCourseDraft(null);
       setScreen({ kind: 'detail', routeId: result.route.id });
-      await loadRouteStats(result.route.id);
-      await refreshHome();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not save course.');
     } finally {
       setBusy(false);
     }
-  }, [courseDraft, loadRouteStats, refreshHome, screen, workspace]);
+  }, [courseDraft, screen, workspace]);
 
   const onCancelEditor = useCallback(async () => {
     if (screen.kind !== 'editor') {
@@ -503,85 +633,158 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
     setCourseDraft(null);
     setError(null);
-    const route = await workspace.getRoute(screen.routeId);
-    if (route) {
-      setSelectedRoute(route);
-    }
     setScreen({ kind: 'detail', routeId: screen.routeId });
-    await loadRouteStats(screen.routeId);
-  }, [loadRouteStats, screen, workspace]);
+  }, [screen]);
 
-  const onOpenHistory = useCallback(async () => {
+  const onDeleteRoute = useCallback(async () => {
     if (screen.kind !== 'detail') {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await loadRouteStats(screen.routeId);
-      setHistoryMode('chronological');
-      setScreen({ kind: 'history', routeId: screen.routeId });
+      await workspace.deleteRoute(screen.routeId);
+      setSelectedRoute(null);
+      await refreshHome();
+      setScreen({ kind: 'home' });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not load history.');
+      setError(caught instanceof Error ? caught.message : 'Could not delete path variant.');
     } finally {
       setBusy(false);
     }
-  }, [loadRouteStats, screen]);
+  }, [refreshHome, screen, workspace]);
 
-  const onOpenHistoryAttempt = useCallback(
-    async (attemptId: string) => {
-      if (screen.kind !== 'history') {
-        return;
-      }
-      setBusy(true);
-      setError(null);
-      try {
-        const attempt = await workspace.getAttempt(attemptId);
-        if (!attempt) {
-          setError('This attempt is no longer available.');
+  const onOpenPlaces = useCallback(async () => {
+    setError(null);
+    setPlaces(await workspace.listPlaces());
+    setScreen({ kind: 'places' });
+  }, [workspace]);
+
+  const onOpenPlaceEditor = useCallback(
+    async (placeId: string | null) => {
+      if (placeId) {
+        const place = await workspace.getPlace(placeId);
+        if (!place) {
+          setError('This place is no longer available.');
           return;
         }
-        const analysis = await workspace.analyzeAttempt(screen.routeId, attemptId);
-        const debug = await workspace.inspectAttempt(attemptId);
-        setAttemptResult(attempt);
-        setAttemptAnalysis(analysis);
-        setAttemptDebug(debug);
-        setScreen({ kind: 'attempt-detail', routeId: screen.routeId, attemptId });
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
-      } finally {
-        setBusy(false);
+        setPlaceDraft({
+          id: place.id,
+          name: place.name,
+          center: place.center,
+          radiusMeters: place.radiusMeters,
+          status: place.status,
+        });
+      } else {
+        const current = await workspace.getCurrentPosition();
+        setPlaceDraft({
+          id: null,
+          name: '',
+          center: current ?? { latitude: 32.08, longitude: 34.78 },
+          radiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+          status: 'active',
+        });
       }
+      setError(null);
+      setScreen({ kind: 'place-editor', placeId });
     },
-    [screen, workspace],
+    [workspace],
   );
 
-  const onBackFromHistoryDetail = useCallback(async () => {
-    if (screen.kind !== 'attempt-detail') {
+  const onSavePlace = useCallback(async () => {
+    if (screen.kind !== 'place-editor' || !placeDraft) {
       return;
     }
-    setAttemptResult(null);
-    setAttemptAnalysis(null);
-    setAttemptDebug(null);
-    await loadRouteStats(screen.routeId);
-    setScreen({ kind: 'history', routeId: screen.routeId });
-  }, [loadRouteStats, screen]);
-
-  const leaveToHome = useCallback(() => {
+    setBusy(true);
     setError(null);
-    setScreen({ kind: 'home' });
-    void refreshHome();
-  }, [refreshHome]);
+    try {
+      const result = placeDraft.id
+        ? await workspace.savePlace({
+            id: placeDraft.id,
+            name: placeDraft.name,
+            center: placeDraft.center,
+            radiusMeters: placeDraft.radiusMeters,
+            status: placeDraft.status,
+            createdAtMs: 0,
+          })
+        : await workspace.createPlace({
+            name: placeDraft.name,
+            center: placeDraft.center,
+            radiusMeters: placeDraft.radiusMeters,
+          });
+      if (!result.ok) {
+        setError(result.reason);
+        return;
+      }
+      setPlaceDraft(null);
+      setPlaces(await workspace.listPlaces());
+      setScreen({ kind: 'places' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not save place.');
+    } finally {
+      setBusy(false);
+    }
+  }, [placeDraft, screen, workspace]);
 
-  const onBackFromHistory = useCallback(() => {
-    if (screen.kind !== 'history') {
+  const onArchiveOrDeletePlace = useCallback(async () => {
+    if (screen.kind !== 'place-editor' || !placeDraft?.id) {
       return;
     }
-    const routeId = screen.routeId;
+    setBusy(true);
     setError(null);
-    setScreen({ kind: 'detail', routeId });
-    void loadRouteStats(routeId);
-  }, [loadRouteStats, screen]);
+    try {
+      const result = await workspace.removePlace(placeDraft.id);
+      if (!result.ok) {
+        setError(result.reason);
+        return;
+      }
+      setPlaceDraft(null);
+      setPlaces(await workspace.listPlaces());
+      setScreen({ kind: 'places' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not remove place.');
+    } finally {
+      setBusy(false);
+    }
+  }, [placeDraft, screen, workspace]);
+
+  const onUseCurrentLocation = useCallback(async () => {
+    if (!placeDraft) {
+      return;
+    }
+    const current = await workspace.getCurrentPosition();
+    if (!current) {
+      setError('Could not read the current location.');
+      return;
+    }
+    setPlaceDraft({ ...placeDraft, center: current });
+  }, [placeDraft, workspace]);
+
+  const leavePlaceEditor = useCallback(() => {
+    setPlaceDraft(null);
+    setError(null);
+    setScreen({ kind: 'places' });
+    void workspace.listPlaces().then(setPlaces);
+  }, [workspace]);
+
+  const leaveDetailToJourney = useCallback(() => {
+    if (screen.kind === 'journey') {
+      setScreen({ kind: 'home' });
+      return;
+    }
+    if (originPlace && destinationPlace && journeySummary) {
+      setScreen({
+        kind: 'journey',
+        pool: {
+          originPlaceId: originPlace.id,
+          destinationPlaceId: destinationPlace.id,
+          transportationMode: journeySummary.transportationMode,
+        },
+      });
+      return;
+    }
+    leaveToHome();
+  }, [destinationPlace, journeySummary, leaveToHome, originPlace, screen.kind]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () =>
@@ -590,6 +793,8 @@ export function AppRoot({ workspace }: AppRootProps) {
         cancelRecording: () => {
           void onCancel();
         },
+        leavePlaceEditor,
+        leaveDetailToJourney,
         cancelEditor: () => {
           void onCancelEditor();
         },
@@ -607,6 +812,8 @@ export function AppRoot({ workspace }: AppRootProps) {
     );
     return () => sub.remove();
   }, [
+    leaveDetailToJourney,
+    leavePlaceEditor,
     leaveToHome,
     onAcknowledgeAttempt,
     onBackFromHistory,
@@ -616,6 +823,9 @@ export function AppRoot({ workspace }: AppRootProps) {
     onEndAndInspectAttempt,
     screen.kind,
   ]);
+
+  const resultTitle = journeyFocus?.summary.title ?? originName ?? 'Attempt';
+  const archiveOrDeleteLabel = placeDraft?.id ? 'ARCHIVE OR DELETE' : 'DELETE';
 
   return (
     <View style={styles.screen}>
@@ -627,12 +837,38 @@ export function AppRoot({ workspace }: AppRootProps) {
       ) : null}
       {screen.kind === 'home' ? (
         <HomeScreen
-          routes={routes}
-          pendingRecording={pendingRecording}
+          journeys={journeys}
+          places={places}
+          incompleteAttempts={incomplete}
+          activeTransportationMode={activeMode}
+          pendingRecording={pendingRecording != null}
+          pendingInterrupted={pendingRecording?.captureOutcome === 'interrupted'}
+          canStartAttempt={canStartAttempt}
           canStartNewRecording={canStartNewRecording}
           busy={busy}
           error={error}
-          onRecordNewRoute={() => {
+          onStart={() => {
+            void onStartAttempt();
+          }}
+          onOpenJourney={(originPlaceId, destinationPlaceId, mode) => {
+            void onOpenJourney(originPlaceId, destinationPlaceId, mode);
+          }}
+          onOpenIncomplete={(attemptId) => {
+            void (async () => {
+              const attempt = await workspace.getAttempt(attemptId);
+              if (attempt) {
+                await showAttemptResult(attempt);
+              }
+            })();
+          }}
+          onOpenPlaces={() => {
+            void onOpenPlaces();
+          }}
+          onOpenSettings={() => {
+            setError(null);
+            setScreen({ kind: 'settings' });
+          }}
+          onRecordPathVariant={() => {
             void onRecordNewRoute();
           }}
           onOpenPending={() => {
@@ -641,9 +877,65 @@ export function AppRoot({ workspace }: AppRootProps) {
               void openReview(pendingRecording.id);
             }
           }}
-          onOpenRoute={(routeId) => {
-            setError(null);
-            void onOpenRoute(routeId);
+        />
+      ) : null}
+      {screen.kind === 'places' ? (
+        <PlacesScreen
+          places={places}
+          busy={busy}
+          error={error}
+          onBack={leaveToHome}
+          onCreate={() => {
+            void onOpenPlaceEditor(null);
+          }}
+          onOpenPlace={(placeId) => {
+            void onOpenPlaceEditor(placeId);
+          }}
+        />
+      ) : null}
+      {screen.kind === 'place-editor' && placeDraft ? (
+        <PlaceEditorScreen
+          draft={placeDraft}
+          busy={busy}
+          error={error}
+          onChangeDraft={setPlaceDraft}
+          onUseCurrentLocation={() => {
+            void onUseCurrentLocation();
+          }}
+          onSave={() => {
+            void onSavePlace();
+          }}
+          onCancel={leavePlaceEditor}
+          onArchiveOrDelete={() => {
+            Alert.alert(
+              'Remove place?',
+              'If this place is used by historical attempts it will be archived instead of deleted.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Remove',
+                  style: 'destructive',
+                  onPress: () => {
+                    void onArchiveOrDeletePlace();
+                  },
+                },
+              ],
+            );
+          }}
+          archiveOrDeleteLabel={archiveOrDeleteLabel}
+        />
+      ) : null}
+      {screen.kind === 'settings' ? (
+        <SettingsScreen
+          mode={activeMode}
+          busy={busy}
+          error={error}
+          onBack={leaveToHome}
+          onChangeMode={(mode) => {
+            void (async () => {
+              await workspace.setActiveTransportationMode(mode);
+              setActiveMode(mode);
+            })();
           }}
         />
       ) : null}
@@ -683,20 +975,35 @@ export function AppRoot({ workspace }: AppRootProps) {
           onBack={leaveToHome}
         />
       ) : null}
+      {screen.kind === 'journey' && originPlace && destinationPlace && journeySummary ? (
+        <JourneyDetailScreen
+          origin={originPlace}
+          destination={destinationPlace}
+          summary={journeySummary}
+          history={journeyHistory}
+          pathVariant={selectedRoute}
+          busy={busy}
+          error={error}
+          onBack={leaveToHome}
+          onHistory={() => {
+            void onOpenHistory();
+          }}
+          onEditPathVariant={
+            selectedRoute
+              ? () => {
+                  setScreen({ kind: 'detail', routeId: selectedRoute.id });
+                }
+              : null
+          }
+        />
+      ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
         <RouteDetailScreen
           route={selectedRoute}
           summary={routeSummary}
-          canArm={canStartNewRecording}
           busy={busy}
           error={error}
-          onBack={leaveToHome}
-          onArmRun={() => {
-            void onArmRun();
-          }}
-          onHistory={() => {
-            void onOpenHistory();
-          }}
+          onBack={leaveDetailToJourney}
           onEditCourse={() => {
             void onEditCourse();
           }}
@@ -707,7 +1014,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       ) : null}
       {screen.kind === 'attempt' && activeAttempt ? (
         <AttemptScreen
-          route={selectedRoute}
+          originName={originName}
           attempt={activeAttempt}
           startZoneStatus={startZoneStatus}
           busy={busy}
@@ -722,21 +1029,26 @@ export function AppRoot({ workspace }: AppRootProps) {
       ) : null}
       {screen.kind === 'attempt-result' && attemptResult ? (
         <AttemptResultScreen
+          title={resultTitle}
           route={selectedRoute}
           attempt={attemptResult}
-          analysis={attemptAnalysis}
+          journey={journeyFocus}
           debug={attemptDebug}
           busy={busy}
           error={error}
           onDone={() => {
             void onAcknowledgeAttempt();
           }}
+          onChangeMode={(mode) => {
+            void onChangeResultMode(mode);
+          }}
         />
       ) : null}
-      {screen.kind === 'history' && selectedRoute && routeAnalysis ? (
+      {screen.kind === 'history' && journeySummary ? (
         <HistoryScreen
-          route={selectedRoute}
-          analysis={routeAnalysis}
+          title={journeySummary.title}
+          rows={journeyHistory}
+          rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
           mode={historyMode}
           busy={busy}
           error={error}
@@ -749,15 +1061,19 @@ export function AppRoot({ workspace }: AppRootProps) {
       ) : null}
       {screen.kind === 'attempt-detail' && attemptResult ? (
         <AttemptResultScreen
+          title={resultTitle}
           route={selectedRoute}
           attempt={attemptResult}
-          analysis={attemptAnalysis}
+          journey={journeyFocus}
           debug={attemptDebug}
           busy={busy}
           error={error}
           doneLabel="BACK"
           onDone={() => {
             void onBackFromHistoryDetail();
+          }}
+          onChangeMode={(mode) => {
+            void onChangeResultMode(mode);
           }}
         />
       ) : null}

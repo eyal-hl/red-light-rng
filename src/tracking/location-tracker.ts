@@ -14,6 +14,11 @@ export const ROUTE_RECORDING_NOTIFICATION_BODY =
 export const ATTEMPT_NOTIFICATION_BODY =
   'Timing an armed run. You can lock your phone and keep traveling.';
 
+export type LocationFix = {
+  latitude: number;
+  longitude: number;
+};
+
 export interface LocationPlatform {
   hasServicesEnabled(): Promise<boolean>;
   hasForegroundPermission(): Promise<boolean>;
@@ -23,6 +28,7 @@ export interface LocationPlatform {
   startUpdates(options?: LocationUpdateOptions): Promise<void>;
   stopUpdates(): Promise<void>;
   isUpdating(): Promise<boolean>;
+  getCurrentPosition(): Promise<LocationFix | null>;
 }
 
 export interface LocationTracker {

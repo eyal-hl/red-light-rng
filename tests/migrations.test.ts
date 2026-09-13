@@ -319,4 +319,170 @@ describe('SQLite migrations', () => {
     const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
     assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
   });
+
+  it('migrates v4 attempts onto seeded places without wiping telemetry, mode, or route ids', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    await MIGRATIONS[0]!.up(sql, 1000);
+    await MIGRATIONS[1]!.up(sql, 1000);
+    await MIGRATIONS[2]!.up(sql, 1000);
+    await MIGRATIONS[3]!.up(sql, 1000);
+    await sql.exec('PRAGMA user_version = 4');
+
+    const home = { latitude: 32.08, longitude: 34.78 };
+    const work = { latitude: 32.08 + 300 / 111_320, longitude: 34.78 };
+    const cafe = { latitude: 32.08 + 15 / 111_320, longitude: 34.78 };
+
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['src-hw', 1000, 2000],
+    );
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['src-wh', 1100, 2100],
+    );
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'route_creation', 'finished', 'saved', 0)`,
+      ['src-cafe', 1200, 2200],
+    );
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'attempt', 'finished', 'saved', 0)`,
+      ['att-hw', 3000, 4000],
+    );
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'attempt', 'finished', 'saved', 0)`,
+      ['att-wh', 5000, 6000],
+    );
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'attempt', 'finished', 'saved', 0)`,
+      ['att-dev', 7000, 8000],
+    );
+    await sql.run(
+      `INSERT INTO location_sample (
+         id, session_id, recorded_at_ms, latitude, longitude,
+         horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['p-hw', 'att-hw', 3100, home.latitude, home.longitude, 5, 4, 0],
+    );
+
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters,
+         start_progress_m, finish_progress_m
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['route-hw', 'Home → Work', 'scooter', 2000, 'src-hw', home.latitude, home.longitude, 30, work.latitude, work.longitude, 30, 0, 300],
+    );
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters,
+         start_progress_m, finish_progress_m
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['route-wh', 'Work → Home', 'walk', 2100, 'src-wh', work.latitude, work.longitude, 30, home.latitude, home.longitude, 30, 0, 300],
+    );
+    await sql.run(
+      `INSERT INTO route (
+         id, name, transportation_mode, created_at_ms, source_recording_id,
+         start_latitude, start_longitude, start_radius_meters,
+         finish_latitude, finish_longitude, finish_radius_meters,
+         start_progress_m, finish_progress_m
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['route-cafe', 'Cafe → Work', 'scooter', 2200, 'src-cafe', cafe.latitude, cafe.longitude, 30, work.latitude, work.longitude, 30, 0, 280],
+    );
+
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, session_id, lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, ?, ?, 'completed', 'valid', ?, ?, ?, 1)`,
+      ['attempt-hw', 'route-hw', 'att-hw', 3000, 3100, 4000],
+    );
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, session_id, lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, ?, ?, 'completed', 'valid', ?, ?, ?, 1)`,
+      ['attempt-wh', 'route-wh', 'att-wh', 5000, 5100, 6000],
+    );
+
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, session_id, lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, ?, ?, 'completed', 'unranked', ?, ?, ?, 1)`,
+      ['attempt-dev', 'route-hw', 'att-dev', 7000, 7100, 8000],
+    );
+
+    await applyMigrations(sql, 9_000);
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+
+    const places = await sql.getAll<{ id: string; name: string }>('SELECT id, name FROM place ORDER BY name ASC');
+    assert.ok(places.length >= 3);
+    const cafePlace = places.find((place) => place.name === 'Cafe');
+    const homePlace = places.find((place) => place.name === 'Home');
+    assert.ok(cafePlace);
+    assert.ok(homePlace);
+    assert.notEqual(cafePlace.id, homePlace.id);
+
+    const hw = await sql.getFirst<{
+      route_id: string | null;
+      origin_place_id: string;
+      destination_place_id: string;
+      transportation_mode: string;
+      started_at_ms: number;
+      finished_at_ms: number;
+      validity: string;
+    }>('SELECT * FROM attempt WHERE id = ?', ['attempt-hw']);
+    const wh = await sql.getFirst<{
+      origin_place_id: string;
+      destination_place_id: string;
+      transportation_mode: string;
+    }>('SELECT * FROM attempt WHERE id = ?', ['attempt-wh']);
+    assert.equal(hw?.route_id, 'route-hw');
+    assert.equal(hw?.transportation_mode, 'scooter');
+    assert.equal(hw?.started_at_ms, 3100);
+    assert.equal(hw?.finished_at_ms, 4000);
+    assert.equal(wh?.transportation_mode, 'walk');
+    assert.notEqual(hw?.origin_place_id, wh?.origin_place_id);
+    assert.equal(hw?.origin_place_id, wh?.destination_place_id);
+    assert.equal(hw?.destination_place_id, wh?.origin_place_id);
+    const diverted = await sql.getFirst<{ validity: string; origin_place_id: string }>(
+      'SELECT validity, origin_place_id FROM attempt WHERE id = ?',
+      ['attempt-dev'],
+    );
+    assert.equal(diverted?.validity, 'valid');
+    assert.equal(diverted?.origin_place_id, hw?.origin_place_id);
+
+    const sample = await sql.getFirst<{ id: string }>('SELECT id FROM location_sample WHERE id = ?', ['p-hw']);
+    assert.equal(sample?.id, 'p-hw');
+    const remaining = await sql.getAll<{ id: string }>('SELECT id FROM attempt ORDER BY id');
+    assert.deepEqual(remaining.map((row) => row.id), ['attempt-dev', 'attempt-hw', 'attempt-wh']);
+
+    const mode = await sql.getFirst<{ value: string }>(
+      `SELECT value FROM app_setting WHERE key = 'active_transportation_mode'`,
+    );
+    assert.equal(mode?.value, 'scooter');
+  });
 });

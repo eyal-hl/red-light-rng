@@ -9,17 +9,11 @@ import {
 } from '../src/domain/course-editor';
 import { pointAtProgress } from '../src/domain/path-projection';
 import { applyMigrations } from '../src/persistence/migrations';
-import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
-import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
-import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
-import { AttemptRuntime } from '../src/product/attempt-runtime';
-import { RouteWorkspace } from '../src/product/route-workspace';
-import { SharedLocationTracker } from '../src/tracking/shared-location-tracker';
-import { TrackingSessionService } from '../src/tracking/tracking-session-service';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
+import { completeJourneySamples, seedPlacesForRoute } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
-import { movingTrace, traceAlongPath } from './helpers/samples';
-import { createMemoryWorkspace, FakeLocationPlatform } from './helpers/workspace';
+import { movingTrace } from './helpers/samples';
+import { createMemoryWorkspace, createSqliteWorkspace } from './helpers/workspace';
 
 describe('route results workspace', () => {
   it('updates route summary after a completed valid attempt without resetting app data', async () => {
@@ -42,8 +36,12 @@ describe('route results workspace', () => {
 
     const armed = await workspace.armRun(saved.route.id);
     assert.equal(armed.ok, true);
+    const places = await workspace.listPlaces();
+    const origin = places.find((place) => place.name === 'Home');
+    const destination = places.find((place) => place.name === 'Work');
+    assert.ok(origin && destination);
     await sessions.appendSamples(
-      traceAlongPath(saved.route.referencePath, { sessionId: 'id-2', stepMeters: 5, count: 55 }),
+      completeJourneySamples({ origin, destination, sessionId: 'id-2' }),
     );
     const completed = await workspace.processActiveAttempt();
     assert.equal(completed?.lifecycle, 'completed');
@@ -62,29 +60,12 @@ describe('route results workspace', () => {
   it('reconstructs the same current-layout analysis after sqlite reload and keeps raw telemetry', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    const sessions = new SqliteLocationSampleStore(async () => sql);
-    const routes = new SqliteRouteStore(async () => sql);
-    const attemptStore = new SqliteAttemptStore(async () => sql);
-    const platform = new FakeLocationPlatform();
-    const trackingSessions = new TrackingSessionService(sessions, () => 'attempt-session');
-    const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, () => 1_700_000_000_000);
-    const runtime = new AttemptRuntime(
-      tracker,
-      platform,
-      sessions,
-      routes,
-      attemptStore,
-      () => 1_700_000_100_000,
-      () => 'attempt-1',
-    );
-    const workspace = new RouteWorkspace(
-      tracker,
-      sessions,
-      routes,
-      runtime,
-      () => 1_700_000_100_000,
-      () => 'route-1',
-    );
+    const { workspace, sessions, routes, places, attempts } = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'attempt-session',
+      routeId: 'route-1',
+      attemptId: 'attempt-1',
+    });
 
     await sessions.createSession('source', 1, 'route_creation');
     await sessions.completeSession('source', {
@@ -98,10 +79,15 @@ describe('route results workspace', () => {
       referencePath: northPath({ points: 16, stepMeters: 20 }),
     });
     await routes.createRoute(route);
+    const seeded = await seedPlacesForRoute(places, route);
     const armed = await workspace.armRun(route.id);
     assert.equal(armed.ok, true);
     await sessions.appendSamples(
-      traceAlongPath(route.referencePath, { sessionId: 'attempt-session', stepMeters: 5, count: 70 }),
+      completeJourneySamples({
+        origin: seeded.origin,
+        destination: seeded.destination,
+        sessionId: 'attempt-session',
+      }),
     );
     const completed = await workspace.processActiveAttempt();
     assert.equal(completed?.lifecycle, 'completed');
@@ -110,42 +96,28 @@ describe('route results workspace', () => {
     const sampleCount = await sessions.countSamples('attempt-session');
     assert.ok(sampleCount > 10);
 
-    const reloadedSessions = new SqliteLocationSampleStore(async () => sql);
-    const reloadedRoutes = new SqliteRouteStore(async () => sql);
-    const reloadedAttempts = new SqliteAttemptStore(async () => sql);
-    const reloadedRuntime = new AttemptRuntime(
-      tracker,
-      platform,
-      reloadedSessions,
-      reloadedRoutes,
-      reloadedAttempts,
-      () => 1_700_000_100_000,
-      () => 'attempt-2',
-    );
-    const reloaded = new RouteWorkspace(
-      tracker,
-      reloadedSessions,
-      reloadedRoutes,
-      reloadedRuntime,
-      () => 1_700_000_100_000,
-      () => 'route-1',
-    );
-    const after = await reloaded.analyzeAttempt(route.id, 'attempt-1');
+    const reloaded = createSqliteWorkspace(sql, {
+      now: () => 1_700_000_100_000,
+      sessionId: 'unused',
+      routeId: 'route-1',
+      attemptId: 'attempt-2',
+    });
+    const after = await reloaded.workspace.analyzeAttempt(route.id, 'attempt-1');
     assert.equal(after?.focus.officialTimeMs, before?.focus.officialTimeMs);
     assert.equal(after?.rank, before?.rank);
     assert.equal(after?.summary.pbAttemptId, 'attempt-1');
-    assert.equal(await reloadedSessions.countSamples('attempt-session'), sampleCount);
-    assert.equal((await reloadedAttempts.getAttempt('attempt-1'))?.startedAtMs, completed?.startedAtMs);
+    assert.equal(await reloaded.sessions.countSamples('attempt-session'), sampleCount);
+    assert.equal((await reloaded.attempts.getAttempt('attempt-1'))?.startedAtMs, completed?.startedAtMs);
 
     let draft = createCourseEditorDraft(route);
     draft = previewMapTap(draft, pointAtProgress(route.referencePath, 80));
     draft = addCheckpointFromPending(draft, () => 'cp-mid');
-    const savedLayout = await reloaded.saveCourseLayout(route.id, toCourseLayout(draft));
+    const savedLayout = await reloaded.workspace.saveCourseLayout(route.id, toCourseLayout(draft));
     assert.equal(savedLayout.ok, true);
-    assert.equal(await reloadedSessions.countSamples('attempt-session'), sampleCount);
-    const replayed = await reloaded.analyzeRoute(route.id);
+    assert.equal(await reloaded.sessions.countSamples('attempt-session'), sampleCount);
+    const replayed = await reloaded.workspace.analyzeRoute(route.id);
     assert.equal(replayed?.analysis.summary.rankedAttemptCount, 1);
     assert.equal(replayed?.analysis.derived[0]?.segments.length, 2);
-    assert.equal(await reloadedAttempts.getAttempt('attempt-1') != null, true);
+    assert.equal(await reloaded.attempts.getAttempt('attempt-1') != null, true);
   });
 });

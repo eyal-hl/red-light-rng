@@ -22,6 +22,12 @@ function recordActions(): { calls: SystemBackAction[]; actions: SystemBackAction
       cancelRecording: () => {
         calls.push('cancelRecording');
       },
+      leavePlaceEditor: () => {
+        calls.push('leavePlaceEditor');
+      },
+      leaveDetailToJourney: () => {
+        calls.push('leaveDetailToJourney');
+      },
       cancelEditor: () => {
         calls.push('cancelEditor');
       },
@@ -54,17 +60,27 @@ describe('system back policy', () => {
     assert.deepEqual(calls, []);
   });
 
-  it('sends route detail and review to Home via the same leaveToHome action as the top-left arrow', () => {
+  it('sends places, settings, journey, and review to Home, and route detail back to the journey', () => {
     assert.equal(isRootScreen('detail'), false);
     assert.equal(isRootScreen('review'), false);
-    assert.equal(systemBackAction('detail'), 'leaveToHome');
+    assert.equal(systemBackAction('places'), 'leaveToHome');
+    assert.equal(systemBackAction('settings'), 'leaveToHome');
+    assert.equal(systemBackAction('journey'), 'leaveToHome');
     assert.equal(systemBackAction('review'), 'leaveToHome');
+    assert.equal(systemBackAction('detail'), 'leaveDetailToJourney');
+    assert.equal(systemBackAction('place-editor'), 'leavePlaceEditor');
 
-    for (const kind of ['detail', 'review'] as const) {
+    for (const kind of ['places', 'settings', 'journey', 'review'] as const) {
       const { calls, actions } = recordActions();
       assert.equal(handleSystemBack(kind, actions), true);
       assert.deepEqual(calls, ['leaveToHome']);
     }
+    const detail = recordActions();
+    assert.equal(handleSystemBack('detail', detail.actions), true);
+    assert.deepEqual(detail.calls, ['leaveDetailToJourney']);
+    const editor = recordActions();
+    assert.equal(handleSystemBack('place-editor', editor.actions), true);
+    assert.deepEqual(editor.calls, ['leavePlaceEditor']);
   });
 
   it('returns nested editor, attempt, and result screens to route detail via their existing leave actions', () => {
@@ -119,6 +135,8 @@ describe('system back policy', () => {
     assert.match(appRoot, /cancelRecording: \(\) => \{\s*void onCancel\(\);/s);
     assert.match(appRoot, /cancelEditor: \(\) => \{\s*void onCancelEditor\(\);/s);
     assert.match(appRoot, /leaveHistoryToDetail: onBackFromHistory/);
+    assert.match(appRoot, /leaveDetailToJourney/);
+    assert.match(appRoot, /leavePlaceEditor/);
     assert.match(appRoot, /inspectAttempt: \(\) => \{\s*void onEndAndInspectAttempt\(\);/s);
     assert.match(appRoot, /acknowledgeAttemptResult: \(\) => \{\s*void onAcknowledgeAttempt\(\);/s);
     assert.match(appRoot, /leaveAttemptDetailToHistory: \(\) => \{\s*void onBackFromHistoryDetail\(\);/s);

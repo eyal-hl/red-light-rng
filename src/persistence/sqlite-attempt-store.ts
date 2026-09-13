@@ -4,6 +4,7 @@ import {
   type AttemptLifecycle,
   type AttemptValidity,
 } from '../domain/attempt';
+import type { TransportationMode } from '../domain/route';
 import { OpenAttemptExistsError, type AttemptStore } from './attempt-store';
 import type { CompleteSessionInput } from './location-sample-store';
 import type { AttemptCheckpointCrossingRow, AttemptRow } from './schema';
@@ -24,6 +25,9 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
   return {
     id: row.id,
     routeId: row.route_id,
+    originPlaceId: row.origin_place_id,
+    destinationPlaceId: row.destination_place_id,
+    transportationMode: row.transportation_mode as TransportationMode,
     sessionId: row.session_id,
     lifecycle: row.lifecycle as AttemptLifecycle,
     validity: row.validity as AttemptValidity,
@@ -118,6 +122,16 @@ export class SqliteAttemptStore implements AttemptStore {
     return mapAttempt(row, await this.loadCrossings(sql, row.id));
   }
 
+  async listAttempts(): Promise<Attempt[]> {
+    const sql = await this.getSql();
+    const rows = await sql.getAll<AttemptRow>('SELECT * FROM attempt ORDER BY armed_at_ms DESC');
+    const attempts: Attempt[] = [];
+    for (const row of rows) {
+      attempts.push(mapAttempt(row, await this.loadCrossings(sql, row.id)));
+    }
+    return attempts;
+  }
+
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
     const sql = await this.getSql();
     const rows = await sql.getAll<AttemptRow>(
@@ -131,6 +145,36 @@ export class SqliteAttemptStore implements AttemptStore {
     return attempts;
   }
 
+  async listAttemptsForJourney(
+    originPlaceId: string,
+    destinationPlaceId: string,
+    transportationMode: string,
+  ): Promise<Attempt[]> {
+    const sql = await this.getSql();
+    const rows = await sql.getAll<AttemptRow>(
+      `SELECT * FROM attempt
+       WHERE origin_place_id = ? AND destination_place_id = ? AND transportation_mode = ?
+       ORDER BY armed_at_ms DESC`,
+      [originPlaceId, destinationPlaceId, transportationMode],
+    );
+    const attempts: Attempt[] = [];
+    for (const row of rows) {
+      attempts.push(mapAttempt(row, await this.loadCrossings(sql, row.id)));
+    }
+    return attempts;
+  }
+
+  async isPlaceReferenced(placeId: string): Promise<boolean> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<{ id: string }>(
+      `SELECT id FROM attempt
+       WHERE origin_place_id = ? OR destination_place_id = ?
+       LIMIT 1`,
+      [placeId, placeId],
+    );
+    return row != null;
+  }
+
   async acknowledgeResult(attemptId: string): Promise<void> {
     const sql = await this.getSql();
     await sql.run('UPDATE attempt SET result_acknowledged = 1 WHERE id = ?', [attemptId]);
@@ -139,10 +183,14 @@ export class SqliteAttemptStore implements AttemptStore {
   private async writeAttempt(sql: SqlExecutor, attempt: Attempt): Promise<void> {
     await sql.run(
       `INSERT INTO attempt (
-         id, route_id, session_id, lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
-         result_acknowledged
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         route_id = excluded.route_id,
+         origin_place_id = excluded.origin_place_id,
+         destination_place_id = excluded.destination_place_id,
+         transportation_mode = excluded.transportation_mode,
          lifecycle = excluded.lifecycle,
          validity = excluded.validity,
          started_at_ms = excluded.started_at_ms,
@@ -151,6 +199,9 @@ export class SqliteAttemptStore implements AttemptStore {
       [
         attempt.id,
         attempt.routeId,
+        attempt.originPlaceId,
+        attempt.destinationPlaceId,
+        attempt.transportationMode,
         attempt.sessionId,
         attempt.lifecycle,
         attempt.validity,

@@ -41,6 +41,9 @@ function courseFromPath(path = longPath(), overrides: Partial<TimingCourse> = {}
 function makeAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | 'sessionId'>): Attempt {
   return {
     routeId: 'route-1',
+    originPlaceId: 'place-home',
+    destinationPlaceId: 'place-work',
+    transportationMode: 'scooter',
     lifecycle: 'completed',
     validity: 'valid',
     armedAtMs: 1_000,

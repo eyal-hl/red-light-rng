@@ -22,11 +22,14 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export type AttemptRow = {
   id: string;
-  route_id: string;
+  route_id: string | null;
+  origin_place_id: string | null;
+  destination_place_id: string | null;
+  transportation_mode: string;
   session_id: string;
   lifecycle: string;
   validity: string;
@@ -82,6 +85,21 @@ export type RouteRow = {
   finish_radius_meters: number;
   start_progress_m: number;
   finish_progress_m: number;
+};
+
+export type PlaceRow = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  status: string;
+  created_at_ms: number;
+};
+
+export type AppSettingRow = {
+  key: string;
+  value: string;
 };
 
 export type RouteCheckpointRow = {

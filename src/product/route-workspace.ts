@@ -1,22 +1,44 @@
 import { defaultCourseProgress, validateCourseLayout, type CourseLayout } from '../domain/course-layout';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
+import type { Place } from '../domain/place';
+import { clonePlace, validatePlaceInput } from '../domain/place';
+import { ensurePlacesForRoute } from '../domain/place-seeding';
+import {
+  inspectPlaceAttemptRecord,
+  type PlaceAttemptDebugReport,
+} from '../domain/place-debug';
 import type { Route, TransportationMode } from '../domain/route';
 import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-derivation';
 import type { TrackingState } from '../domain/tracking-state';
-import type { Attempt } from '../domain/attempt';
+import { isOpenAttempt, type Attempt } from '../domain/attempt';
 import {
   analyzeFocusAttempt,
   analyzeRouteAttempts,
+  deriveAnchoredLayoutAttempt,
   timingCourseFromRoute,
   type AttemptTrace,
   type FocusAttemptAnalysis,
   type RouteAttemptAnalysis,
 } from '../domain/attempt-analysis';
 import { inspectAttemptRecord, type AttemptDebugReport } from '../domain/attempt-debug';
+import {
+  analyzeJourneyFocus,
+  incompleteAttempts,
+  journeyHistoryRows,
+  listJourneyPools,
+  summarizeJourneyPool,
+  type JourneyAttemptTrace,
+  type JourneyFocusAnalysis,
+  type JourneyHistoryRow,
+  type JourneyPoolSummary,
+} from '../domain/journey-analysis';
+import type { JourneyPoolId } from '../domain/journey';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
+import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
-import type { LocationTracker } from '../tracking/location-tracker';
+import type { SettingsStore } from '../persistence/settings-store';
+import type { LocationPlatform, LocationFix, LocationTracker } from '../tracking/location-tracker';
 import {
   AttemptRuntime,
   type ArmAttemptResult,
@@ -25,11 +47,16 @@ import {
 
 export type HomeSnapshot = {
   routes: Route[];
+  places: Place[];
+  journeys: JourneyPoolSummary[];
+  incompleteAttempts: Attempt[];
+  activeTransportationMode: TransportationMode;
   activeRecording: TrackingSessionRecord | null;
   pendingRecording: TrackingSessionRecord | null;
   activeAttempt: Attempt | null;
   attemptResult: Attempt | null;
   canStartNewRecording: boolean;
+  canStartAttempt: boolean;
 };
 
 export type SaveRouteResult =
@@ -40,14 +67,31 @@ export type SaveCourseLayoutResult =
   | { ok: true; route: Route }
   | { ok: false; reason: string };
 
+export type SavePlaceResult =
+  | { ok: true; place: Place }
+  | { ok: false; reason: string };
+
+export type RemovePlaceResult =
+  | { ok: true; action: 'deleted' | 'archived' }
+  | { ok: false; reason: string };
+
+export type CombinedAttemptDebug = {
+  place: PlaceAttemptDebugReport;
+  variant: AttemptDebugReport | null;
+};
+
 export class RouteWorkspace {
   constructor(
     private readonly tracker: LocationTracker,
     private readonly sessions: LocationSampleStore,
     private readonly routes: RouteStore,
     private readonly attempts: AttemptRuntime,
+    private readonly places: PlaceStore,
+    private readonly settings: SettingsStore,
+    private readonly platform: LocationPlatform,
     private readonly now: () => number = () => Date.now(),
     private readonly createRouteId: () => string = createId,
+    private readonly createPlaceId: () => string = createId,
   ) {}
 
   async bootstrap(): Promise<HomeSnapshot> {
@@ -57,21 +101,41 @@ export class RouteWorkspace {
   }
 
   async loadHome(): Promise<HomeSnapshot> {
-    const [routes, activeSession, pendingRecording, activeAttempt, attemptResult] = await Promise.all([
+    const [
+      routes,
+      placeList,
+      activeSession,
+      pendingRecording,
+      activeAttempt,
+      attemptResult,
+      allAttempts,
+      activeTransportationMode,
+    ] = await Promise.all([
       this.routes.listRoutes(),
+      this.places.listPlaces(),
       this.sessions.getActiveSession(),
       this.sessions.findPendingRouteCreation(),
       this.attempts.getOpenAttempt(),
       this.attempts.getUnacknowledgedResult(),
+      this.attempts.listAttempts(),
+      this.settings.getActiveTransportationMode(),
     ]);
+    const traces = await this.tracesForAttempts(allAttempts);
+    const placesById = new Map(placeList.map((place) => [place.id, place]));
     const activeRecording = activeSession?.purpose === 'route_creation' ? activeSession : null;
+    const canStart = activeSession == null && pendingRecording == null;
     return {
       routes,
+      places: placeList,
+      journeys: listJourneyPools(traces, placesById),
+      incompleteAttempts: incompleteAttempts(traces),
+      activeTransportationMode,
       activeRecording,
       pendingRecording,
       activeAttempt,
       attemptResult: activeAttempt ? null : attemptResult,
-      canStartNewRecording: activeSession == null && pendingRecording == null,
+      canStartNewRecording: canStart,
+      canStartAttempt: canStart,
     };
   }
 
@@ -98,6 +162,10 @@ export class RouteWorkspace {
 
   async getTrackingState(): Promise<TrackingState> {
     return this.tracker.getState();
+  }
+
+  async getCurrentPosition(): Promise<LocationFix | null> {
+    return this.platform.getCurrentPosition();
   }
 
   async getSession(sessionId: string): Promise<TrackingSessionRecord | null> {
@@ -167,6 +235,7 @@ export class RouteWorkspace {
     };
     await this.routes.createRoute(route);
     await this.sessions.setReviewDisposition(sessionId, 'saved');
+    await this.syncPlacesForRoute(route);
     return { ok: true, route };
   }
 
@@ -188,6 +257,7 @@ export class RouteWorkspace {
     if (!route) {
       return { ok: false, reason: 'This route is no longer available.' };
     }
+    await this.syncPlacesForRoute(route);
     return { ok: true, route };
   }
 
@@ -195,8 +265,83 @@ export class RouteWorkspace {
     await this.routes.deleteRoute(routeId);
   }
 
-  async armRun(routeId: string): Promise<ArmAttemptResult> {
-    return this.attempts.arm(routeId);
+  async listPlaces(): Promise<Place[]> {
+    return this.places.listPlaces();
+  }
+
+  async getPlace(placeId: string): Promise<Place | null> {
+    return this.places.getPlace(placeId);
+  }
+
+  async createPlace(input: {
+    name: string;
+    center: Place['center'];
+    radiusMeters: number;
+  }): Promise<SavePlaceResult> {
+    const validation = validatePlaceInput(input);
+    if (!validation.valid) {
+      return { ok: false, reason: validation.reason ?? 'This place cannot be saved.' };
+    }
+    const place: Place = {
+      id: this.createPlaceId(),
+      name: input.name.trim(),
+      center: { latitude: input.center.latitude, longitude: input.center.longitude },
+      radiusMeters: input.radiusMeters,
+      status: 'active',
+      createdAtMs: this.now(),
+    };
+    await this.places.createPlace(place);
+    return { ok: true, place };
+  }
+
+  async savePlace(place: Place): Promise<SavePlaceResult> {
+    const validation = validatePlaceInput(place);
+    if (!validation.valid) {
+      return { ok: false, reason: validation.reason ?? 'This place cannot be saved.' };
+    }
+    const existing = await this.places.getPlace(place.id);
+    if (!existing) {
+      return { ok: false, reason: 'This place is no longer available.' };
+    }
+    const next = clonePlace({
+      ...existing,
+      name: place.name.trim(),
+      center: place.center,
+      radiusMeters: place.radiusMeters,
+      status: place.status,
+    });
+    await this.places.savePlace(next);
+    return { ok: true, place: next };
+  }
+
+  async removePlace(placeId: string): Promise<RemovePlaceResult> {
+    const existing = await this.places.getPlace(placeId);
+    if (!existing) {
+      return { ok: false, reason: 'This place is no longer available.' };
+    }
+    const referenced = await this.attemptsIsPlaceReferenced(placeId);
+    if (referenced) {
+      await this.places.archivePlace(placeId);
+      return { ok: true, action: 'archived' };
+    }
+    await this.places.deletePlace(placeId);
+    return { ok: true, action: 'deleted' };
+  }
+
+  async getActiveTransportationMode(): Promise<TransportationMode> {
+    return this.settings.getActiveTransportationMode();
+  }
+
+  async setActiveTransportationMode(mode: TransportationMode): Promise<void> {
+    await this.settings.setActiveTransportationMode(mode);
+  }
+
+  async startAttempt(): Promise<ArmAttemptResult> {
+    return this.attempts.start();
+  }
+
+  async armRun(_routeId?: string): Promise<ArmAttemptResult> {
+    return this.attempts.start();
   }
 
   async cancelAttempt(): Promise<Attempt | null> {
@@ -207,17 +352,24 @@ export class RouteWorkspace {
     return this.attempts.endAndInspect();
   }
 
-  async inspectAttempt(attemptId: string): Promise<AttemptDebugReport | null> {
+  async inspectAttempt(attemptId: string): Promise<CombinedAttemptDebug | null> {
     const attempt = await this.attempts.getAttempt(attemptId);
     if (!attempt) {
       return null;
     }
-    const route = await this.routes.getRoute(attempt.routeId);
-    if (!route) {
-      return null;
-    }
     const samples = await this.sessions.listSamples(attempt.sessionId);
-    return inspectAttemptRecord(attempt, timingCourseFromRoute(route), samples);
+    const places = await this.places.listPlaces();
+    const session = await this.sessions.getSession(attempt.sessionId);
+    const inspectNow = isOpenAttempt(attempt) ? this.now() : (session?.stoppedAtMs ?? this.now());
+    const place = inspectPlaceAttemptRecord(attempt, places, samples, inspectNow);
+    let variant: AttemptDebugReport | null = null;
+    if (attempt.routeId) {
+      const route = await this.routes.getRoute(attempt.routeId);
+      if (route) {
+        variant = inspectAttemptRecord(attempt, timingCourseFromRoute(route), samples);
+      }
+    }
+    return { place, variant };
   }
 
   async processActiveAttempt(): Promise<Attempt | null> {
@@ -248,6 +400,13 @@ export class RouteWorkspace {
     return this.attempts.getAttempt(attemptId);
   }
 
+  async setAttemptTransportationMode(
+    attemptId: string,
+    mode: TransportationMode,
+  ): Promise<Attempt | null> {
+    return this.attempts.setAttemptTransportationMode(attemptId, mode);
+  }
+
   async loadRouteTraces(routeId: string): Promise<{ route: Route; traces: AttemptTrace[] } | null> {
     const route = await this.routes.getRoute(routeId);
     if (!route) {
@@ -271,7 +430,11 @@ export class RouteWorkspace {
     }
     return {
       route: loaded.route,
-      analysis: analyzeRouteAttempts(timingCourseFromRoute(loaded.route), loaded.traces),
+      analysis: analyzeRouteAttempts(
+        timingCourseFromRoute(loaded.route),
+        loaded.traces,
+        deriveAnchoredLayoutAttempt,
+      ),
     };
   }
 
@@ -280,6 +443,87 @@ export class RouteWorkspace {
     if (!loaded) {
       return null;
     }
-    return analyzeFocusAttempt(timingCourseFromRoute(loaded.route), loaded.traces, attemptId);
+    return analyzeFocusAttempt(
+      timingCourseFromRoute(loaded.route),
+      loaded.traces,
+      attemptId,
+      deriveAnchoredLayoutAttempt,
+    );
+  }
+
+  async analyzeJourney(
+    pool: JourneyPoolId,
+    attemptId: string,
+  ): Promise<{
+    summary: JourneyPoolSummary;
+    history: JourneyHistoryRow[];
+    focus: JourneyFocusAnalysis | null;
+  } | null> {
+    const origin = await this.places.getPlace(pool.originPlaceId);
+    const destination = await this.places.getPlace(pool.destinationPlaceId);
+    if (!origin || !destination) {
+      return null;
+    }
+    const traces = await this.tracesForAttempts(await this.attempts.listAttempts());
+    const routes = await this.routes.listRoutes();
+    return {
+      summary: summarizeJourneyPool(pool, origin, destination, traces),
+      history: journeyHistoryRows(pool, traces),
+      focus: analyzeJourneyFocus(pool, origin, destination, traces, attemptId, routes),
+    };
+  }
+
+  async loadJourney(
+    pool: JourneyPoolId,
+  ): Promise<{
+    origin: Place;
+    destination: Place;
+    summary: JourneyPoolSummary;
+    history: JourneyHistoryRow[];
+    routes: Route[];
+  } | null> {
+    const origin = await this.places.getPlace(pool.originPlaceId);
+    const destination = await this.places.getPlace(pool.destinationPlaceId);
+    if (!origin || !destination) {
+      return null;
+    }
+    const traces = await this.tracesForAttempts(await this.attempts.listAttempts());
+    const routes = await this.routes.listRoutes();
+    return {
+      origin,
+      destination,
+      summary: summarizeJourneyPool(pool, origin, destination, traces),
+      history: journeyHistoryRows(pool, traces),
+      routes,
+    };
+  }
+
+  private async tracesForAttempts(attempts: Attempt[]): Promise<JourneyAttemptTrace[]> {
+    const traces: JourneyAttemptTrace[] = [];
+    for (const attempt of attempts) {
+      traces.push({
+        attempt,
+        samples: await this.sessions.listSamples(attempt.sessionId),
+      });
+    }
+    return traces;
+  }
+
+  private async syncPlacesForRoute(route: Route): Promise<void> {
+    const existing = await this.places.listPlaces();
+    const result = ensurePlacesForRoute(existing, route, {
+      createPlaceId: () => this.createPlaceId(),
+      nowMs: this.now(),
+    });
+    for (const place of result.placesToCreate) {
+      await this.places.createPlace(place);
+    }
+  }
+
+  private async attemptsIsPlaceReferenced(placeId: string): Promise<boolean> {
+    const attempts = await this.attempts.listAttempts();
+    return attempts.some(
+      (attempt) => attempt.originPlaceId === placeId || attempt.destinationPlaceId === placeId,
+    );
   }
 }
