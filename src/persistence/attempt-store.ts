@@ -27,5 +27,7 @@ export interface AttemptStore {
     transportationMode: string,
   ): Promise<Attempt[]>;
   isPlaceReferenced(placeId: string): Promise<boolean>;
+  countAttemptsReferencingPlace(placeId: string): Promise<number>;
+  deleteAttempt(attemptId: string): Promise<void>;
   acknowledgeResult(attemptId: string): Promise<void>;
 }

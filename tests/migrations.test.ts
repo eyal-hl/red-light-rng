@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { pathDistanceMeters } from '../src/domain/geo';
 import { utcOffsetMinutesAt } from '../src/domain/attempt-local-time';
+import { pathDistanceMeters } from '../src/domain/geo';
+import { listJourneyPools } from '../src/domain/journey-analysis';
+import type { Place } from '../src/domain/place';
 import { applyMigrations, MIGRATIONS } from '../src/persistence/migrations';
+import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
+import { SqlitePlaceStore } from '../src/persistence/sqlite-place-store';
+import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
 import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../src/persistence/schema';
+import type { SqlExecutor } from '../src/persistence/sql-executor';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
+import { makeRoute } from './helpers/routes';
+import { offsetLatLng } from './helpers/samples';
+import { createSqliteWorkspace } from './helpers/workspace';
 
 function withTimeZone<T>(tz: string, run: () => T): T {
   const previous = process.env.TZ;
@@ -626,4 +635,455 @@ describe('SQLite migrations', { concurrency: 1 }, () => {
     assert.equal(later?.started_utc_offset_minutes, expectedOffset);
     assert.equal(later?.started_local_time_source, 'reconstructed');
   });
+
+  it('repairs v5 duplicate Places, rewrites attempt endpoints, and collapses journey pools', async () => {
+    const sql = createMemorySqlExecutor();
+    await migrateThrough(sql, 5, 9_000);
+    await seedReportedDuplicatePlaceInstall(sql);
+    await applyMigrations(sql, 20_000);
+    await assertReportedDuplicatePlaceInstallRepaired(sql);
+  });
+
+  it('repairs duplicate Places on databases already at current-main schema v6 or v7', async () => {
+    for (const startingVersion of [6, 7] as const) {
+      const sql = createMemorySqlExecutor();
+      await migrateThrough(sql, startingVersion, 9_000);
+      const homeCenter = { latitude: 32.08, longitude: 34.78 };
+      const nearbyHome = offsetLatLng(32.08, 34.78, 12, 0);
+      await insertPlace(sql, placeRow('home-a', 'Home', homeCenter, 17, 'active', 100));
+      await insertPlace(sql, placeRow('home-b', 'Home', nearbyHome, 30, 'archived', 200));
+      await insertSession(sql, 'sess-split', 1_000);
+      await sql.run(
+        `INSERT INTO attempt (
+           id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+           lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+         ) VALUES (?, NULL, ?, NULL, 'scooter', ?, 'active', 'pending', ?, ?, NULL, 0)`,
+        ['open-split', 'home-b', 'sess-split', 1_500, 2_000],
+      );
+
+      await applyMigrations(sql, 20_000);
+
+      const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+      assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION, `from schema v${startingVersion}`);
+      const places = await sql.getAll<{ id: string }>('SELECT id FROM place ORDER BY id');
+      assert.deepEqual(
+        places.map((place) => place.id),
+        ['home-a'],
+        `from schema v${startingVersion}`,
+      );
+      const open = await sql.getFirst<{ origin_place_id: string }>(
+        'SELECT origin_place_id FROM attempt WHERE id = ?',
+        ['open-split'],
+      );
+      assert.equal(open?.origin_place_id, 'home-a', `from schema v${startingVersion}`);
+    }
+  });
+
+  it('heals old PR #50 preview v6 databases that claimed version 6 without route classification columns', async () => {
+    const sql = createMemorySqlExecutor();
+    await seedOldPr50PreviewV6(sql, 9_000);
+    const before = await tableColumnNames(sql, 'route');
+    assert.equal(before.has('status'), false);
+    assert.equal(before.has('kind'), false);
+    const versionBefore = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(versionBefore?.user_version, 6);
+
+    await applyMigrations(sql, 20_000);
+    await assertCanonicalRouteColumnsPresent(sql);
+    await assertReportedDuplicatePlaceInstallRepaired(sql);
+    await assertHealedPreviewCanBootstrap(sql);
+  });
+
+  it('heals a broken rebased preview already advanced to user_version 8 without route classification columns', async () => {
+    const sql = createMemorySqlExecutor();
+    await seedBrokenRebasedPreviewV8(sql, 9_000);
+    const before = await tableColumnNames(sql, 'route');
+    assert.equal(before.has('status'), false);
+    const versionBefore = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(versionBefore?.user_version, 8);
+
+    await applyMigrations(sql, 20_000);
+    await assertCanonicalRouteColumnsPresent(sql);
+    await assertReportedDuplicatePlaceInstallRepaired(sql);
+    await assertHealedPreviewCanBootstrap(sql);
+  });
+
+  it('treats canonical main v6/v7/v8 installs as a no-op for already-present route columns', async () => {
+    for (const startingVersion of [6, 7, 8] as const) {
+      const sql = createMemorySqlExecutor();
+      await migrateThrough(sql, startingVersion, 9_000);
+      const before = await tableColumnNames(sql, 'route');
+      assert.equal(before.has('status'), true, `from schema v${startingVersion}`);
+      assert.equal(before.has('classification_version'), true, `from schema v${startingVersion}`);
+
+      await applyMigrations(sql, 20_000);
+
+      const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+      assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION, `from schema v${startingVersion}`);
+      await assertCanonicalRouteColumnsPresent(sql);
+    }
+  });
 });
+
+async function tableColumnNames(sql: SqlExecutor, table: string): Promise<Set<string>> {
+  const rows = await sql.getAll<{ name: string }>(`PRAGMA table_info(${table})`);
+  return new Set(rows.map((row) => row.name));
+}
+
+async function seedOldPr50PreviewV6(sql: SqlExecutor, nowMs: number): Promise<void> {
+  await migrateThrough(sql, 5, nowMs);
+  await seedReportedDuplicatePlaceInstall(sql);
+  await sql.exec('PRAGMA user_version = 6');
+}
+
+async function seedBrokenRebasedPreviewV8(sql: SqlExecutor, nowMs: number): Promise<void> {
+  await seedOldPr50PreviewV6(sql, nowMs);
+  for (const migration of MIGRATIONS.filter((item) => item.version === 7 || item.version === 8)) {
+    await migration.up(sql, nowMs);
+  }
+  await sql.exec('PRAGMA user_version = 8');
+}
+
+async function assertCanonicalRouteColumnsPresent(sql: SqlExecutor): Promise<void> {
+  const columns = await tableColumnNames(sql, 'route');
+  for (const name of ['status', 'kind', 'cluster_signature', 'classification_version']) {
+    assert.ok(columns.has(name), `missing route.${name}`);
+  }
+  await sql.getFirst<{
+    status: string;
+    kind: string;
+    cluster_signature: string | null;
+    classification_version: number;
+  }>('SELECT status, kind, cluster_signature, classification_version FROM route LIMIT 1');
+}
+
+async function assertHealedPreviewCanBootstrap(sql: SqlExecutor): Promise<void> {
+  await insertSession(sql, 'sess-heal-route', 80_000);
+  const routeStore = new SqliteRouteStore(async () => sql);
+  await routeStore.createRoute(
+    makeRoute({
+      id: 'route-healed',
+      sourceRecordingId: 'sess-heal-route',
+    }),
+  );
+  const saved = await routeStore.getRoute('route-healed');
+  assert.equal(saved?.status, 'active');
+  assert.equal(saved?.kind, 'explicit');
+  assert.equal(saved?.classificationVersion, 1);
+
+  const { workspace } = createSqliteWorkspace(sql);
+  const home = await workspace.bootstrap();
+  assert.ok(home.places.some((place) => place.id === 'home-17'));
+  assert.ok(
+    home.journeys.some(
+      (journey) =>
+        journey.originPlaceId === 'home-17' &&
+        journey.destinationPlaceId === 'work-30' &&
+        journey.transportationMode === 'scooter',
+    ),
+  );
+}
+
+async function migrateThrough(sql: SqlExecutor, version: number, nowMs: number): Promise<void> {
+  await sql.exec('PRAGMA foreign_keys = ON;');
+  await sql.exec(LOCATION_SPIKE_SCHEMA);
+  await sql.exec('PRAGMA user_version = 0');
+  for (const migration of MIGRATIONS) {
+    if (migration.version > version) {
+      break;
+    }
+    await migration.up(sql, nowMs);
+  }
+  await sql.exec(`PRAGMA user_version = ${version}`);
+}
+
+function placeRow(
+  id: string,
+  name: string,
+  center: { latitude: number; longitude: number },
+  radiusMeters: number,
+  status: Place['status'],
+  createdAtMs: number,
+): Place {
+  return {
+    id,
+    name,
+    center,
+    radiusMeters,
+    status,
+    createdAtMs,
+  };
+}
+
+async function insertPlace(sql: SqlExecutor, place: Place): Promise<void> {
+  await sql.run(
+    `INSERT INTO place (id, name, latitude, longitude, radius_meters, status, created_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      place.id,
+      place.name,
+      place.center.latitude,
+      place.center.longitude,
+      place.radiusMeters,
+      place.status,
+      place.createdAtMs,
+    ],
+  );
+}
+
+async function insertSession(sql: SqlExecutor, id: string, startedAtMs: number): Promise<void> {
+  await sql.run(
+    `INSERT INTO tracking_session (
+       id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+       background_permission_confirmed
+     ) VALUES (?, ?, ?, 0, 'attempt', 'finished', 'saved', 0)`,
+    [id, startedAtMs, startedAtMs + 1_000],
+  );
+}
+
+type RepairAttemptSpec = {
+  id: string;
+  sessionId: string;
+  originId: string;
+  destinationId: string | null;
+  mode: string;
+  lifecycle: string;
+  validity: string;
+  startedAtMs: number | null;
+  finishedAtMs: number | null;
+};
+
+async function seedReportedDuplicatePlaceInstall(sql: SqlExecutor): Promise<void> {
+  const homeCenter = { latitude: 32.08, longitude: 34.78 };
+  const workCenter = offsetLatLng(32.08, 34.78, 300, 0);
+  const workOffset = offsetLatLng(32.08, 34.78, 312, 0);
+  const gymCenter = offsetLatLng(32.08, 34.78, 800, 0);
+  const distinctHome3 = offsetLatLng(32.08, 34.78, 80, 0);
+
+  const homeActive = placeRow('home-17', 'Home', homeCenter, 17, 'active', 300);
+  const home10 = placeRow('home-10', 'Home', homeCenter, 10, 'archived', 100);
+  const home3 = placeRow('home-3', 'Home 3', homeCenter, 30, 'archived', 200);
+  const workActive = placeRow('work-30', 'Work', workCenter, 30, 'active', 400);
+  const work10 = placeRow('work-10', 'Work', workCenter, 10, 'archived', 110);
+  const work30b = placeRow('work-30-b', 'Work', workOffset, 30, 'archived', 210);
+  const gym = placeRow('gym-archived', 'Gym', gymCenter, 25, 'archived', 500);
+  const farHome3 = placeRow('home-3-far', 'Home 3', distinctHome3, 30, 'active', 600);
+
+  for (const place of [homeActive, home10, home3, workActive, work10, work30b, gym, farHome3]) {
+    await insertPlace(sql, place);
+  }
+
+  await insertSession(sql, 'sess-open', 1_000);
+  await insertSession(sql, 'sess-sample', 2_000);
+  const attemptSpecs: RepairAttemptSpec[] = [];
+
+  let sessionSeq = 0;
+  const addCompleted = async (
+    id: string,
+    originId: string,
+    destinationId: string,
+    officialMs: number,
+    mode = 'scooter',
+  ) => {
+    sessionSeq += 1;
+    const sessionId = `sess-${sessionSeq}`;
+    await insertSession(sql, sessionId, 10_000 + sessionSeq);
+    attemptSpecs.push({
+      id,
+      sessionId,
+      originId,
+      destinationId,
+      mode,
+      lifecycle: 'completed',
+      validity: 'valid',
+      startedAtMs: 20_000,
+      finishedAtMs: 20_000 + officialMs,
+    });
+  };
+
+  for (let index = 0; index < 6; index += 1) {
+    await addCompleted(`hw-legacy-${index}`, 'home-10', 'work-10', 388_000 + index * 1_000);
+  }
+  for (let index = 0; index < 9; index += 1) {
+    await addCompleted(`hw-active-${index}`, 'home-17', 'work-30', 416_000 + index * 1_000);
+  }
+  await addCompleted('hw-home3', 'home-3', 'work-30-b', 455_000);
+  for (let index = 0; index < 7; index += 1) {
+    await addCompleted(`wh-legacy-${index}`, 'work-10', 'home-10', 495_000 + index * 1_000);
+  }
+  await addCompleted('wh-home3-a', 'work-30-b', 'home-3', 466_000);
+  await addCompleted('wh-home3-b', 'work-30', 'home-3', 470_000);
+  await addCompleted('hw-walk', 'home-10', 'work-10', 900_000, 'walk');
+
+  attemptSpecs.push({
+    id: 'in-flight',
+    sessionId: 'sess-open',
+    originId: 'home-10',
+    destinationId: null,
+    mode: 'scooter',
+    lifecycle: 'active',
+    validity: 'pending',
+    startedAtMs: 30_000,
+    finishedAtMs: null,
+  });
+
+  await sql.run(
+    `INSERT INTO route (
+       id, name, transportation_mode, created_at_ms, source_recording_id,
+       start_latitude, start_longitude, start_radius_meters,
+       finish_latitude, finish_longitude, finish_radius_meters,
+       start_progress_m, finish_progress_m
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'route-hw',
+      'Home → Work',
+      'scooter',
+      2_000,
+      'sess-sample',
+      homeCenter.latitude,
+      homeCenter.longitude,
+      30,
+      workCenter.latitude,
+      workCenter.longitude,
+      30,
+      0,
+      300,
+    ],
+  );
+
+  for (const spec of attemptSpecs) {
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [
+        spec.id,
+        spec.id === 'hw-legacy-0' ? 'route-hw' : null,
+        spec.originId,
+        spec.destinationId,
+        spec.mode,
+        spec.sessionId,
+        spec.lifecycle,
+        spec.validity,
+        15_000,
+        spec.startedAtMs,
+        spec.finishedAtMs,
+      ],
+    );
+  }
+
+  await sql.run(
+    `INSERT INTO location_sample (
+       id, session_id, recorded_at_ms, latitude, longitude,
+       horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ['p-open', 'sess-open', 31_000, homeCenter.latitude, homeCenter.longitude, 5, 1, 0],
+  );
+}
+
+async function assertReportedDuplicatePlaceInstallRepaired(sql: SqlExecutor): Promise<void> {
+  const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+  assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+
+  const places = await sql.getAll<{ id: string; name: string; radius_meters: number; status: string }>(
+    'SELECT id, name, radius_meters, status FROM place ORDER BY id',
+  );
+  assert.deepEqual(
+    places.map((place) => place.id).sort(),
+    ['gym-archived', 'home-17', 'home-3-far', 'work-30'],
+  );
+  const canonicalHome = places.find((place) => place.id === 'home-17');
+  const canonicalWork = places.find((place) => place.id === 'work-30');
+  assert.equal(canonicalHome?.name, 'Home');
+  assert.equal(canonicalHome?.radius_meters, 17);
+  assert.equal(canonicalHome?.status, 'active');
+  assert.equal(canonicalWork?.name, 'Work');
+  assert.equal(canonicalWork?.radius_meters, 30);
+  assert.equal(canonicalWork?.status, 'active');
+
+  const attempts = await sql.getAll<{
+    id: string;
+    origin_place_id: string | null;
+    destination_place_id: string | null;
+    transportation_mode: string;
+    lifecycle: string;
+    validity: string;
+    started_at_ms: number | null;
+    finished_at_ms: number | null;
+    route_id: string | null;
+  }>('SELECT * FROM attempt ORDER BY id');
+  assert.equal(attempts.length, 6 + 9 + 1 + 7 + 2 + 1 + 1);
+
+  for (const attempt of attempts) {
+    if (attempt.origin_place_id) {
+      assert.ok(['home-17', 'work-30', 'home-3-far', 'gym-archived'].includes(attempt.origin_place_id));
+    }
+    if (attempt.destination_place_id) {
+      assert.ok(['home-17', 'work-30', 'home-3-far', 'gym-archived'].includes(attempt.destination_place_id));
+    }
+  }
+
+  const inFlight = attempts.find((attempt) => attempt.id === 'in-flight');
+  assert.equal(inFlight?.origin_place_id, 'home-17');
+  assert.equal(inFlight?.destination_place_id, null);
+  assert.equal(inFlight?.lifecycle, 'active');
+  assert.equal(inFlight?.validity, 'pending');
+
+  const rewritten = attempts.find((attempt) => attempt.id === 'hw-legacy-0');
+  assert.equal(rewritten?.origin_place_id, 'home-17');
+  assert.equal(rewritten?.destination_place_id, 'work-30');
+  assert.equal(rewritten?.route_id, 'route-hw');
+  assert.equal(rewritten?.transportation_mode, 'scooter');
+  assert.equal(rewritten?.started_at_ms, 20_000);
+  assert.equal(rewritten?.finished_at_ms, 20_000 + 388_000);
+
+  const sample = await sql.getFirst<{ id: string }>('SELECT id FROM location_sample WHERE id = ?', ['p-open']);
+  assert.equal(sample?.id, 'p-open');
+
+  const placeStore = new SqlitePlaceStore(async () => sql);
+  const attemptStore = new SqliteAttemptStore(async () => sql);
+  const storedPlaces = await placeStore.listPlaces();
+  const storedAttempts = await attemptStore.listAttempts();
+  const pools = listJourneyPools(
+    storedAttempts.map((attempt) => ({ attempt, samples: [] })),
+    new Map(storedPlaces.map((place) => [place.id, place])),
+  );
+  const scooterHw = pools.find(
+    (pool) =>
+      pool.originPlaceId === 'home-17' &&
+      pool.destinationPlaceId === 'work-30' &&
+      pool.transportationMode === 'scooter',
+  );
+  const scooterWh = pools.find(
+    (pool) =>
+      pool.originPlaceId === 'work-30' &&
+      pool.destinationPlaceId === 'home-17' &&
+      pool.transportationMode === 'scooter',
+  );
+  const walkHw = pools.find((pool) => pool.transportationMode === 'walk');
+  assert.equal(scooterHw?.rankedAttemptCount, 16);
+  assert.equal(scooterHw?.pbTimeMs, 388_000);
+  assert.equal(scooterHw?.title, 'Home → Work');
+  assert.equal(scooterWh?.rankedAttemptCount, 9);
+  assert.equal(scooterWh?.title, 'Work → Home');
+  assert.equal(walkHw?.rankedAttemptCount, 1);
+  assert.equal(
+    pools.filter((pool) => pool.transportationMode === 'scooter' && pool.title === 'Home → Work').length,
+    1,
+  );
+  assert.equal(
+    pools.filter((pool) => pool.transportationMode === 'scooter' && pool.title === 'Work → Home').length,
+    1,
+  );
+
+  const snapshot = places.map((place) => ({ ...place }));
+  await applyMigrations(sql, 30_000);
+  const afterRestart = await sql.getAll<{ id: string }>('SELECT id FROM place ORDER BY id');
+  assert.deepEqual(
+    afterRestart.map((place) => place.id),
+    snapshot.map((place) => place.id),
+  );
+  const attemptCount = await sql.getFirst<{ count: number }>('SELECT COUNT(*) AS count FROM attempt');
+  assert.equal(attemptCount?.count, storedAttempts.length);
+}

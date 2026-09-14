@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, AppState, BackHandler, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, AppState, BackHandler, Pressable, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import {
@@ -17,7 +17,7 @@ import {
 } from '../domain/journey-departure';
 import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
-import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
+import { DEFAULT_PLACE_RADIUS_METERS, placePermanentDeletionMessage, type Place } from '../domain/place';
 import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
@@ -25,7 +25,14 @@ import type { RouteDerivation } from '../domain/route-derivation';
 import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
-import type { CombinedAttemptDebug, RouteWorkspace } from '../product/route-workspace';
+import {
+  APP_STARTUP_STAGE_LABELS,
+  APP_STARTUP_WATCHDOG_MS,
+  formatStartupError,
+  startAppStartup,
+  type AppStartupStage,
+} from '../product/app-startup';
+import type { CombinedAttemptDebug, HomeSnapshot, RouteWorkspace } from '../product/route-workspace';
 import { AttemptResultScreen } from './AttemptResultScreen';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
@@ -105,6 +112,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
+  const [startupNonce, setStartupNonce] = useState(0);
+  const startupTokenRef = useRef(0);
 
   const refreshHome = useCallback(async () => {
     const snapshot = await workspace.loadHome();
@@ -137,8 +147,11 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const openReview = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, signal?: AbortSignal) => {
       const { session, samples, derivation } = await workspace.deriveSession(sessionId);
+      if (signal?.aborted) {
+        return;
+      }
       setReviewSession(session);
       setReviewDerivation(derivation);
       setReviewPointCount(samples.length);
@@ -148,12 +161,18 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const showAttempt = useCallback(
-    async (attempt: Attempt) => {
+    async (attempt: Attempt, signal?: AbortSignal) => {
       if (attempt.originPlaceId) {
         const origin = await workspace.getPlace(attempt.originPlaceId);
+        if (signal?.aborted) {
+          return;
+        }
         setOriginName(origin?.name ?? null);
       } else {
         setOriginName(null);
+      }
+      if (signal?.aborted) {
+        return;
       }
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
@@ -165,8 +184,11 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const showAttemptResult = useCallback(
-    async (attempt: Attempt) => {
+    async (attempt: Attempt, signal?: AbortSignal) => {
       setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
+      if (signal?.aborted) {
+        return;
+      }
       let focus: JourneyFocusAnalysis | null = null;
       if (attempt.originPlaceId && attempt.destinationPlaceId) {
         const analyzed = await workspace.analyzeJourney(
@@ -177,9 +199,15 @@ export function AppRoot({ workspace }: AppRootProps) {
           },
           attempt.id,
         );
+        if (signal?.aborted) {
+          return;
+        }
         focus = analyzed?.focus ?? null;
       }
       const debug = await workspace.inspectAttempt(attempt.id);
+      if (signal?.aborted) {
+        return;
+      }
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
@@ -191,42 +219,99 @@ export function AppRoot({ workspace }: AppRootProps) {
     [workspace],
   );
 
-  const bootstrap = useCallback(async () => {
-    const snapshot = await workspace.bootstrap();
-    setPlaces(snapshot.places);
-    setJourneys(snapshot.journeys);
-    setIncomplete(snapshot.incompleteAttempts);
-    setActiveMode(snapshot.activeTransportationMode);
-    setPendingRecording(snapshot.pendingRecording);
-    setCanStartNewRecording(snapshot.canStartNewRecording);
-    setCanStartAttempt(snapshot.canStartAttempt);
-    if (snapshot.activeAttempt) {
-      await showAttempt(snapshot.activeAttempt);
-      return;
-    }
-    if (snapshot.attemptResult) {
-      await showAttemptResult(snapshot.attemptResult);
-      return;
-    }
-    if (snapshot.activeRecording) {
-      const state = await workspace.getTrackingState();
-      setTrackingState(state);
-      setScreen({ kind: 'recording' });
-      return;
-    }
-    if (snapshot.pendingRecording) {
-      await openReview(snapshot.pendingRecording.id);
-      return;
-    }
-    setScreen({ kind: 'home' });
-  }, [openReview, showAttempt, showAttemptResult, workspace]);
+  const applyStartupSnapshot = useCallback(
+    async (snapshot: HomeSnapshot, signal?: AbortSignal) => {
+      if (signal?.aborted) {
+        return;
+      }
+      setError(null);
+      setPlaces(snapshot.places);
+      setJourneys(snapshot.journeys);
+      setIncomplete(snapshot.incompleteAttempts);
+      setActiveMode(snapshot.activeTransportationMode);
+      setPendingRecording(snapshot.pendingRecording);
+      setCanStartNewRecording(snapshot.canStartNewRecording);
+      setCanStartAttempt(snapshot.canStartAttempt);
+      if (snapshot.activeAttempt) {
+        await showAttempt(snapshot.activeAttempt, signal);
+        return;
+      }
+      if (snapshot.attemptResult) {
+        await showAttemptResult(snapshot.attemptResult, signal);
+        return;
+      }
+      if (snapshot.activeRecording) {
+        const state = await workspace.getTrackingState();
+        if (signal?.aborted) {
+          return;
+        }
+        setTrackingState(state);
+        setScreen({ kind: 'recording' });
+        return;
+      }
+      if (snapshot.pendingRecording) {
+        await openReview(snapshot.pendingRecording.id, signal);
+        return;
+      }
+      if (signal?.aborted) {
+        return;
+      }
+      setScreen({ kind: 'home' });
+    },
+    [openReview, showAttempt, showAttemptResult, workspace],
+  );
+
+  const applyStartupSnapshotRef = useRef(applyStartupSnapshot);
 
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      void bootstrap();
-    }, 0);
-    return () => clearTimeout(timeout);
-  }, [bootstrap]);
+    applyStartupSnapshotRef.current = applyStartupSnapshot;
+  }, [applyStartupSnapshot]);
+
+  const retryBootstrap = useCallback(() => {
+    setError(null);
+    setStartupStage('opening-database');
+    setScreen({ kind: 'loading' });
+    setStartupNonce((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    const token = startupTokenRef.current + 1;
+    startupTokenRef.current = token;
+    const controller = new AbortController();
+    const session = startAppStartup(
+      {
+        preparePersistence: () => workspace.preparePersistence(),
+        recoverTracker: () => workspace.recoverTracker(),
+        reconcileAttempts: () => workspace.reconcileAttempts(),
+        loadHome: () => workspace.loadHome(),
+        recomputePathVariants: () => workspace.recomputePathVariants(),
+      },
+      {
+        onStage: (stage) => {
+          if (startupTokenRef.current !== token) {
+            return;
+          }
+          setStartupStage(stage);
+        },
+        onHomeReady: (snapshot) => applyStartupSnapshotRef.current(snapshot, controller.signal),
+        onFailure: (failure) => {
+          controller.abort();
+          if (startupTokenRef.current !== token) {
+            return;
+          }
+          startupTokenRef.current += 1;
+          setStartupStage(failure.stage);
+          setError(formatStartupError(failure));
+          setScreen({ kind: 'init-error' });
+        },
+      },
+      { watchdogMs: APP_STARTUP_WATCHDOG_MS },
+    );
+    return () => {
+      controller.abort();
+      session.cancel();
+    };
+  }, [startupNonce, workspace]);
 
   useEffect(() => {
     if (screen.kind !== 'recording') {
@@ -843,14 +928,14 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [placeDraft, screen, workspace]);
 
-  const onArchiveOrDeletePlace = useCallback(async () => {
+  const onArchivePlace = useCallback(async () => {
     if (screen.kind !== 'place-editor' || !placeDraft?.id) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const result = await workspace.removePlace(placeDraft.id);
+      const result = await workspace.archivePlace(placeDraft.id);
       if (!result.ok) {
         setError(result.reason);
         return;
@@ -858,12 +943,64 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPlaceDraft(null);
       setPlaces(await workspace.listPlaces());
       setScreen({ kind: 'places' });
+      await refreshHome();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not remove place.');
+      setError(caught instanceof Error ? caught.message : 'Could not archive place.');
     } finally {
       setBusy(false);
     }
-  }, [placeDraft, screen, workspace]);
+  }, [placeDraft, refreshHome, screen, workspace]);
+
+  const performPermanentPlaceDeletion = useCallback(
+    async (placeId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.deletePlacePermanently(placeId);
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        setPlaceDraft(null);
+        setPlaces(await workspace.listPlaces());
+        setScreen({ kind: 'places' });
+        await refreshHome();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not delete place.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshHome, workspace],
+  );
+
+  const confirmPermanentPlaceDeletion = useCallback(
+    (placeId: string) => {
+      void (async () => {
+        const place = await workspace.getPlace(placeId);
+        if (!place) {
+          setError('This place is no longer available.');
+          return;
+        }
+        const attemptCount = await workspace.countAttemptsReferencingPlace(placeId);
+        Alert.alert(
+          'Delete this place permanently?',
+          placePermanentDeletionMessage(place.name, attemptCount),
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete permanently',
+              style: 'destructive',
+              onPress: () => {
+                void performPermanentPlaceDeletion(placeId);
+              },
+            },
+          ],
+        );
+      })();
+    },
+    [performPermanentPlaceDeletion, workspace],
+  );
 
   const onUseCurrentLocation = useCallback(async () => {
     if (!placeDraft) {
@@ -941,7 +1078,6 @@ export function AppRoot({ workspace }: AppRootProps) {
   ]);
 
   const resultTitle = journeyFocus?.summary.title ?? originName ?? 'Attempt';
-  const archiveOrDeleteLabel = placeDraft?.id ? 'ARCHIVE OR DELETE' : 'DELETE';
 
   return (
     <View style={styles.screen}>
@@ -949,6 +1085,30 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'loading' ? (
         <View style={styles.content}>
           <Text style={styles.mutedText}>Loading…</Text>
+          <Text style={styles.mutedText}>{APP_STARTUP_STAGE_LABELS[startupStage]}</Text>
+        </View>
+      ) : null}
+      {screen.kind === 'init-error' ? (
+        <View style={styles.content}>
+          <Text style={styles.kicker}>RED LIGHT RNG</Text>
+          <Text style={styles.title}>Could not open your data</Text>
+          <Text style={styles.subtitle}>
+            Startup did not finish. Home never loaded, so this is not an infinite spinner. Your
+            history is still on this device. Try again, or keep this error to report the upgrade.
+          </Text>
+          <Text style={styles.mutedText}>Stage: {startupStage}</Text>
+          <Text style={styles.mutedText}>{APP_STARTUP_STAGE_LABELS[startupStage]}</Text>
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Try starting again"
+              onPress={retryBootstrap}
+              style={[styles.button, styles.primaryButton]}
+            >
+              <Text style={styles.buttonText}>TRY AGAIN</Text>
+            </Pressable>
+          </View>
         </View>
       ) : null}
       {screen.kind === 'home' ? (
@@ -1007,6 +1167,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           onOpenPlace={(placeId) => {
             void onOpenPlaceEditor(placeId);
           }}
+          onDeletePermanently={(placeId) => {
+            confirmPermanentPlaceDeletion(placeId);
+          }}
         />
       ) : null}
       {screen.kind === 'place-editor' && placeDraft ? (
@@ -1022,23 +1185,26 @@ export function AppRoot({ workspace }: AppRootProps) {
             void onSavePlace();
           }}
           onCancel={leavePlaceEditor}
-          onArchiveOrDelete={() => {
+          onArchive={() => {
             Alert.alert(
-              'Remove place?',
-              'If this place is used by historical attempts it will be archived instead of deleted.',
+              'Archive this place?',
+              'Archived places stop being used for start and finish. Their run history stays until you delete the place permanently.',
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
-                  text: 'Remove',
-                  style: 'destructive',
+                  text: 'Archive',
                   onPress: () => {
-                    void onArchiveOrDeletePlace();
+                    void onArchivePlace();
                   },
                 },
               ],
             );
           }}
-          archiveOrDeleteLabel={archiveOrDeleteLabel}
+          onDeletePermanently={() => {
+            if (placeDraft.id) {
+              confirmPermanentPlaceDeletion(placeDraft.id);
+            }
+          }}
         />
       ) : null}
       {screen.kind === 'settings' ? (

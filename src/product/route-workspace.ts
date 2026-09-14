@@ -1,8 +1,14 @@
 import { defaultCourseProgress, validateCourseLayout, type CourseLayout } from '../domain/course-layout';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
-import type { Place } from '../domain/place';
-import { clonePlace, validatePlaceInput } from '../domain/place';
+import {
+  attemptReferencesPlace,
+  clonePlace,
+  openAttemptBlocksPlaceDeletion,
+  PLACE_LIVE_ATTEMPT_REASON,
+  validatePlaceInput,
+  type Place,
+} from '../domain/place';
 import { ensurePlacesForRoute } from '../domain/place-seeding';
 import {
   inspectPlaceAttemptRecord,
@@ -80,7 +86,8 @@ export type SavePlaceResult =
   | { ok: false; reason: string };
 
 export type RemovePlaceResult =
-  | { ok: true; action: 'deleted' | 'archived' }
+  | { ok: true; action: 'deleted'; deletedAttemptCount: number }
+  | { ok: true; action: 'archived' }
   | { ok: false; reason: string };
 
 export type CombinedAttemptDebug = {
@@ -102,10 +109,26 @@ export class RouteWorkspace {
     private readonly createPlaceId: () => string = createId,
   ) {}
 
-  async bootstrap(): Promise<HomeSnapshot> {
+  async preparePersistence(): Promise<void> {
+    await this.settings.getActiveTransportationMode();
+  }
+
+  async recoverTracker(): Promise<void> {
     await this.tracker.recover();
+  }
+
+  async reconcileAttempts(): Promise<void> {
     await this.attempts.reconcile();
+  }
+
+  async recomputePathVariants(): Promise<void> {
     await this.attempts.recomputeAllPathVariants();
+  }
+
+  async bootstrap(): Promise<HomeSnapshot> {
+    await this.preparePersistence();
+    await this.recoverTracker();
+    await this.reconcileAttempts();
     return this.loadHome();
   }
 
@@ -165,8 +188,8 @@ export class RouteWorkspace {
   }
 
   async recover(): Promise<void> {
-    await this.tracker.recover();
-    await this.attempts.reconcile();
+    await this.recoverTracker();
+    await this.reconcileAttempts();
   }
 
   async getTrackingState(): Promise<TrackingState> {
@@ -360,18 +383,47 @@ export class RouteWorkspace {
     return { ok: true, place: next };
   }
 
-  async removePlace(placeId: string): Promise<RemovePlaceResult> {
+  async archivePlace(placeId: string): Promise<RemovePlaceResult> {
     const existing = await this.places.getPlace(placeId);
     if (!existing) {
       return { ok: false, reason: 'This place is no longer available.' };
     }
-    const referenced = await this.attemptsIsPlaceReferenced(placeId);
-    if (referenced) {
-      await this.places.archivePlace(placeId);
-      return { ok: true, action: 'archived' };
+    await this.places.archivePlace(placeId);
+    return { ok: true, action: 'archived' };
+  }
+
+  async countAttemptsReferencingPlace(placeId: string): Promise<number> {
+    return this.attempts.countAttemptsReferencingPlace(placeId);
+  }
+
+  async deletePlacePermanently(placeId: string): Promise<RemovePlaceResult> {
+    const existing = await this.places.getPlace(placeId);
+    if (!existing) {
+      return { ok: false, reason: 'This place is no longer available.' };
+    }
+    const open = await this.attempts.getOpenAttempt();
+    if (openAttemptBlocksPlaceDeletion(open, existing)) {
+      return { ok: false, reason: PLACE_LIVE_ATTEMPT_REASON };
+    }
+
+    const referencing = (await this.attempts.listAttempts()).filter((attempt) =>
+      attemptReferencesPlace(attempt, placeId),
+    );
+    const protectedSessionIds = new Set(
+      (await this.routes.listRoutes()).map((route) => route.sourceRecordingId),
+    );
+    for (const attempt of referencing) {
+      await this.attempts.deleteAttempt(attempt.id);
+      if (!protectedSessionIds.has(attempt.sessionId)) {
+        await this.sessions.deleteSession(attempt.sessionId);
+      }
     }
     await this.places.deletePlace(placeId);
-    return { ok: true, action: 'deleted' };
+    return { ok: true, action: 'deleted', deletedAttemptCount: referencing.length };
+  }
+
+  async removePlace(placeId: string): Promise<RemovePlaceResult> {
+    return this.deletePlacePermanently(placeId);
   }
 
   async getActiveTransportationMode(): Promise<TransportationMode> {
@@ -577,12 +629,5 @@ export class RouteWorkspace {
     for (const place of result.placesToCreate) {
       await this.places.createPlace(place);
     }
-  }
-
-  private async attemptsIsPlaceReferenced(placeId: string): Promise<boolean> {
-    const attempts = await this.attempts.listAttempts();
-    return attempts.some(
-      (attempt) => attempt.originPlaceId === placeId || attempt.destinationPlaceId === placeId,
-    );
   }
 }

@@ -6,7 +6,7 @@ Canonical domain and speedrunning terminology. Future tickets and agents should 
 
 A first-class saved endpoint with a stable id, user-visible name, center coordinate, detection radius, and active/archived state.
 
-Examples: Home, Work, Gym. Places are configured from a management surface, not during START. A place referenced by historical attempts is archived rather than cascade-deleted.
+Examples: Home, Work, Gym. Places are configured from a management surface, not during START. Archiving a place keeps its history but removes it from live start/finish detection. Permanent deletion removes the place and every attempt whose origin or destination is that place, including related GPS/debug data. A live armed or active attempt blocks deletion until that run ends or is cancelled.
 
 ## Journey / Journey pool
 

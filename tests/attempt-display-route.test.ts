@@ -30,7 +30,7 @@ describe('attempt display route', () => {
     const appRoot = readFileSync('src/ui/AppRoot.tsx', 'utf8');
     const showAttemptResult = appRoot.slice(
       appRoot.indexOf('const showAttemptResult'),
-      appRoot.indexOf('const bootstrap'),
+      appRoot.indexOf('const applyStartupSnapshot'),
     );
     const onOpenHistoryAttempt = appRoot.slice(
       appRoot.indexOf('const onOpenHistoryAttempt'),

@@ -3,8 +3,9 @@ import { describe, it } from 'node:test';
 
 import { PLACE_ARMED_MAX_DURATION_MS, PLACE_ACTIVE_MAX_DURATION_MS } from '../src/domain/place-timing';
 import { PATH_ANALYTICS_UNAVAILABLE_MESSAGE } from '../src/domain/journey-analysis';
-import { DEFAULT_PLACE_RADIUS_METERS } from '../src/domain/place';
-import { completeJourneySamples, departureOnlySamples } from './helpers/places';
+import { DEFAULT_PLACE_RADIUS_METERS, partitionPlacesByStatus } from '../src/domain/place';
+import { completeJourneySamples, departureOnlySamples, seedPlacesForRoute } from './helpers/places';
+import { makeRoute } from './helpers/routes';
 import { offsetLatLng } from './helpers/samples';
 import { createMemoryWorkspace } from './helpers/workspace';
 
@@ -43,8 +44,8 @@ describe('places workspace', () => {
     }
     const deleted = await workspace.removePlace(unused.place.id);
     assert.equal(deleted.ok, true);
-    if (deleted.ok) {
-      assert.equal(deleted.action, 'deleted');
+    if (deleted.ok && deleted.action === 'deleted') {
+      assert.equal(deleted.deletedAttemptCount, 0);
     }
     assert.equal(await places.getPlace(unused.place.id), null);
 
@@ -89,7 +90,7 @@ describe('places workspace', () => {
     );
     const completed = await workspace.processActiveAttempt();
     assert.equal(completed?.lifecycle, 'completed');
-    const archived = await workspace.removePlace(home.place.id);
+    const archived = await workspace.archivePlace(home.place.id);
     assert.equal(archived.ok, true);
     if (archived.ok) {
       assert.equal(archived.action, 'archived');
@@ -248,5 +249,79 @@ describe('places workspace', () => {
     assert.equal(cancelled?.resultAcknowledged, true);
     assert.equal(platform.updating, false);
     assert.equal(await workspace.getAttemptResult(), null);
+  });
+
+  it('reuses canonical Places when a differently named path variant or radius is saved on top of them', async () => {
+    const { workspace, places } = createMemoryWorkspace();
+    const homeCenter = { latitude: 32.08, longitude: 34.78 };
+    const workCenter = offsetLatLng(32.08, 34.78, 280, 0);
+    const home = await workspace.createPlace({
+      name: 'Home',
+      center: homeCenter,
+      radiusMeters: 17,
+    });
+    const work = await workspace.createPlace({
+      name: 'Work',
+      center: workCenter,
+      radiusMeters: 30,
+    });
+    assert.equal(home.ok && work.ok, true);
+    if (!home.ok || !work.ok) {
+      return;
+    }
+
+    await seedPlacesForRoute(
+      places,
+      makeRoute({
+        id: 'park-route',
+        name: 'Park Route',
+        startZone: { center: homeCenter, radiusMeters: 30 },
+        finishZone: { center: workCenter, radiusMeters: 10 },
+      }),
+    );
+    const resized = await workspace.savePlace({ ...home.place, radiusMeters: 40 });
+    assert.equal(resized.ok, true);
+    await seedPlacesForRoute(
+      places,
+      makeRoute({
+        id: 'home-3-work',
+        name: 'Home 3 → Work',
+        startZone: { center: homeCenter, radiusMeters: 10 },
+        finishZone: { center: workCenter, radiusMeters: 30 },
+      }),
+    );
+
+    const listed = await places.listPlaces();
+    assert.equal(listed.length, 2);
+    assert.equal(listed.some((place) => place.id === home.place.id && place.radiusMeters === 40), true);
+    assert.equal(listed.some((place) => place.id === work.place.id), true);
+  });
+
+  it('keeps intentionally archived Places out of the active Places list', async () => {
+    const { workspace, places } = createMemoryWorkspace();
+    const home = await workspace.createPlace({
+      name: 'Home',
+      center: { latitude: 32.08, longitude: 34.78 },
+      radiusMeters: 30,
+    });
+    const gym = await workspace.createPlace({
+      name: 'Gym',
+      center: offsetLatLng(32.08, 34.78, 600, 0),
+      radiusMeters: 25,
+    });
+    assert.equal(home.ok && gym.ok, true);
+    if (!home.ok || !gym.ok) {
+      return;
+    }
+    await places.archivePlace(gym.place.id);
+    const split = partitionPlacesByStatus(await workspace.listPlaces());
+    assert.deepEqual(
+      split.active.map((place) => place.name),
+      ['Home'],
+    );
+    assert.deepEqual(
+      split.archived.map((place) => place.name),
+      ['Gym'],
+    );
   });
 });

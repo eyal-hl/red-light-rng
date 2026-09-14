@@ -70,6 +70,9 @@ export const styles = StyleSheet.create({
     letterSpacing: 1.1,
     marginBottom: 12,
   },
+  archivedSection: {
+    marginTop: 8,
+  },
   emptyText: {
     color: '#9aa0a6',
     fontSize: 15,
@@ -139,6 +142,21 @@ export const styles = StyleSheet.create({
   },
   dangerButton: {
     backgroundColor: '#8a2f2f',
+  },
+  placeDeleteButton: {
+    marginTop: 12,
+  },
+  cardDangerAction: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    minHeight: 32,
+    justifyContent: 'center',
+  },
+  cardDangerText: {
+    color: '#f07178',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.6,
   },
   disabledButton: {
     opacity: 0.45,

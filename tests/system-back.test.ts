@@ -48,15 +48,18 @@ function recordActions(): { calls: SystemBackAction[]; actions: SystemBackAction
 }
 
 describe('system back policy', () => {
-  it('does not intercept root Home or loading, so Android can exit normally', () => {
+  it('does not intercept root Home, loading, or init-error, so Android can exit normally', () => {
     assert.equal(isRootScreen('home'), true);
     assert.equal(isRootScreen('loading'), true);
+    assert.equal(isRootScreen('init-error'), true);
     assert.equal(systemBackAction('home'), 'none');
     assert.equal(systemBackAction('loading'), 'none');
+    assert.equal(systemBackAction('init-error'), 'none');
 
     const { calls, actions } = recordActions();
     assert.equal(handleSystemBack('home', actions), false);
     assert.equal(handleSystemBack('loading', actions), false);
+    assert.equal(handleSystemBack('init-error', actions), false);
     assert.deepEqual(calls, []);
   });
 
@@ -130,6 +133,11 @@ describe('system back policy', () => {
 
     assert.match(appRoot, /BackHandler\.addEventListener\('hardwareBackPress'/);
     assert.match(appRoot, /handleSystemBack\(screen\.kind/);
+    assert.match(appRoot, /setScreen\(\{ kind: 'init-error' \}\)/);
+    assert.match(appRoot, /TRY AGAIN/);
+    assert.match(appRoot, /retryBootstrap/);
+    assert.match(appRoot, /startAppStartup/);
+    assert.match(appRoot, /APP_STARTUP_WATCHDOG_MS/);
     assert.match(appRoot, /onBack=\{leaveToHome\}/);
     assert.match(appRoot, /onBack=\{onBackFromHistory\}/);
     assert.match(appRoot, /cancelRecording: \(\) => \{\s*void onCancel\(\);/s);

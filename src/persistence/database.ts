@@ -17,7 +17,10 @@ async function openSqlExecutor(): Promise<SqlExecutor> {
 
 export function getSqlExecutor(): Promise<SqlExecutor> {
   if (!executorPromise) {
-    executorPromise = openSqlExecutor();
+    executorPromise = openSqlExecutor().catch((error) => {
+      executorPromise = null;
+      throw error;
+    });
   }
   return executorPromise;
 }

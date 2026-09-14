@@ -20,10 +20,15 @@ export type Place = {
 export const DEFAULT_PLACE_RADIUS_METERS = DEFAULT_ZONE_RADIUS_METERS;
 export const PLACE_SEED_CENTER_TOLERANCE_METERS = 10;
 export const PLACE_SEED_RADIUS_TOLERANCE_METERS = 10;
+/** Migration-only duplicate repair: complete-linkage neighborhood, ignoring radius. */
+export const PLACE_REPAIR_DISTANCE_METERS = 25;
+/** Live route/path-variant sync: match an existing Place by center only. */
+export const PLACE_ROUTE_MATCH_DISTANCE_METERS = 25;
 
 export const INVALID_PLACE_NAME_REASON = 'Every place needs a name.';
 export const INVALID_PLACE_RADIUS_REASON = `Place radius must be between ${MIN_ZONE_RADIUS_METERS} and ${MAX_ZONE_RADIUS_METERS} m.`;
-export const PLACE_IN_USE_REASON = 'This place is used by historical attempts and cannot be deleted.';
+export const PLACE_LIVE_ATTEMPT_REASON =
+  'Finish or cancel the current run before deleting this place.';
 
 export type PlaceValidation = {
   valid: boolean;
@@ -57,4 +62,52 @@ export function validatePlaceInput(input: { name: string; radiusMeters: number }
 
 export function isActivePlace(place: Place): boolean {
   return place.status === 'active';
+}
+
+export function attemptReferencesPlace(
+  attempt: { originPlaceId: string | null; destinationPlaceId: string | null },
+  placeId: string,
+): boolean {
+  return attempt.originPlaceId === placeId || attempt.destinationPlaceId === placeId;
+}
+
+export function openAttemptBlocksPlaceDeletion(
+  open: {
+    originPlaceId: string | null;
+    destinationPlaceId: string | null;
+    lifecycle: string;
+  } | null,
+  place: Pick<Place, 'id' | 'status'>,
+): boolean {
+  if (!open || (open.lifecycle !== 'armed' && open.lifecycle !== 'active')) {
+    return false;
+  }
+  if (attemptReferencesPlace(open, place.id)) {
+    return true;
+  }
+  return place.status === 'active';
+}
+
+export function placePermanentDeletionMessage(placeName: string, attemptCount: number): string {
+  if (attemptCount <= 0) {
+    return `This permanently deletes ${placeName}. No run history references it. This cannot be undone.`;
+  }
+  const runLabel = attemptCount === 1 ? '1 associated run' : `${attemptCount} associated runs`;
+  return `This permanently deletes ${placeName} and ${runLabel}. Unrelated places and history stay. This cannot be undone.`;
+}
+
+export function partitionPlacesByStatus(places: readonly Place[]): {
+  active: Place[];
+  archived: Place[];
+} {
+  const active: Place[] = [];
+  const archived: Place[] = [];
+  for (const place of places) {
+    if (place.status === 'archived') {
+      archived.push(place);
+    } else {
+      active.push(place);
+    }
+  }
+  return { active, archived };
 }

@@ -1,4 +1,6 @@
 import { pathDistanceMeters } from '../domain/geo';
+import type { Place } from '../domain/place';
+import { planPlaceDuplicateRepair, rewriteRepairedPlaceId } from '../domain/place-repair';
 import { seedPlacesFromRoutes } from '../domain/place-seeding';
 import type { Route, TransportationMode } from '../domain/route';
 import {
@@ -381,28 +383,145 @@ export const MIGRATIONS: Migration[] = [
       await sql.exec(`ALTER TABLE attempt ADD COLUMN started_utc_offset_minutes INTEGER`);
       await sql.exec(`ALTER TABLE attempt ADD COLUMN started_timezone_id TEXT`);
       await sql.exec(`ALTER TABLE attempt ADD COLUMN started_local_time_source TEXT`);
-      const rows = await sql.getAll<{ id: string; started_at_ms: number }>(
-        `SELECT id, started_at_ms FROM attempt WHERE started_at_ms IS NOT NULL`,
-      );
-      for (const row of rows) {
-        const reconstructed = reconstructAttemptLocalStart(row.started_at_ms);
+      await reconstructAttemptLocalStarts(sql);
+    },
+  },
+  {
+    version: 8,
+    async up(sql) {
+      const rows = await sql.getAll<{
+        id: string;
+        name: string;
+        latitude: number;
+        longitude: number;
+        radius_meters: number;
+        status: string;
+        created_at_ms: number;
+      }>('SELECT * FROM place');
+      const places: Place[] = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        center: { latitude: row.latitude, longitude: row.longitude },
+        radiusMeters: row.radius_meters,
+        status: row.status === 'archived' ? 'archived' : 'active',
+        createdAtMs: row.created_at_ms,
+      }));
+      const plan = planPlaceDuplicateRepair(places);
+      if (plan.obsoletePlaceIds.length === 0) {
+        return;
+      }
+
+      const attempts = await sql.getAll<{
+        id: string;
+        origin_place_id: string | null;
+        destination_place_id: string | null;
+      }>('SELECT id, origin_place_id, destination_place_id FROM attempt');
+      for (const attempt of attempts) {
+        const originPlaceId = rewriteRepairedPlaceId(attempt.origin_place_id, plan);
+        const destinationPlaceId = rewriteRepairedPlaceId(attempt.destination_place_id, plan);
+        if (
+          originPlaceId === attempt.origin_place_id &&
+          destinationPlaceId === attempt.destination_place_id
+        ) {
+          continue;
+        }
         await sql.run(
-          `UPDATE attempt
-           SET started_utc_offset_minutes = ?,
-               started_timezone_id = ?,
-               started_local_time_source = ?
-           WHERE id = ?`,
-          [
-            reconstructed.startedUtcOffsetMinutes,
-            reconstructed.startedTimezoneId,
-            reconstructed.startedLocalTimeSource,
-            row.id,
-          ],
+          'UPDATE attempt SET origin_place_id = ?, destination_place_id = ? WHERE id = ?',
+          [originPlaceId, destinationPlaceId, attempt.id],
         );
+      }
+
+      for (const placeId of plan.obsoletePlaceIds) {
+        await sql.run('DELETE FROM place WHERE id = ?', [placeId]);
+      }
+    },
+  },
+  {
+    version: 9,
+    async up(sql) {
+      await ensureCanonicalRouteClassificationColumns(sql);
+      const addedLocalStart = await ensureAttemptLocalStartColumns(sql);
+      if (addedLocalStart) {
+        await reconstructAttemptLocalStarts(sql);
       }
     },
   },
 ];
+
+async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {
+  const rows = await sql.getAll<{ name: string }>(`PRAGMA table_info(${table})`);
+  return new Set(rows.map((row) => row.name));
+}
+
+async function addColumnIfMissing(
+  sql: SqlExecutor,
+  table: string,
+  column: string,
+  definitionSql: string,
+): Promise<boolean> {
+  const columns = await listTableColumns(sql, table);
+  if (columns.has(column)) {
+    return false;
+  }
+  await sql.exec(`ALTER TABLE ${table} ADD COLUMN ${definitionSql}`);
+  return true;
+}
+
+async function ensureCanonicalRouteClassificationColumns(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(sql, 'route', 'status', `status TEXT NOT NULL DEFAULT 'active'`);
+  await addColumnIfMissing(sql, 'route', 'kind', `kind TEXT NOT NULL DEFAULT 'explicit'`);
+  await addColumnIfMissing(sql, 'route', 'cluster_signature', `cluster_signature TEXT`);
+  await addColumnIfMissing(
+    sql,
+    'route',
+    'classification_version',
+    `classification_version INTEGER NOT NULL DEFAULT 1`,
+  );
+}
+
+async function ensureAttemptLocalStartColumns(sql: SqlExecutor): Promise<boolean> {
+  const addedOffset = await addColumnIfMissing(
+    sql,
+    'attempt',
+    'started_utc_offset_minutes',
+    `started_utc_offset_minutes INTEGER`,
+  );
+  const addedTimezone = await addColumnIfMissing(
+    sql,
+    'attempt',
+    'started_timezone_id',
+    `started_timezone_id TEXT`,
+  );
+  const addedSource = await addColumnIfMissing(
+    sql,
+    'attempt',
+    'started_local_time_source',
+    `started_local_time_source TEXT`,
+  );
+  return addedOffset || addedTimezone || addedSource;
+}
+
+async function reconstructAttemptLocalStarts(sql: SqlExecutor): Promise<void> {
+  const rows = await sql.getAll<{ id: string; started_at_ms: number }>(
+    `SELECT id, started_at_ms FROM attempt WHERE started_at_ms IS NOT NULL`,
+  );
+  for (const row of rows) {
+    const reconstructed = reconstructAttemptLocalStart(row.started_at_ms);
+    await sql.run(
+      `UPDATE attempt
+       SET started_utc_offset_minutes = ?,
+           started_timezone_id = ?,
+           started_local_time_source = ?
+       WHERE id = ?`,
+      [
+        reconstructed.startedUtcOffsetMinutes,
+        reconstructed.startedTimezoneId,
+        reconstructed.startedLocalTimeSource,
+        row.id,
+      ],
+    );
+  }
+}
 
 async function tableExists(sql: SqlExecutor, name: string): Promise<boolean> {
   const row = await sql.getFirst<{ name: string }>(

@@ -2,14 +2,18 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  PLACE_ROUTE_MATCH_DISTANCE_METERS,
   PLACE_SEED_CENTER_TOLERANCE_METERS,
   PLACE_SEED_RADIUS_TOLERANCE_METERS,
 } from '../src/domain/place';
 import {
   endpointsMatchForSeed,
+  ensurePlacesForRoute,
+  findPlaceForRouteEndpoint,
   placeNamesFromRouteName,
   seedPlacesFromRoutes,
 } from '../src/domain/place-seeding';
+import { makePlace } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
 import { offsetLatLng } from './helpers/samples';
 
@@ -80,5 +84,76 @@ describe('place seeding', () => {
     assert.equal(assignmentHw?.finishPlaceId, assignmentWh?.startPlaceId);
     assert.notEqual(assignmentOther?.startPlaceId, assignmentHw?.startPlaceId);
     assert.equal(homePlaces.length >= 1, true);
+  });
+
+  it('reuses an existing Place on route sync by 25 m proximity, ignoring radius and route-derived names', () => {
+    assert.equal(PLACE_ROUTE_MATCH_DISTANCE_METERS, 25);
+    const homeCenter = { latitude: 32.08, longitude: 34.78 };
+    const workCenter = offsetLatLng(32.08, 34.78, 300, 0);
+    const home = makePlace({
+      id: 'home-canonical',
+      name: 'Home',
+      center: homeCenter,
+      radiusMeters: 17,
+      createdAtMs: 1,
+    });
+    const work = makePlace({
+      id: 'work-canonical',
+      name: 'Work',
+      center: workCenter,
+      radiusMeters: 30,
+      createdAtMs: 2,
+    });
+    const nearHome = offsetLatLng(32.08, 34.78, 12, 0);
+    assert.equal(findPlaceForRouteEndpoint([home, work], nearHome)?.id, 'home-canonical');
+    assert.equal(findPlaceForRouteEndpoint([home, work], offsetLatLng(32.08, 34.78, 26, 0)), null);
+
+    const archivedNearer = makePlace({
+      id: 'home-archived',
+      name: 'Old Home',
+      center: homeCenter,
+      radiusMeters: 10,
+      status: 'archived',
+      createdAtMs: 0,
+    });
+    const activeFarther = makePlace({
+      id: 'home-active',
+      name: 'Home',
+      center: offsetLatLng(32.08, 34.78, 20, 0),
+      radiusMeters: 30,
+      createdAtMs: 3,
+    });
+    assert.equal(
+      findPlaceForRouteEndpoint([archivedNearer, activeFarther], homeCenter)?.id,
+      'home-active',
+    );
+
+    const parkRoute = makeRoute({
+      id: 'park-route',
+      name: 'Park Route',
+      createdAtMs: 400,
+      sourceRecordingId: 's-park',
+      startZone: { center: homeCenter, radiusMeters: 30 },
+      finishZone: { center: workCenter, radiusMeters: 10 },
+    });
+    const synced = ensurePlacesForRoute([home, work], parkRoute, { nowMs: 5_000 });
+    assert.equal(synced.placesToCreate.length, 0);
+    assert.equal(synced.assignment.startPlaceId, 'home-canonical');
+    assert.equal(synced.assignment.finishPlaceId, 'work-canonical');
+
+    const resized = ensurePlacesForRoute(
+      [{ ...home, radiusMeters: 40 }, work],
+      makeRoute({
+        id: 'home-3-work',
+        name: 'Home 3 → Work',
+        createdAtMs: 500,
+        sourceRecordingId: 's-h3',
+        startZone: { center: homeCenter, radiusMeters: 10 },
+        finishZone: { center: workCenter, radiusMeters: 30 },
+      }),
+      { nowMs: 6_000 },
+    );
+    assert.equal(resized.placesToCreate.length, 0);
+    assert.equal(resized.assignment.startPlaceId, 'home-canonical');
   });
 });

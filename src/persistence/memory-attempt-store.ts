@@ -104,12 +104,21 @@ export class MemoryAttemptStore implements AttemptStore {
   }
 
   async isPlaceReferenced(placeId: string): Promise<boolean> {
+    return (await this.countAttemptsReferencingPlace(placeId)) > 0;
+  }
+
+  async countAttemptsReferencingPlace(placeId: string): Promise<number> {
+    let count = 0;
     for (const attempt of this.attempts.values()) {
       if (attempt.originPlaceId === placeId || attempt.destinationPlaceId === placeId) {
-        return true;
+        count += 1;
       }
     }
-    return false;
+    return count;
+  }
+
+  async deleteAttempt(attemptId: string): Promise<void> {
+    this.attempts.delete(attemptId);
   }
 
   async acknowledgeResult(attemptId: string): Promise<void> {
