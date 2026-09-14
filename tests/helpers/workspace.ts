@@ -21,6 +21,8 @@ export class FakeLocationPlatform implements LocationPlatform {
   backgroundGranted = true;
   updating = false;
   lastNotificationBody: string | null = null;
+  startUpdatesCalls = 0;
+  getCurrentPositionCalls = 0;
   currentPosition: { latitude: number; longitude: number } | null = {
     latitude: 32.08,
     longitude: 34.78,
@@ -42,6 +44,7 @@ export class FakeLocationPlatform implements LocationPlatform {
     return { granted: this.backgroundGranted };
   }
   async startUpdates(options?: LocationUpdateOptions) {
+    this.startUpdatesCalls += 1;
     this.updating = true;
     this.lastNotificationBody = options?.notificationBody ?? null;
   }
@@ -52,6 +55,7 @@ export class FakeLocationPlatform implements LocationPlatform {
     return this.updating;
   }
   async getCurrentPosition() {
+    this.getCurrentPositionCalls += 1;
     return this.currentPosition;
   }
 }

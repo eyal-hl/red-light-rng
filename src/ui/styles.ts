@@ -402,6 +402,30 @@ export const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'right',
   },
+  statsSection: {
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  trendSparkline: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    height: 44,
+    gap: 4,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  trendBarTrack: {
+    flex: 1,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  trendBar: {
+    width: '72%',
+    backgroundColor: '#4fc3f7',
+    borderRadius: 2,
+    minHeight: 4,
+  },
   ghostChartSection: {
     marginBottom: 8,
   },
