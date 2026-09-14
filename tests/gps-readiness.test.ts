@@ -210,7 +210,10 @@ describe('GPS readiness source boundaries', () => {
     const runtime = readFileSync('src/product/attempt-runtime.ts', 'utf8');
     assert.doesNotMatch(home, /gpsReadiness|GPS WAITING|GPS GOOD|GPS POOR|getCurrentPosition|startTracking/);
     assert.match(app, /processActiveAttemptWithStartZoneStatus/);
+    assert.match(app, /gpsReadiness=\{gpsReadiness\}/);
+    assert.match(app, /pathVariants=\{journeyPathVariants\}/);
     assert.doesNotMatch(runtime, /getCurrentPosition/);
     assert.match(runtime, /presentArmedAttemptStatus/);
+    assert.match(runtime, /planPathVariantRecompute/);
   });
 });

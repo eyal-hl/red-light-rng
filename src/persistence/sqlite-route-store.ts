@@ -1,6 +1,6 @@
 import type { CourseLayout, RouteCheckpoint } from '../domain/course-layout';
 import type { GeoZone, LatLng } from '../domain/geo';
-import type { Route, TransportationMode } from '../domain/route';
+import type { Route, RouteStatus, TransportationMode } from '../domain/route';
 import type { RouteStore } from './route-store';
 import type { RouteCheckpointRow, RouteReferencePointRow, RouteRow } from './schema';
 import type { SqlExecutor } from './sql-executor';
@@ -26,6 +26,10 @@ function mapRoute(row: RouteRow, referencePath: LatLng[], checkpoints: RouteChec
     startProgressMeters: row.start_progress_m,
     finishProgressMeters: row.finish_progress_m,
     checkpoints,
+    status: row.status === 'archived' ? 'archived' : 'active',
+    kind: row.kind === 'discovered' ? 'discovered' : 'explicit',
+    clusterSignature: row.cluster_signature,
+    classificationVersion: row.classification_version ?? 1,
   };
 }
 
@@ -47,8 +51,8 @@ export class SqliteRouteStore implements RouteStore {
            id, name, transportation_mode, created_at_ms, source_recording_id,
            start_latitude, start_longitude, start_radius_meters,
            finish_latitude, finish_longitude, finish_radius_meters,
-           start_progress_m, finish_progress_m
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           start_progress_m, finish_progress_m, status, kind, cluster_signature, classification_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           route.id,
           route.name,
@@ -63,6 +67,10 @@ export class SqliteRouteStore implements RouteStore {
           route.finishZone.radiusMeters,
           route.startProgressMeters,
           route.finishProgressMeters,
+          route.status,
+          route.kind,
+          route.clusterSignature,
+          route.classificationVersion,
         ],
       );
       for (const [index, point] of route.referencePath.entries()) {
@@ -128,6 +136,24 @@ export class SqliteRouteStore implements RouteStore {
       );
       await this.replaceCheckpoints(sql, routeId, layout.checkpoints);
     });
+  }
+
+  async renameRoute(routeId: string, name: string): Promise<void> {
+    const sql = await this.getSql();
+    const existing = await sql.getFirst<{ id: string }>('SELECT id FROM route WHERE id = ?', [routeId]);
+    if (!existing) {
+      throw new Error(`Route not found: ${routeId}`);
+    }
+    await sql.run('UPDATE route SET name = ? WHERE id = ?', [name, routeId]);
+  }
+
+  async setRouteStatus(routeId: string, status: RouteStatus): Promise<void> {
+    const sql = await this.getSql();
+    const existing = await sql.getFirst<{ id: string }>('SELECT id FROM route WHERE id = ?', [routeId]);
+    if (!existing) {
+      throw new Error(`Route not found: ${routeId}`);
+    }
+    await sql.run('UPDATE route SET status = ? WHERE id = ?', [status, routeId]);
   }
 
   async deleteRoute(routeId: string): Promise<void> {

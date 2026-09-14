@@ -385,6 +385,7 @@ describe('journey pool statistics', () => {
     assert.equal(loaded.statistics.validAttemptCount, 1);
     assert.equal(loaded.statistics.pbTimeMs, 12 * 60_000);
     assert.equal(loaded.statistics.bestLast7DaysMs, 12 * 60_000);
+    assert.ok(Array.isArray(loaded.pathVariants));
     const stored = await attempts.getAttempt('pb');
     assert.equal(stored?.startedAtMs, attempt.startedAtMs);
     assert.equal(stored?.finishedAtMs, attempt.finishedAtMs);
@@ -396,6 +397,8 @@ describe('journey pool statistics', () => {
     const history = readFileSync('src/ui/HistoryScreen.tsx', 'utf8');
     const active = readFileSync('src/ui/AttemptScreen.tsx', 'utf8');
     assert.match(detail, /JourneyStatisticsDashboard/);
+    assert.match(detail, /PATH VARIANTS/);
+    assert.match(detail, /pathVariants/);
     assert.match(history, /JourneyStatisticsDashboard/);
     assert.doesNotMatch(active, /JourneyStatisticsDashboard|Std\. deviation|Best \(7 days\)/);
   });

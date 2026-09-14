@@ -80,13 +80,16 @@ export function isCompatiblePathVariant(
   return maxProgress - minProgress >= PATH_VARIANT_PROGRESS_COVERAGE_RATIO * courseLength;
 }
 
-function pathVariantsForJourney(
+export function pathVariantsForJourney(
   routes: Route[],
   origin: Pick<Place, 'center' | 'radiusMeters'>,
   destination: Pick<Place, 'center' | 'radiusMeters'>,
   transportationMode: TransportationMode,
+  options?: { includeArchived?: boolean },
 ): Route[] {
+  const includeArchived = options?.includeArchived ?? true;
   return routes
+    .filter((route) => includeArchived || route.status === 'active')
     .filter((route) => routeEndpointsMatchJourney(route, origin, destination, transportationMode))
     .sort((a, b) => {
       if (a.createdAtMs !== b.createdAtMs) {
@@ -102,7 +105,23 @@ export function selectJourneyPathVariant(
   destination: Pick<Place, 'center' | 'radiusMeters'>,
   transportationMode: TransportationMode,
 ): Route | null {
-  return pathVariantsForJourney(routes, origin, destination, transportationMode)[0] ?? null;
+  return pathVariantsForJourney(routes, origin, destination, transportationMode, {
+    includeArchived: false,
+  })[0] ?? null;
+}
+
+export function listCompatiblePathVariants(
+  routes: Route[],
+  origin: Place,
+  destination: Place,
+  transportationMode: TransportationMode,
+  samples: LocationSample[],
+  window: { startedAtMs: number; finishedAtMs: number },
+  options?: { includeArchived?: boolean },
+): Route[] {
+  return pathVariantsForJourney(routes, origin, destination, transportationMode, options).filter(
+    (route) => isCompatiblePathVariant(route, samples, window),
+  );
 }
 
 export function findCompatiblePathVariant(
@@ -112,12 +131,16 @@ export function findCompatiblePathVariant(
   transportationMode: TransportationMode,
   samples: LocationSample[],
   window: { startedAtMs: number; finishedAtMs: number },
+  options?: { includeArchived?: boolean },
 ): Route | null {
-  const candidates = pathVariantsForJourney(routes, origin, destination, transportationMode);
-  for (const route of candidates) {
-    if (isCompatiblePathVariant(route, samples, window)) {
-      return route;
-    }
-  }
-  return null;
+  const matches = listCompatiblePathVariants(
+    routes,
+    origin,
+    destination,
+    transportationMode,
+    samples,
+    window,
+    { includeArchived: false, ...options },
+  );
+  return matches.length === 1 ? matches[0] ?? null : null;
 }

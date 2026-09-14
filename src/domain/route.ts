@@ -18,6 +18,9 @@ export function transportationModeIcon(mode: TransportationMode): string {
   return TRANSPORTATION_MODES.find((item) => item.id === mode)?.icon ?? '';
 }
 
+export type RouteStatus = 'active' | 'archived';
+export type RouteKind = 'explicit' | 'discovered';
+
 export type Route = {
   id: string;
   name: string;
@@ -30,4 +33,21 @@ export type Route = {
   startProgressMeters: number;
   finishProgressMeters: number;
   checkpoints: RouteCheckpoint[];
+  status: RouteStatus;
+  kind: RouteKind;
+  clusterSignature: string | null;
+  classificationVersion: number;
 };
+
+export const INVALID_ROUTE_NAME_REASON = 'Every path variant needs a name.';
+
+export function isActiveRoute(route: Pick<Route, 'status'>): boolean {
+  return route.status === 'active';
+}
+
+export function validateRouteName(name: string): { valid: boolean; reason: string | null } {
+  if (name.trim().length === 0) {
+    return { valid: false, reason: INVALID_ROUTE_NAME_REASON };
+  }
+  return { valid: true, reason: null };
+}

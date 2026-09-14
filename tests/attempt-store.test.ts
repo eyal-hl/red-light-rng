@@ -10,6 +10,7 @@ import {
 import { pointAtProgress } from '../src/domain/path-projection';
 import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
 import { applyMigrations } from '../src/persistence/migrations';
+import { CURRENT_SCHEMA_VERSION } from '../src/persistence/schema';
 import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 import { makeRoute, northPath } from './helpers/routes';
@@ -126,7 +127,7 @@ describe('attempt persistence', () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
     const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
-    assert.equal(version?.user_version, 5);
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
     const attemptTable = await sql.getFirst<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'attempt'`,
     );

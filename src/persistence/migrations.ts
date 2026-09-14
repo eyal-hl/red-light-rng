@@ -202,6 +202,10 @@ export const MIGRATIONS: Migration[] = [
         startProgressMeters: row.start_progress_m,
         finishProgressMeters: row.finish_progress_m,
         checkpoints: [],
+        status: 'active',
+        kind: 'explicit',
+        clusterSignature: null,
+        classificationVersion: 1,
       }));
 
       const seeded = seedPlacesFromRoutes(routes, { nowMs });
@@ -357,6 +361,17 @@ export const MIGRATIONS: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_attempt_crossing_attempt
         ON attempt_checkpoint_crossing(attempt_id, crossed_at_ms);
       `);
+    },
+  },
+  {
+    version: 6,
+    async up(sql) {
+      await sql.exec(`ALTER TABLE route ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+      await sql.exec(`ALTER TABLE route ADD COLUMN kind TEXT NOT NULL DEFAULT 'explicit'`);
+      await sql.exec(`ALTER TABLE route ADD COLUMN cluster_signature TEXT`);
+      await sql.exec(
+        `ALTER TABLE route ADD COLUMN classification_version INTEGER NOT NULL DEFAULT 1`,
+      );
     },
   },
 ];
