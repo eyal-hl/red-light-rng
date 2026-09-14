@@ -30,7 +30,13 @@ describe('attempt result wait map', () => {
     );
     assert.ok(headerIndex < mapIndex && mapIndex < chartIndex, 'header, map, and chart must stay in page order');
     const waitingIndex = source.indexOf('<WaitingVsPbBlock');
+    const explanationIndex = source.indexOf('<ResultExplanationBlock');
     assert.ok(waitingIndex >= 0, 'AttemptResultScreen must render WaitingVsPbBlock');
+    assert.ok(explanationIndex >= 0, 'AttemptResultScreen must render ResultExplanationBlock');
+    assert.ok(
+      explanationIndex > headerIndex && explanationIndex < mapIndex,
+      'post-run explanation must stay secondary to the result headline and before the map',
+    );
     assert.ok(
       waitingIndex > chartIndex && waitingIndex < scrollEnd,
       'Waiting vs PB must remain in the same scrolling page after the chart',
@@ -50,6 +56,8 @@ describe('attempt result wait map', () => {
     assert.match(source, /selectedWaitId=\{selectedWaitId\}/);
     assert.match(source, /WAITING VS PB/);
     assert.match(source, /WaitingVsPbBlock/);
+    assert.match(source, /ResultExplanationBlock/);
+    assert.match(source, /WHERE TIME WENT/);
     assert.match(source, /GhostDeltaChart/);
     assert.match(source, /previewPoint=\{ghostMapPoint\}/);
     assert.match(source, /waitMarkers=\{waitMarkers\}/);
@@ -87,6 +95,14 @@ describe('attempt result wait map', () => {
     assert.match(waitLabel, /'text-font':\s*\[\s*'literal',\s*OPENFREEMAP_LIBERTY_TEXT_FONT\s*\]/);
     assert.doesNotMatch(waitLabel, /'text-font':\s*OPENFREEMAP_LIBERTY_TEXT_FONT\s*,/);
     assert.doesNotMatch(waitLabel, /Open Sans|Arial Unicode/);
+  });
+
+  it('keeps where-time-went styles alongside journey-statistics styles', () => {
+    const source = readFileSync('src/ui/styles.ts', 'utf8');
+    assert.match(source, /explanationSection:/);
+    assert.match(source, /explanationChildLabel:/);
+    assert.match(source, /statsSection:/);
+    assert.match(source, /trendSparkline:/);
   });
 
   it('leaves Android attempt-detail back navigation on the existing history action', () => {

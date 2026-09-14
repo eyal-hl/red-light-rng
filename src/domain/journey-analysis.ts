@@ -8,13 +8,22 @@ import {
 import {
   analyzeFocusAttempt,
   deriveAnchoredLayoutAttempt,
+  timingCourseFromRoute,
+  type CurrentLayoutAttempt,
   type FocusAttemptAnalysis,
   type HistoryRow,
 } from './attempt-analysis';
 import type { LocationSample } from './location-sample';
+import { isMovementDisplayable, type MovementBreakdown } from './movement-analysis';
 import type { Place } from './place';
 import { isCompatiblePathVariant } from './path-variant';
+import {
+  emptyResultExplanation,
+  explainOfficialDelta,
+  type ResultExplanation,
+} from './result-explanation';
 import type { Route, TransportationMode } from './route';
+import { compareAttemptWaiting, type WaitComparison } from './wait-comparison';
 import { journeyPoolKey, journeyTitle, type JourneyPoolId } from './journey';
 
 export const PATH_ANALYTICS_UNAVAILABLE_MESSAGE = 'Path analytics unavailable — different/unmatched path';
@@ -54,6 +63,8 @@ export type JourneyFocusAnalysis = {
   deltaVsPreviousMs: number | null;
   pbBeforeThisTimeMs: number | null;
   deltaVsPbMs: number | null;
+  comparisonAttemptId: string | null;
+  resultExplanation: ResultExplanation;
   pathAnalytics: FocusAttemptAnalysis | null;
   pathUnavailable: boolean;
 };
@@ -264,6 +275,14 @@ export function analyzeJourneyFocus(
   const isPb = summary.pbAttemptId === focus.id;
   const previous = previousCompetitiveAttempt(competitive, focus);
   const pbBefore = pbBeforeAttempt(ranked, focus);
+  const comparisonAttempt = headlineComparisonAttempt({
+    competitive: isJourneyCompetitive(focus),
+    isPb,
+    pbBefore,
+    currentPb: ranked[0] ?? null,
+    focusId: focus.id,
+  });
+  const deltaVsPbMs = headlineDelta(focusTime, summary.pbTimeMs, pbBefore ? officialTimeMs(pbBefore) : null, isPb);
   const variantTraces = inPool.filter((trace) => {
     if (!isJourneyCompetitive(trace.attempt) || !trace.attempt.routeId) {
       return false;
@@ -306,6 +325,28 @@ export function analyzeJourneyFocus(
         )
       : null;
 
+  const comparisonTrace = comparisonAttempt
+    ? (inPool.find((trace) => trace.attempt.id === comparisonAttempt.id) ?? null)
+    : null;
+  const currentLayout = compatibleLayoutForTrace(focusTrace, routes);
+  const comparisonLayout = comparisonTrace ? compatibleLayoutForTrace(comparisonTrace, routes) : null;
+  const currentMovement = displayableMovementOf(currentLayout?.derived ?? pathAnalytics?.focus ?? null);
+  const referenceMovement = displayableMovementOf(comparisonLayout?.derived ?? null);
+  const waitComparison = waitComparisonForHeadlineTarget({
+    comparisonAttemptId: comparisonAttempt?.id ?? null,
+    current: currentLayout,
+    comparison: comparisonLayout,
+  });
+  const resultExplanation = isJourneyCompetitive(focus)
+    ? explainOfficialDelta({
+        comparisonAttemptId: comparisonAttempt?.id ?? null,
+        headlineDeltaMs: deltaVsPbMs,
+        currentMovement,
+        referenceMovement,
+        waitComparison,
+      })
+    : emptyResultExplanation({ availability: 'no_comparison_target' });
+
   return {
     summary,
     officialTimeMs: focusTime,
@@ -318,10 +359,85 @@ export function analyzeJourneyFocus(
         ? focusTime - (officialTimeMs(previous) as number)
         : null,
     pbBeforeThisTimeMs: pbBefore ? officialTimeMs(pbBefore) : null,
-    deltaVsPbMs: headlineDelta(focusTime, summary.pbTimeMs, pbBefore ? officialTimeMs(pbBefore) : null, isPb),
+    deltaVsPbMs,
+    comparisonAttemptId: comparisonAttempt?.id ?? null,
+    resultExplanation,
     pathAnalytics,
     pathUnavailable: isJourneyCompetitive(focus) && pathAnalytics == null,
   };
+}
+
+function headlineComparisonAttempt(input: {
+  competitive: boolean;
+  isPb: boolean;
+  pbBefore: Attempt | null;
+  currentPb: Attempt | null;
+  focusId: string;
+}): Attempt | null {
+  if (!input.competitive) {
+    return null;
+  }
+  if (input.isPb) {
+    return input.pbBefore;
+  }
+  if (input.currentPb && input.currentPb.id !== input.focusId) {
+    return input.currentPb;
+  }
+  return input.pbBefore;
+}
+
+function compatibleLayoutForTrace(
+  trace: JourneyAttemptTrace,
+  routes: Route[],
+): { route: Route; derived: CurrentLayoutAttempt } | null {
+  const attempt = trace.attempt;
+  if (!attempt.routeId || attempt.startedAtMs == null || attempt.finishedAtMs == null) {
+    return null;
+  }
+  const route = routes.find((item) => item.id === attempt.routeId);
+  if (!route) {
+    return null;
+  }
+  if (
+    !isCompatiblePathVariant(route, trace.samples, {
+      startedAtMs: attempt.startedAtMs,
+      finishedAtMs: attempt.finishedAtMs,
+    })
+  ) {
+    return null;
+  }
+  const derived = deriveAnchoredLayoutAttempt(timingCourseFromRoute(route), attempt, trace.samples);
+  if (!derived.eligible) {
+    return null;
+  }
+  return { route, derived };
+}
+
+function displayableMovementOf(layout: CurrentLayoutAttempt | null): MovementBreakdown | null {
+  if (layout?.movement == null || !isMovementDisplayable(layout.movement)) {
+    return null;
+  }
+  return layout.movement;
+}
+
+function waitComparisonForHeadlineTarget(input: {
+  comparisonAttemptId: string | null;
+  current: { route: Route; derived: CurrentLayoutAttempt } | null;
+  comparison: { route: Route; derived: CurrentLayoutAttempt } | null;
+}): WaitComparison | null {
+  if (
+    input.comparisonAttemptId == null ||
+    input.current == null ||
+    input.comparison == null ||
+    input.current.route.id !== input.comparison.route.id
+  ) {
+    return null;
+  }
+  return compareAttemptWaiting({
+    current: input.current.derived,
+    reference: input.comparison.derived,
+    referencePath: input.current.route.referencePath,
+  });
 }
 
 export function incompleteAttempts(traces: JourneyAttemptTrace[]): Attempt[] {

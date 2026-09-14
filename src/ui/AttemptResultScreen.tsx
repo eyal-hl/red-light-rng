@@ -4,6 +4,11 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { segmentEndpointLabel } from '../domain/attempt-analysis';
 import { incompleteAttemptLabel, isJourneyCompetitive, officialTimeMs, type Attempt } from '../domain/attempt';
 import { PATH_ANALYTICS_UNAVAILABLE_MESSAGE, type JourneyFocusAnalysis } from '../domain/journey-analysis';
+import {
+  formatExplanationDelta,
+  type ExplanationRow,
+  type ResultExplanation,
+} from '../domain/result-explanation';
 import type { CombinedAttemptDebug } from '../product/route-workspace';
 import { checkpointMapPoints } from '../domain/course-layout';
 import {
@@ -115,6 +120,121 @@ function comparisonTone(deltaMs: number): RouteMapWaitMarkerTone {
     return 'less';
   }
   return 'wait';
+}
+
+function ResultExplanationBlock({
+  explanation,
+  displayedComparisonLocations,
+  selectedComparisonId,
+  onSelectLocation,
+}: {
+  explanation: ResultExplanation;
+  displayedComparisonLocations: WaitComparisonLocationEntry[];
+  selectedComparisonId: string | null;
+  onSelectLocation: (location: WaitComparisonLocationEntry) => void;
+}) {
+  if (explanation.availability === 'no_comparison_target') {
+    return null;
+  }
+
+  if (explanation.availability === 'headline_only') {
+    return (
+      <View style={styles.explanationSection}>
+        <Text style={styles.sectionLabel}>WHERE TIME WENT</Text>
+        <Text style={styles.mutedText}>No trustworthy waiting or moving breakdown versus this PB.</Text>
+      </View>
+    );
+  }
+
+  if (explanation.rows.length === 0) {
+    return (
+      <View style={styles.explanationSection}>
+        <Text style={styles.sectionLabel}>WHERE TIME WENT</Text>
+        <Text style={styles.mutedText}>No large enough waiting or moving difference to highlight.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.explanationSection}>
+      <Text style={styles.sectionLabel}>WHERE TIME WENT</Text>
+      {explanation.headlineDeltaMs != null ? (
+        <View style={styles.statRow}>
+          <Text style={styles.statLabel}>vs PB</Text>
+          <Text style={deltaStyle(explanation.headlineDeltaMs)}>
+            {formatExplanationDelta(explanation.headlineDeltaMs)}
+          </Text>
+        </View>
+      ) : null}
+      {explanation.rows.map((row) => (
+        <ExplanationRowView
+          key={row.id}
+          row={row}
+          displayedComparisonLocations={displayedComparisonLocations}
+          selectedComparisonId={selectedComparisonId}
+          onSelectLocation={onSelectLocation}
+        />
+      ))}
+    </View>
+  );
+}
+
+function ExplanationRowView({
+  row,
+  displayedComparisonLocations,
+  selectedComparisonId,
+  onSelectLocation,
+}: {
+  row: ExplanationRow;
+  displayedComparisonLocations: WaitComparisonLocationEntry[];
+  selectedComparisonId: string | null;
+  onSelectLocation: (location: WaitComparisonLocationEntry) => void;
+}) {
+  const linkedLocation =
+    row.waitLocationId == null
+      ? null
+      : (displayedComparisonLocations.find((location) => location.id === row.waitLocationId) ?? null);
+  const selected = linkedLocation != null && selectedComparisonId === linkedLocation.id;
+  const deltaText = (
+    <Text
+      style={[
+        row.role === 'detail' ? styles.explanationChildDuration : styles.explanationDuration,
+        row.deltaMs > 0 ? styles.waitComparisonMore : null,
+        row.deltaMs < 0 ? styles.waitComparisonLess : null,
+      ]}
+    >
+      {formatExplanationDelta(row.deltaMs)}
+    </Text>
+  );
+  const labelText = (
+    <Text style={row.role === 'detail' ? styles.explanationChildLabel : styles.explanationLabel}>{row.label}</Text>
+  );
+
+  if (linkedLocation) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        accessibilityLabel={`${formatExplanationDelta(row.deltaMs)} ${row.label}`}
+        onPress={() => onSelectLocation(linkedLocation)}
+        style={[
+          styles.explanationRow,
+          row.role === 'detail' ? styles.explanationChildRow : null,
+          selected ? styles.selectedCard : null,
+        ]}
+      >
+        {deltaText}
+        {labelText}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.explanationRow, row.role === 'detail' ? styles.explanationChildRow : null]}>
+      {deltaText}
+      {labelText}
+    </View>
+  );
 }
 
 function WaitingVsPbBlock({
@@ -706,6 +826,14 @@ export function AttemptResultScreen({
           ) : null}
           {journey?.rank != null ? (
             <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
+          ) : null}
+          {journey ? (
+            <ResultExplanationBlock
+              explanation={journey.resultExplanation}
+              displayedComparisonLocations={displayedComparisonLocations}
+              selectedComparisonId={selectedComparisonId}
+              onSelectLocation={selectComparison}
+            />
           ) : null}
         </View>
       ) : null}

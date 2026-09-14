@@ -201,6 +201,11 @@ describe('journey identity and analysis', () => {
     assert.equal(focusUnmatched.pathAnalytics, null);
     assert.equal(focusUnmatched.officialTimeMs, officialTimeMs(unmatched));
     assert.equal(focusUnmatched.rank, 2);
+    assert.equal(focusUnmatched.comparisonAttemptId, compatible.id);
+    assert.equal(focusUnmatched.resultExplanation.availability, 'headline_only');
+    assert.equal(focusUnmatched.resultExplanation.rows.length, 0);
+    assert.equal(focusCompat.comparisonAttemptId, null);
+    assert.equal(focusCompat.resultExplanation.availability, 'no_comparison_target');
     assert.equal(PATH_ANALYTICS_UNAVAILABLE_MESSAGE.includes('unavailable'), true);
   });
 });
