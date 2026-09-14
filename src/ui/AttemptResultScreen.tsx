@@ -52,7 +52,10 @@ type AttemptResultScreenProps = {
   attempt: Attempt;
   journey: JourneyFocusAnalysis | null;
   debug?: CombinedAttemptDebug | null;
-  secondaryPending?: boolean;
+  debugPending?: boolean;
+  pathAnalyticsPending?: boolean;
+  debugError?: string | null;
+  pathAnalyticsError?: string | null;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
@@ -702,7 +705,10 @@ export function AttemptResultScreen({
   attempt,
   journey,
   debug = null,
-  secondaryPending = false,
+  debugPending = false,
+  pathAnalyticsPending = false,
+  debugError = null,
+  pathAnalyticsError = null,
   busy,
   error,
   doneLabel = 'DONE',
@@ -830,7 +836,7 @@ export function AttemptResultScreen({
           {journey?.rank != null ? (
             <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
           ) : null}
-          {journey && !secondaryPending ? (
+          {journey && !pathAnalyticsPending ? (
             <ResultExplanationBlock
               explanation={journey.resultExplanation}
               displayedComparisonLocations={displayedComparisonLocations}
@@ -838,13 +844,15 @@ export function AttemptResultScreen({
               onSelectLocation={selectComparison}
             />
           ) : null}
-          {secondaryPending ? (
+          {pathAnalyticsPending ? (
             <Text style={styles.mutedText}>Loading path analytics…</Text>
+          ) : pathAnalyticsError ? (
+            <Text style={styles.errorText}>{pathAnalyticsError}</Text>
           ) : null}
         </View>
       ) : null}
 
-      {route || debug?.place.recordedPath.length || secondaryPending ? (
+      {route || debug?.place.recordedPath.length || debugPending || pathAnalyticsPending ? (
         <View style={styles.attemptMapPane} collapsable={false}>
           {route || debug?.place.recordedPath.length ? (
             <DeferredMapSlot style={styles.attemptMap} label="Loading map…">
@@ -946,8 +954,10 @@ export function AttemptResultScreen({
             selectedSample={selectedDebugSample}
             onSelectSample={setSelectedSampleId}
           />
-        ) : secondaryPending ? (
+        ) : debugPending ? (
           <Text style={styles.mutedText}>Loading debug trace…</Text>
+        ) : debugError ? (
+          <Text style={styles.errorText}>{debugError}</Text>
         ) : null}
         {debug?.variant ? (
           <DebugTracePanel
@@ -973,7 +983,7 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {journey?.pathUnavailable && !secondaryPending ? (
+        {journey?.pathUnavailable && !pathAnalyticsPending ? (
           <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
         ) : null}
 

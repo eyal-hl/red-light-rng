@@ -404,12 +404,16 @@ describe('navigation performance and derivation reuse', () => {
     const workspace = readFileSync('src/product/route-workspace.ts', 'utf8');
 
     assert.match(appRoot, /setScreen\(\{ kind: 'journey', pool \}\);\s*const loaded = await loadJourney\(pool\);/s);
-    assert.match(appRoot, /setAnalysisPending\(pool != null\);\s*setScreen\(nextScreen\);/s);
+    assert.match(appRoot, /createAttemptResultShell\(attempt\)/);
+    assert.match(appRoot, /setScreen\(nextScreen\);\s*void loadAttemptResultSecondary/s);
     assert.match(appRoot, /workspace\.analyzeJourneyHeadline/);
-    assert.match(appRoot, /secondaryPending=\{analysisPending\}/);
-    assert.match(resultScreen, /secondaryPending/);
+    assert.match(appRoot, /debugPending=\{debugPending\}/);
+    assert.match(appRoot, /pathAnalyticsPending=\{pathAnalyticsPending\}/);
+    assert.match(resultScreen, /debugPending/);
+    assert.match(resultScreen, /pathAnalyticsPending/);
     assert.match(resultScreen, /DeferredMapSlot/);
     assert.match(resultScreen, /Loading path analytics/);
+    assert.match(resultScreen, /Loading debug trace/);
     assert.match(journeyScreen, /DeferredMapSlot/);
     assert.match(database, /if \(!executorPromise\)/);
     assert.match(workspace, /tracesFromAttempts/);

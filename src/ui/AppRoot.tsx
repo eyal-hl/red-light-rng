@@ -32,6 +32,11 @@ import {
   startAppStartup,
   type AppStartupStage,
 } from '../product/app-startup';
+import {
+  createAttemptResultShell,
+  journeyPoolForAttempt,
+  loadAttemptResultSecondary,
+} from '../product/attempt-result-load';
 import type { CombinedAttemptDebug, HomeSnapshot, LoadedJourney, RouteWorkspace } from '../product/route-workspace';
 import { sameJourneyPool } from '../domain/journey';
 import { AttemptResultScreen } from './AttemptResultScreen';
@@ -115,7 +120,10 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [error, setError] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
   const [startupNonce, setStartupNonce] = useState(0);
-  const [analysisPending, setAnalysisPending] = useState(false);
+  const [debugPending, setDebugPending] = useState(false);
+  const [pathAnalyticsPending, setPathAnalyticsPending] = useState(false);
+  const [debugError, setDebugError] = useState<string | null>(null);
+  const [pathAnalyticsError, setPathAnalyticsError] = useState<string | null>(null);
   const startupTokenRef = useRef(0);
   const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
   const secondaryLoadTokenRef = useRef(0);
@@ -205,14 +213,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
         return;
       }
-      const pool =
-        attempt.originPlaceId && attempt.destinationPlaceId
-          ? {
-              originPlaceId: attempt.originPlaceId,
-              destinationPlaceId: attempt.destinationPlaceId,
-              transportationMode: attempt.transportationMode,
-            }
-          : null;
+      const pool = journeyPoolForAttempt(attempt);
       let focus: JourneyFocusAnalysis | null = null;
       if (pool) {
         const headline = await workspace.analyzeJourneyHeadline(pool, attempt.id);
@@ -221,30 +222,34 @@ export function AppRoot({ workspace }: AppRootProps) {
         }
         focus = headline?.focus ?? null;
       }
+      const shell = createAttemptResultShell(attempt);
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(attempt);
       setJourneyFocus(focus);
-      setAttemptDebug(null);
-      setAnalysisPending(pool != null);
+      setAttemptDebug(shell.debug);
+      setDebugPending(shell.debugPending);
+      setPathAnalyticsPending(shell.pathAnalyticsPending);
+      setDebugError(null);
+      setPathAnalyticsError(null);
       setScreen(nextScreen);
-      if (!pool) {
-        setAnalysisPending(false);
-        return;
-      }
-      void (async () => {
-        const [analyzed, debug] = await Promise.all([
-          workspace.analyzeJourney(pool, attempt.id),
-          workspace.inspectAttempt(attempt.id),
-        ]);
+      void loadAttemptResultSecondary(workspace, attempt, (update) => {
         if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
           return;
         }
-        setJourneyFocus(analyzed?.focus ?? focus);
-        setAttemptDebug(debug);
-        setAnalysisPending(false);
-      })();
+        if (update.kind === 'debug') {
+          setAttemptDebug(update.debug);
+          setDebugError(update.debugError);
+          setDebugPending(false);
+          return;
+        }
+        setPathAnalyticsPending(false);
+        setPathAnalyticsError(update.pathAnalyticsError);
+        if (!update.skipped) {
+          setJourneyFocus(update.pathAnalytics?.focus ?? focus);
+        }
+      });
     },
     [workspace],
   );
@@ -591,7 +596,10 @@ export function AppRoot({ workspace }: AppRootProps) {
       setAttemptResult(null);
       setJourneyFocus(null);
       setAttemptDebug(null);
-      setAnalysisPending(false);
+      setDebugPending(false);
+      setPathAnalyticsPending(false);
+      setDebugError(null);
+      setPathAnalyticsError(null);
       secondaryLoadTokenRef.current += 1;
       if (pool) {
         activeJourneyPoolRef.current = pool;
@@ -650,7 +658,10 @@ export function AppRoot({ workspace }: AppRootProps) {
     setError(null);
     activeJourneyPoolRef.current = null;
     secondaryLoadTokenRef.current += 1;
-    setAnalysisPending(false);
+    setDebugPending(false);
+    setPathAnalyticsPending(false);
+    setDebugError(null);
+    setPathAnalyticsError(null);
     setScreen({ kind: 'home' });
     void refreshHome();
   }, [refreshHome]);
@@ -729,7 +740,10 @@ export function AppRoot({ workspace }: AppRootProps) {
     setAttemptResult(null);
     setJourneyFocus(null);
     setAttemptDebug(null);
-    setAnalysisPending(false);
+    setDebugPending(false);
+    setPathAnalyticsPending(false);
+    setDebugError(null);
+    setPathAnalyticsError(null);
     const pool = screen.pool;
     setScreen({ kind: 'history', pool });
     void loadJourney(pool);
@@ -1386,7 +1400,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={attemptResult}
           journey={journeyFocus}
           debug={attemptDebug}
-          secondaryPending={analysisPending}
+          debugPending={debugPending}
+          pathAnalyticsPending={pathAnalyticsPending}
+          debugError={debugError}
+          pathAnalyticsError={pathAnalyticsError}
           busy={busy}
           error={error}
           onDone={() => {
@@ -1423,7 +1440,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={attemptResult}
           journey={journeyFocus}
           debug={attemptDebug}
-          secondaryPending={analysisPending}
+          debugPending={debugPending}
+          pathAnalyticsPending={pathAnalyticsPending}
+          debugError={debugError}
+          pathAnalyticsError={pathAnalyticsError}
           busy={busy}
           error={error}
           doneLabel="BACK"
