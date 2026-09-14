@@ -97,6 +97,14 @@ describe('attempt result wait map', () => {
     assert.doesNotMatch(waitLabel, /Open Sans|Arial Unicode/);
   });
 
+  it('keeps where-time-went styles alongside journey-statistics styles', () => {
+    const source = readFileSync('src/ui/styles.ts', 'utf8');
+    assert.match(source, /explanationSection:/);
+    assert.match(source, /explanationChildLabel:/);
+    assert.match(source, /statsSection:/);
+    assert.match(source, /trendSparkline:/);
+  });
+
   it('leaves Android attempt-detail back navigation on the existing history action', () => {
     const source = readFileSync('src/ui/system-back.ts', 'utf8');
     assert.match(source, /case 'attempt-detail':\s*return 'leaveAttemptDetailToHistory'/);
