@@ -190,6 +190,8 @@ describe('path variant persistence', () => {
     assert.equal(after?.pathVariants.length, 1);
     assert.equal(after?.pathVariants[0]?.route.id, saved.route.id);
     assert.equal(after?.pathVariants[0]?.attemptCount, 1);
+    assert.equal(after?.statistics.validAttemptCount, 1);
+    assert.equal(after?.statistics.pbTimeMs, before?.summary.pbTimeMs);
     assert.equal(after?.summary.rankedAttemptCount, before?.summary.rankedAttemptCount);
     assert.equal(after?.summary.pbTimeMs, before?.summary.pbTimeMs);
     assert.equal(await sessions.countSamples('session-existing'), attemptSamples.length);

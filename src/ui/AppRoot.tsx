@@ -10,8 +10,10 @@ import {
 } from '../domain/course-editor';
 import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
+import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
@@ -78,11 +80,15 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [originPlace, setOriginPlace] = useState<Place | null>(null);
   const [destinationPlace, setDestinationPlace] = useState<Place | null>(null);
   const [journeySummary, setJourneySummary] = useState<JourneyPoolSummary | null>(null);
+  const [journeyStatistics, setJourneyStatistics] = useState<JourneyPoolStatistics>(() =>
+    computeJourneyStatistics([], 0),
+  );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
   const [journeyPathVariants, setJourneyPathVariants] = useState<JourneyPathVariantSummary[]>([]);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
   const [originName, setOriginName] = useState<string | null>(null);
   const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
+  const [gpsReadiness, setGpsReadiness] = useState<GpsReadiness>(WAITING_GPS_READINESS);
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [journeyFocus, setJourneyFocus] = useState<JourneyFocusAnalysis | null>(null);
   const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
@@ -112,6 +118,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setOriginPlace(loaded.origin);
       setDestinationPlace(loaded.destination);
       setJourneySummary(loaded.summary);
+      setJourneyStatistics(loaded.statistics);
       setJourneyHistory(loaded.history);
       setJourneyPathVariants(loaded.pathVariants);
       return loaded;
@@ -140,6 +147,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -164,6 +172,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       const debug = await workspace.inspectAttempt(attempt.id);
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(attempt);
       setJourneyFocus(focus);
       setAttemptDebug(debug);
@@ -230,6 +239,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         setStartZoneStatus(processed.startZoneStatus);
+        setGpsReadiness(processed.gpsReadiness);
         if (processed.attempt.originPlaceId) {
           const origin = await workspace.getPlace(processed.attempt.originPlaceId);
           setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
@@ -406,6 +416,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       await workspace.cancelAttempt();
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
+      setGpsReadiness(WAITING_GPS_READINESS);
       await refreshHome();
       setScreen({ kind: 'home' });
     } catch (caught) {
@@ -423,6 +434,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!ended) {
         setActiveAttempt(null);
         setStartZoneStatus(LOCATING_ZONE);
+        setGpsReadiness(WAITING_GPS_READINESS);
         await refreshHome();
         setScreen({ kind: 'home' });
         return;
@@ -1059,6 +1071,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           origin={originPlace}
           destination={destinationPlace}
           summary={journeySummary}
+          statistics={journeyStatistics}
           history={journeyHistory}
           pathVariants={journeyPathVariants}
           busy={busy}
@@ -1095,6 +1108,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         <AttemptScreen
           originName={originName}
           attempt={activeAttempt}
+          gpsReadiness={gpsReadiness}
           startZoneStatus={startZoneStatus}
           busy={busy}
           error={error}
@@ -1126,6 +1140,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'history' && journeySummary ? (
         <HistoryScreen
           title={journeySummary.title}
+          statistics={journeyStatistics}
           rows={journeyHistory}
           rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
           mode={historyMode}

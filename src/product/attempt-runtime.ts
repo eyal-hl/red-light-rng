@@ -8,10 +8,12 @@ import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
 import type { Place } from '../domain/place';
 import {
-  derivePlaceStartZoneStatus,
-  replayPlaceTrace,
-  type PlaceStartZoneStatus,
-} from '../domain/place-timing';
+  presentArmedAttemptStatus,
+  WAITING_GPS_READINESS,
+  type AttemptCaptureHealth,
+  type GpsReadiness,
+} from '../domain/gps-readiness';
+import { replayPlaceTrace, type PlaceStartZoneStatus } from '../domain/place-timing';
 import type { JourneyPoolId } from '../domain/journey';
 import { attemptJourneyPool } from '../domain/journey-analysis';
 import { planPathVariantRecompute } from '../domain/path-variant-discovery';
@@ -31,6 +33,7 @@ export type ArmAttemptResult =
 export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
   startZoneStatus: PlaceStartZoneStatus;
+  gpsReadiness: GpsReadiness;
 };
 
 const LOCATING_START_ZONE: PlaceStartZoneStatus = {
@@ -162,22 +165,24 @@ export class AttemptRuntime {
       return {
         attempt: await this.attempts.getUnacknowledgedResult(),
         startZoneStatus: LOCATING_START_ZONE,
+        gpsReadiness: WAITING_GPS_READINESS,
       };
     }
     const samples = await this.sessions.listSamples(open.sessionId);
     const places = await this.placesForAttempt(open);
     const next = await this.applyPlaceEngine(open, samples, places);
     const engine = replayPlaceTrace(places, samples, { armedAtMs: open.armedAtMs, nowMs: this.now() });
-    const armedStatus =
-      next.lifecycle === 'armed' ? derivePlaceStartZoneStatus(places, samples, engine) : LOCATING_START_ZONE;
+    const presented = presentArmedAttemptStatus(places, samples, engine, await this.readAttemptCaptureHealth());
+    const armedStatus = next.lifecycle === 'armed' ? presented.startZoneStatus : LOCATING_START_ZONE;
+    const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
 
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
       await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
-      return { attempt: next, startZoneStatus: armedStatus };
+      return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
     }
     await this.attempts.saveAttempt(next);
-    return { attempt: next, startZoneStatus: armedStatus };
+    return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
   }
 
   async processActive(): Promise<Attempt | null> {
@@ -418,6 +423,22 @@ export class AttemptRuntime {
       ...attempt,
       routeId: variant.id,
       crossings,
+    };
+  }
+
+  private async readAttemptCaptureHealth(): Promise<AttemptCaptureHealth> {
+    const tracking = await this.tracker.getState();
+    const [osUpdating, servicesEnabled, foregroundPermissionGranted] = await Promise.all([
+      this.platform.isUpdating(),
+      this.platform.hasServicesEnabled(),
+      this.platform.hasForegroundPermission(),
+    ]);
+    return {
+      sessionActive: tracking.status === 'tracking' && tracking.captureOutcome === 'active',
+      osUpdating,
+      servicesEnabled,
+      foregroundPermissionGranted,
+      lastError: tracking.lastError,
     };
   }
 
