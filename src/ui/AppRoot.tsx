@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, BackHandler, Pressable, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
@@ -25,7 +25,14 @@ import type { RouteDerivation } from '../domain/route-derivation';
 import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
-import type { CombinedAttemptDebug, RouteWorkspace } from '../product/route-workspace';
+import {
+  APP_STARTUP_STAGE_LABELS,
+  APP_STARTUP_WATCHDOG_MS,
+  formatStartupError,
+  startAppStartup,
+  type AppStartupStage,
+} from '../product/app-startup';
+import type { CombinedAttemptDebug, HomeSnapshot, RouteWorkspace } from '../product/route-workspace';
 import { AttemptResultScreen } from './AttemptResultScreen';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
@@ -105,6 +112,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
+  const [startupNonce, setStartupNonce] = useState(0);
+  const startupTokenRef = useRef(0);
 
   const refreshHome = useCallback(async () => {
     const snapshot = await workspace.loadHome();
@@ -137,8 +147,11 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const openReview = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, signal?: AbortSignal) => {
       const { session, samples, derivation } = await workspace.deriveSession(sessionId);
+      if (signal?.aborted) {
+        return;
+      }
       setReviewSession(session);
       setReviewDerivation(derivation);
       setReviewPointCount(samples.length);
@@ -148,12 +161,18 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const showAttempt = useCallback(
-    async (attempt: Attempt) => {
+    async (attempt: Attempt, signal?: AbortSignal) => {
       if (attempt.originPlaceId) {
         const origin = await workspace.getPlace(attempt.originPlaceId);
+        if (signal?.aborted) {
+          return;
+        }
         setOriginName(origin?.name ?? null);
       } else {
         setOriginName(null);
+      }
+      if (signal?.aborted) {
+        return;
       }
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
@@ -165,8 +184,11 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const showAttemptResult = useCallback(
-    async (attempt: Attempt) => {
+    async (attempt: Attempt, signal?: AbortSignal) => {
       setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
+      if (signal?.aborted) {
+        return;
+      }
       let focus: JourneyFocusAnalysis | null = null;
       if (attempt.originPlaceId && attempt.destinationPlaceId) {
         const analyzed = await workspace.analyzeJourney(
@@ -177,9 +199,15 @@ export function AppRoot({ workspace }: AppRootProps) {
           },
           attempt.id,
         );
+        if (signal?.aborted) {
+          return;
+        }
         focus = analyzed?.focus ?? null;
       }
       const debug = await workspace.inspectAttempt(attempt.id);
+      if (signal?.aborted) {
+        return;
+      }
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
@@ -191,9 +219,11 @@ export function AppRoot({ workspace }: AppRootProps) {
     [workspace],
   );
 
-  const bootstrap = useCallback(async () => {
-    try {
-      const snapshot = await workspace.bootstrap();
+  const applyStartupSnapshot = useCallback(
+    async (snapshot: HomeSnapshot, signal?: AbortSignal) => {
+      if (signal?.aborted) {
+        return;
+      }
       setError(null);
       setPlaces(snapshot.places);
       setJourneys(snapshot.journeys);
@@ -203,42 +233,85 @@ export function AppRoot({ workspace }: AppRootProps) {
       setCanStartNewRecording(snapshot.canStartNewRecording);
       setCanStartAttempt(snapshot.canStartAttempt);
       if (snapshot.activeAttempt) {
-        await showAttempt(snapshot.activeAttempt);
+        await showAttempt(snapshot.activeAttempt, signal);
         return;
       }
       if (snapshot.attemptResult) {
-        await showAttemptResult(snapshot.attemptResult);
+        await showAttemptResult(snapshot.attemptResult, signal);
         return;
       }
       if (snapshot.activeRecording) {
         const state = await workspace.getTrackingState();
+        if (signal?.aborted) {
+          return;
+        }
         setTrackingState(state);
         setScreen({ kind: 'recording' });
         return;
       }
       if (snapshot.pendingRecording) {
-        await openReview(snapshot.pendingRecording.id);
+        await openReview(snapshot.pendingRecording.id, signal);
+        return;
+      }
+      if (signal?.aborted) {
         return;
       }
       setScreen({ kind: 'home' });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not open your saved data.');
-      setScreen({ kind: 'init-error' });
-    }
-  }, [openReview, showAttempt, showAttemptResult, workspace]);
+    },
+    [openReview, showAttempt, showAttemptResult, workspace],
+  );
+
+  const applyStartupSnapshotRef = useRef(applyStartupSnapshot);
+
+  useEffect(() => {
+    applyStartupSnapshotRef.current = applyStartupSnapshot;
+  }, [applyStartupSnapshot]);
 
   const retryBootstrap = useCallback(() => {
     setError(null);
+    setStartupStage('opening-database');
     setScreen({ kind: 'loading' });
-    void bootstrap();
-  }, [bootstrap]);
+    setStartupNonce((value) => value + 1);
+  }, []);
 
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      void bootstrap();
-    }, 0);
-    return () => clearTimeout(timeout);
-  }, [bootstrap]);
+    const token = startupTokenRef.current + 1;
+    startupTokenRef.current = token;
+    const controller = new AbortController();
+    const session = startAppStartup(
+      {
+        preparePersistence: () => workspace.preparePersistence(),
+        recoverTracker: () => workspace.recoverTracker(),
+        reconcileAttempts: () => workspace.reconcileAttempts(),
+        loadHome: () => workspace.loadHome(),
+        recomputePathVariants: () => workspace.recomputePathVariants(),
+      },
+      {
+        onStage: (stage) => {
+          if (startupTokenRef.current !== token) {
+            return;
+          }
+          setStartupStage(stage);
+        },
+        onHomeReady: (snapshot) => applyStartupSnapshotRef.current(snapshot, controller.signal),
+        onFailure: (failure) => {
+          controller.abort();
+          if (startupTokenRef.current !== token) {
+            return;
+          }
+          startupTokenRef.current += 1;
+          setStartupStage(failure.stage);
+          setError(formatStartupError(failure));
+          setScreen({ kind: 'init-error' });
+        },
+      },
+      { watchdogMs: APP_STARTUP_WATCHDOG_MS },
+    );
+    return () => {
+      controller.abort();
+      session.cancel();
+    };
+  }, [startupNonce, workspace]);
 
   useEffect(() => {
     if (screen.kind !== 'recording') {
@@ -1012,6 +1085,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'loading' ? (
         <View style={styles.content}>
           <Text style={styles.mutedText}>Loading…</Text>
+          <Text style={styles.mutedText}>{APP_STARTUP_STAGE_LABELS[startupStage]}</Text>
         </View>
       ) : null}
       {screen.kind === 'init-error' ? (
@@ -1019,9 +1093,11 @@ export function AppRoot({ workspace }: AppRootProps) {
           <Text style={styles.kicker}>RED LIGHT RNG</Text>
           <Text style={styles.title}>Could not open your data</Text>
           <Text style={styles.subtitle}>
-            Startup failed before Home could load. Your history is still on this device. Try again,
-            or keep this error to report the upgrade.
+            Startup did not finish. Home never loaded, so this is not an infinite spinner. Your
+            history is still on this device. Try again, or keep this error to report the upgrade.
           </Text>
+          <Text style={styles.mutedText}>Stage: {startupStage}</Text>
+          <Text style={styles.mutedText}>{APP_STARTUP_STAGE_LABELS[startupStage]}</Text>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <View style={styles.actions}>
             <Pressable

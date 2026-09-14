@@ -109,10 +109,26 @@ export class RouteWorkspace {
     private readonly createPlaceId: () => string = createId,
   ) {}
 
-  async bootstrap(): Promise<HomeSnapshot> {
+  async preparePersistence(): Promise<void> {
+    await this.settings.getActiveTransportationMode();
+  }
+
+  async recoverTracker(): Promise<void> {
     await this.tracker.recover();
+  }
+
+  async reconcileAttempts(): Promise<void> {
     await this.attempts.reconcile();
+  }
+
+  async recomputePathVariants(): Promise<void> {
     await this.attempts.recomputeAllPathVariants();
+  }
+
+  async bootstrap(): Promise<HomeSnapshot> {
+    await this.preparePersistence();
+    await this.recoverTracker();
+    await this.reconcileAttempts();
     return this.loadHome();
   }
 
@@ -172,8 +188,8 @@ export class RouteWorkspace {
   }
 
   async recover(): Promise<void> {
-    await this.tracker.recover();
-    await this.attempts.reconcile();
+    await this.recoverTracker();
+    await this.reconcileAttempts();
   }
 
   async getTrackingState(): Promise<TrackingState> {

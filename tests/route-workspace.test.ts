@@ -234,4 +234,19 @@ describe('RouteWorkspace', () => {
     assert.equal(persisted?.startZone.radiusMeters, 48);
     assert.equal(persisted?.finishZone.radiusMeters, 14);
   });
+
+  it('loads Home without waiting for a hanging path-variant recompute', async () => {
+    const { workspace, attemptRuntime } = createMemoryWorkspace();
+    attemptRuntime.recomputeAllPathVariants = async () => {
+      await new Promise(() => {});
+    };
+    const snapshot = await Promise.race([
+      workspace.bootstrap(),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('bootstrap waited on recomputeAllPathVariants')), 200);
+      }),
+    ]);
+    assert.equal(snapshot.activeTransportationMode, 'scooter');
+    assert.equal(snapshot.canStartAttempt, true);
+  });
 });

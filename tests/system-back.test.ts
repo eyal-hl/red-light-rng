@@ -136,6 +136,8 @@ describe('system back policy', () => {
     assert.match(appRoot, /setScreen\(\{ kind: 'init-error' \}\)/);
     assert.match(appRoot, /TRY AGAIN/);
     assert.match(appRoot, /retryBootstrap/);
+    assert.match(appRoot, /startAppStartup/);
+    assert.match(appRoot, /APP_STARTUP_WATCHDOG_MS/);
     assert.match(appRoot, /onBack=\{leaveToHome\}/);
     assert.match(appRoot, /onBack=\{onBackFromHistory\}/);
     assert.match(appRoot, /cancelRecording: \(\) => \{\s*void onCancel\(\);/s);
