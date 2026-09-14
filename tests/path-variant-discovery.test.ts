@@ -317,9 +317,27 @@ describe('path variant discovery', () => {
       [archived],
     );
     assert.equal(again.newRoutes.length, 0);
-    assert.ok(again.assignments.every((item) => item.routeId === archived.id));
+    assert.ok(again.assignments.every((item) => item.routeId == null));
     const visible = summarizeJourneyPathVariants(HOME, WORK, 'scooter', traces, [archived]);
     assert.equal(visible.length, 0);
+  });
+
+  it('assigns a unique active replacement after the same-path discovered variant is archived', () => {
+    const traces = [
+      completedTrace('a', pathSamples('s-a', 0)),
+      completedTrace('b', pathSamples('s-b', 6)),
+      completedTrace('c', pathSamples('s-c', 10)),
+    ];
+    const created = recompute(traces, []);
+    const discovered = created.newRoutes[0]!;
+    const explicit = mainRoute();
+    const bothActive = recompute(traces, [discovered, explicit]);
+    assert.equal(bothActive.newRoutes.length, 0);
+    assert.ok(bothActive.assignments.every((item) => item.routeId == null));
+
+    const afterArchive = recompute(traces, [{ ...discovered, status: 'archived' }, explicit]);
+    assert.equal(afterArchive.newRoutes.length, 0);
+    assert.ok(afterArchive.assignments.every((item) => item.routeId === explicit.id));
   });
 
   it('keeps archived geometry and does not delete or move attempts', () => {

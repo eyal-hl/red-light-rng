@@ -139,5 +139,19 @@ describe('journey path-variant selection', () => {
       findCompatiblePathVariant([main, parallel], HOME, WORK, 'scooter', overlap, window),
       null,
     );
+
+    const archivedMain = homeWorkRoute({ id: 'route-archived-main', status: 'archived' });
+    const replacement = homeWorkRoute({ id: 'route-main-road', name: 'Main road', createdAtMs: 300 });
+    assert.equal(
+      findCompatiblePathVariant(
+        [archivedMain, replacement],
+        HOME,
+        WORK,
+        'scooter',
+        samples,
+        window,
+      )?.id,
+      replacement.id,
+    );
   });
 });

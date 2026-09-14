@@ -117,9 +117,10 @@ export function listCompatiblePathVariants(
   transportationMode: TransportationMode,
   samples: LocationSample[],
   window: { startedAtMs: number; finishedAtMs: number },
+  options?: { includeArchived?: boolean },
 ): Route[] {
-  return pathVariantsForJourney(routes, origin, destination, transportationMode).filter((route) =>
-    isCompatiblePathVariant(route, samples, window),
+  return pathVariantsForJourney(routes, origin, destination, transportationMode, options).filter(
+    (route) => isCompatiblePathVariant(route, samples, window),
   );
 }
 
@@ -130,6 +131,7 @@ export function findCompatiblePathVariant(
   transportationMode: TransportationMode,
   samples: LocationSample[],
   window: { startedAtMs: number; finishedAtMs: number },
+  options?: { includeArchived?: boolean },
 ): Route | null {
   const matches = listCompatiblePathVariants(
     routes,
@@ -138,6 +140,7 @@ export function findCompatiblePathVariant(
     transportationMode,
     samples,
     window,
+    { includeArchived: false, ...options },
   );
   return matches.length === 1 ? matches[0] ?? null : null;
 }

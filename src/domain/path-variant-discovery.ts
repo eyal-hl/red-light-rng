@@ -369,6 +369,7 @@ function matchesExistingVariant(
     trace.attempt.transportationMode,
     trace.samples,
     trace.window,
+    { includeArchived: true },
   );
 }
 
@@ -546,6 +547,7 @@ export function planPathVariantRecompute(input: {
       pool.transportationMode,
       trace.samples,
       window,
+      { includeArchived: false },
     );
     return {
       attemptId: trace.attempt.id,
