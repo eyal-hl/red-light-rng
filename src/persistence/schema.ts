@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export type AttemptRow = {
   id: string;
@@ -36,6 +36,9 @@ export type AttemptRow = {
   armed_at_ms: number;
   started_at_ms: number | null;
   finished_at_ms: number | null;
+  started_utc_offset_minutes: number | null;
+  started_timezone_id: string | null;
+  started_local_time_source: string | null;
   result_acknowledged: number;
 };
 

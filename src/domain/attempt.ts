@@ -4,6 +4,20 @@ export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 
 
 export type AttemptValidity = 'pending' | 'valid' | 'unranked';
 
+export type AttemptLocalTimeSource = 'captured' | 'reconstructed';
+
+export type AttemptLocalStartMetadata = {
+  startedUtcOffsetMinutes: number | null;
+  startedTimezoneId: string | null;
+  startedLocalTimeSource: AttemptLocalTimeSource | null;
+};
+
+export const EMPTY_ATTEMPT_LOCAL_START: AttemptLocalStartMetadata = {
+  startedUtcOffsetMinutes: null,
+  startedTimezoneId: null,
+  startedLocalTimeSource: null,
+};
+
 export type AttemptCheckpointCrossing = {
   id: string;
   attemptId: string;
@@ -25,6 +39,9 @@ export type Attempt = {
   armedAtMs: number;
   startedAtMs: number | null;
   finishedAtMs: number | null;
+  startedUtcOffsetMinutes: number | null;
+  startedTimezoneId: string | null;
+  startedLocalTimeSource: AttemptLocalTimeSource | null;
   resultAcknowledged: boolean;
   crossings: AttemptCheckpointCrossing[];
 };
@@ -62,4 +79,11 @@ export function incompleteAttemptLabel(attempt: Pick<Attempt, 'lifecycle' | 'sta
     return null;
   }
   return attempt.startedAtMs == null ? 'DID NOT START' : 'DID NOT FINISH';
+}
+
+export function parseAttemptLocalTimeSource(value: string | null | undefined): AttemptLocalTimeSource | null {
+  if (value === 'captured' || value === 'reconstructed') {
+    return value;
+  }
+  return null;
 }

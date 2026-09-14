@@ -8,7 +8,7 @@ import {
   timingCourseFromRoute,
   type AttemptTrace,
 } from '../src/domain/attempt-analysis';
-import type { Attempt } from '../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, type Attempt } from '../src/domain/attempt';
 import type { TimingCourse } from '../src/domain/attempt-timing';
 import { haversineMeters, pathDistanceMeters } from '../src/domain/geo';
 import type { LocationSample } from '../src/domain/location-sample';
@@ -57,6 +57,7 @@ function makeAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | 'session
     armedAtMs: 1_000,
     startedAtMs: 5_000,
     finishedAtMs: 200_000,
+    ...EMPTY_ATTEMPT_LOCAL_START,
     resultAcknowledged: true,
     crossings: [],
     ...overrides,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { applyMigrations } from '../src/persistence/migrations';
+import { utcOffsetMinutesAt } from '../src/domain/attempt-local-time';
 import { RouteWorkspace } from '../src/product/route-workspace';
 import { handleSystemBack, type SystemBackActions } from '../src/ui/system-back';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
@@ -66,6 +67,8 @@ describe('attempt lifecycle', { concurrency: 1 }, () => {
     }
     assert.equal(armed.attempt.lifecycle, 'armed');
     assert.equal(armed.attempt.startedAtMs, null);
+    assert.equal(armed.attempt.startedUtcOffsetMinutes, null);
+    assert.equal(armed.attempt.startedLocalTimeSource, null);
     assert.equal((await sessions.getActiveSession())?.purpose, 'attempt');
     assert.match(platform.lastNotificationBody ?? '', /Timing an armed run/);
     const home = await workspace.loadHome();
@@ -205,6 +208,13 @@ describe('attempt lifecycle', { concurrency: 1 }, () => {
     assert.equal(loaded?.lifecycle, 'completed');
     assert.equal(loaded?.startedAtMs, completed?.startedAtMs);
     assert.equal(loaded?.finishedAtMs, completed?.finishedAtMs);
+    assert.equal(loaded?.startedLocalTimeSource, 'captured');
+    assert.equal(completed?.startedLocalTimeSource, 'captured');
+    assert.equal(loaded?.startedUtcOffsetMinutes, completed?.startedUtcOffsetMinutes);
+    assert.equal(
+      loaded?.startedUtcOffsetMinutes,
+      loaded.startedAtMs == null ? null : utcOffsetMinutesAt(loaded.startedAtMs),
+    );
     assert.equal(loaded?.originPlaceId, seeded.origin.id);
     assert.equal(loaded?.destinationPlaceId, seeded.destination.id);
     assert.equal(await reloaded.sessions.countSamples('attempt-session'), await sessions.countSamples('attempt-session'));

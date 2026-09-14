@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isJourneyCompetitive, officialTimeMs, type Attempt } from '../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, isJourneyCompetitive, officialTimeMs, type Attempt } from '../src/domain/attempt';
 import {
   PATH_ANALYTICS_UNAVAILABLE_MESSAGE,
   analyzeJourneyFocus,
@@ -35,6 +35,7 @@ function completedAttempt(
     armedAtMs: 1_000,
     startedAtMs: 2_000,
     finishedAtMs: 12_000,
+    ...EMPTY_ATTEMPT_LOCAL_START,
     resultAcknowledged: true,
     crossings: [],
     ...attemptIdentity(),

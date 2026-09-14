@@ -6,6 +6,7 @@ import {
   DEFAULT_ACTIVE_TRANSPORTATION_MODE,
   parseTransportationMode,
 } from './settings-store';
+import { reconstructAttemptLocalStart } from '../domain/attempt-local-time';
 import { LOCATION_SPIKE_SCHEMA, CURRENT_SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 
@@ -372,6 +373,33 @@ export const MIGRATIONS: Migration[] = [
       await sql.exec(
         `ALTER TABLE route ADD COLUMN classification_version INTEGER NOT NULL DEFAULT 1`,
       );
+    },
+  },
+  {
+    version: 7,
+    async up(sql) {
+      await sql.exec(`ALTER TABLE attempt ADD COLUMN started_utc_offset_minutes INTEGER`);
+      await sql.exec(`ALTER TABLE attempt ADD COLUMN started_timezone_id TEXT`);
+      await sql.exec(`ALTER TABLE attempt ADD COLUMN started_local_time_source TEXT`);
+      const rows = await sql.getAll<{ id: string; started_at_ms: number }>(
+        `SELECT id, started_at_ms FROM attempt WHERE started_at_ms IS NOT NULL`,
+      );
+      for (const row of rows) {
+        const reconstructed = reconstructAttemptLocalStart(row.started_at_ms);
+        await sql.run(
+          `UPDATE attempt
+           SET started_utc_offset_minutes = ?,
+               started_timezone_id = ?,
+               started_local_time_source = ?
+           WHERE id = ?`,
+          [
+            reconstructed.startedUtcOffsetMinutes,
+            reconstructed.startedTimezoneId,
+            reconstructed.startedLocalTimeSource,
+            row.id,
+          ],
+        );
+      }
     },
   },
 ];

@@ -1,4 +1,4 @@
-import type { Attempt } from '../../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, type Attempt, type AttemptLocalStartMetadata } from '../../src/domain/attempt';
 
 export function attemptIdentity(
   overrides: Partial<Pick<Attempt, 'originPlaceId' | 'destinationPlaceId' | 'transportationMode' | 'routeId'>> = {},
@@ -11,3 +11,16 @@ export function attemptIdentity(
     ...overrides,
   };
 }
+
+export function capturedLocalStart(
+  utcOffsetMinutes: number,
+  timezoneId = 'UTC',
+): AttemptLocalStartMetadata {
+  return {
+    startedUtcOffsetMinutes: utcOffsetMinutes,
+    startedTimezoneId: timezoneId,
+    startedLocalTimeSource: 'captured',
+  };
+}
+
+export { EMPTY_ATTEMPT_LOCAL_START };

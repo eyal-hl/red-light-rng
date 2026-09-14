@@ -1,8 +1,10 @@
 import {
+  EMPTY_ATTEMPT_LOCAL_START,
   isOpenAttempt,
   type Attempt,
   type AttemptCheckpointCrossing,
 } from '../domain/attempt';
+import { attachAttemptLocalStart } from '../domain/attempt-local-time';
 import { checkpointCrossingsForWindow, replayAttemptTrace } from '../domain/attempt-timing';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
@@ -108,6 +110,7 @@ export class AttemptRuntime {
       armedAtMs: this.now(),
       startedAtMs: null,
       finishedAtMs: null,
+      ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: false,
       crossings: [],
     };
@@ -361,7 +364,7 @@ export class AttemptRuntime {
       armedAtMs: attempt.armedAtMs,
       nowMs: this.now(),
     });
-    const next: Attempt = {
+    const next: Attempt = attachAttemptLocalStart(attempt, {
       ...attempt,
       lifecycle: engine.lifecycle,
       validity: engine.validity,
@@ -369,7 +372,7 @@ export class AttemptRuntime {
       destinationPlaceId: engine.destinationPlaceId,
       startedAtMs: engine.startedAtMs,
       finishedAtMs: engine.finishedAtMs,
-    };
+    });
     if (next.lifecycle === 'completed' && next.startedAtMs != null && next.finishedAtMs != null) {
       return this.associateVariant(next, samples);
     }
