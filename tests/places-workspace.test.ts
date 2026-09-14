@@ -44,8 +44,8 @@ describe('places workspace', () => {
     }
     const deleted = await workspace.removePlace(unused.place.id);
     assert.equal(deleted.ok, true);
-    if (deleted.ok) {
-      assert.equal(deleted.action, 'deleted');
+    if (deleted.ok && deleted.action === 'deleted') {
+      assert.equal(deleted.deletedAttemptCount, 0);
     }
     assert.equal(await places.getPlace(unused.place.id), null);
 
@@ -90,7 +90,7 @@ describe('places workspace', () => {
     );
     const completed = await workspace.processActiveAttempt();
     assert.equal(completed?.lifecycle, 'completed');
-    const archived = await workspace.removePlace(home.place.id);
+    const archived = await workspace.archivePlace(home.place.id);
     assert.equal(archived.ok, true);
     if (archived.ok) {
       assert.equal(archived.action, 'archived');

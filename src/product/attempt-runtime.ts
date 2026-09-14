@@ -240,6 +240,14 @@ export class AttemptRuntime {
     return this.attempts.listAttemptsForJourney(originPlaceId, destinationPlaceId, transportationMode);
   }
 
+  async countAttemptsReferencingPlace(placeId: string): Promise<number> {
+    return this.attempts.countAttemptsReferencingPlace(placeId);
+  }
+
+  async deleteAttempt(attemptId: string): Promise<void> {
+    await this.attempts.deleteAttempt(attemptId);
+  }
+
   async setAttemptTransportationMode(
     attemptId: string,
     transportationMode: TransportationMode,

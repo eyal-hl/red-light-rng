@@ -147,6 +147,10 @@ export class MemoryLocationSampleStore implements LocationSampleStore {
     return this.sessions.get(sessionId)?.samples.length ?? 0;
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+  }
+
   peekSession(sessionId: string): TrackingSessionRecord | undefined {
     const session = this.sessions.get(sessionId);
     return session ? cloneSession(session) : undefined;

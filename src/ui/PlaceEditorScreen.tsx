@@ -22,8 +22,8 @@ type PlaceEditorScreenProps = {
   onUseCurrentLocation: () => void;
   onSave: () => void;
   onCancel: () => void;
-  onArchiveOrDelete: () => void;
-  archiveOrDeleteLabel: string;
+  onArchive: () => void;
+  onDeletePermanently: () => void;
 };
 
 export function PlaceEditorScreen({
@@ -34,8 +34,8 @@ export function PlaceEditorScreen({
   onUseCurrentLocation,
   onSave,
   onCancel,
-  onArchiveOrDelete,
-  archiveOrDeleteLabel,
+  onArchive,
+  onDeletePermanently,
 }: PlaceEditorScreenProps) {
   const zone = { center: draft.center, radiusMeters: draft.radiusMeters };
 
@@ -103,14 +103,32 @@ export function PlaceEditorScreen({
             <Text style={styles.buttonText}>SAVE PLACE</Text>
           </Pressable>
           {draft.id ? (
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={onArchiveOrDelete}
-              style={[styles.button, styles.dangerButton, busy ? styles.disabledButton : null]}
-            >
-              <Text style={styles.buttonText}>{archiveOrDeleteLabel}</Text>
-            </Pressable>
+            <View>
+              {draft.status === 'active' ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={onArchive}
+                  style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+                >
+                  <Text style={styles.buttonText}>ARCHIVE</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${draft.name || 'place'} permanently`}
+                disabled={busy}
+                onPress={onDeletePermanently}
+                style={[
+                  styles.button,
+                  styles.dangerButton,
+                  draft.status === 'active' ? styles.placeDeleteButton : null,
+                  busy ? styles.disabledButton : null,
+                ]}
+              >
+                <Text style={styles.buttonText}>DELETE PERMANENTLY</Text>
+              </Pressable>
+            </View>
           ) : null}
           <Pressable
             accessibilityRole="button"

@@ -32,4 +32,5 @@ export interface LocationSampleStore {
   appendSamples(samples: LocationSample[]): Promise<void>;
   listSamples(sessionId: string): Promise<LocationSample[]>;
   countSamples(sessionId: string): Promise<number>;
+  deleteSession(sessionId: string): Promise<void>;
 }

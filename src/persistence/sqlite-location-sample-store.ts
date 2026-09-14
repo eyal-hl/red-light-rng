@@ -172,4 +172,12 @@ export class SqliteLocationSampleStore implements LocationSampleStore {
     );
     return row?.count ?? 0;
   }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const sql = await this.getSql();
+    await sql.withTransaction(async () => {
+      await sql.run('DELETE FROM location_sample WHERE session_id = ?', [sessionId]);
+      await sql.run('DELETE FROM tracking_session WHERE id = ?', [sessionId]);
+    });
+  }
 }

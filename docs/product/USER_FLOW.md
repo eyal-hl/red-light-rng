@@ -4,7 +4,7 @@ This document describes the intended product journey and run lifecycle. It is de
 
 ## Saved places
 
-The user configures named places once from a Places surface: create from current location or the map, name them, adjust center and radius, rename, and archive/remove.
+The user configures named places once from a Places surface: create from current location or the map, name them, adjust center and radius, rename, archive, and permanently delete (including associated run history).
 
 Creating or editing places is not part of START.
 

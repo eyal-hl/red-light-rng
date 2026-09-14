@@ -169,14 +169,25 @@ export class SqliteAttemptStore implements AttemptStore {
   }
 
   async isPlaceReferenced(placeId: string): Promise<boolean> {
+    return (await this.countAttemptsReferencingPlace(placeId)) > 0;
+  }
+
+  async countAttemptsReferencingPlace(placeId: string): Promise<number> {
     const sql = await this.getSql();
-    const row = await sql.getFirst<{ id: string }>(
-      `SELECT id FROM attempt
-       WHERE origin_place_id = ? OR destination_place_id = ?
-       LIMIT 1`,
+    const row = await sql.getFirst<{ count: number }>(
+      `SELECT COUNT(*) as count FROM attempt
+       WHERE origin_place_id = ? OR destination_place_id = ?`,
       [placeId, placeId],
     );
-    return row != null;
+    return row?.count ?? 0;
+  }
+
+  async deleteAttempt(attemptId: string): Promise<void> {
+    const sql = await this.getSql();
+    await sql.withTransaction(async () => {
+      await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attemptId]);
+      await sql.run('DELETE FROM attempt WHERE id = ?', [attemptId]);
+    });
   }
 
   async acknowledgeResult(attemptId: string): Promise<void> {

@@ -14,7 +14,7 @@ Goal: prove that repeated-route speedrunning is enjoyable and that the basic tim
 
 ### Places
 
-- Create, name, recenter, resize, archive, and delete unused saved places.
+- Create, name, recenter, resize, archive, and permanently delete saved places, including places still referenced by historical attempts.
 - Seed places from existing route endpoints on migration.
 
 ### Journeys

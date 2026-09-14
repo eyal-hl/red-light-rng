@@ -17,7 +17,7 @@ import {
 } from '../domain/journey-departure';
 import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
-import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
+import { DEFAULT_PLACE_RADIUS_METERS, placePermanentDeletionMessage, type Place } from '../domain/place';
 import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
@@ -843,14 +843,14 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [placeDraft, screen, workspace]);
 
-  const onArchiveOrDeletePlace = useCallback(async () => {
+  const onArchivePlace = useCallback(async () => {
     if (screen.kind !== 'place-editor' || !placeDraft?.id) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const result = await workspace.removePlace(placeDraft.id);
+      const result = await workspace.archivePlace(placeDraft.id);
       if (!result.ok) {
         setError(result.reason);
         return;
@@ -858,12 +858,64 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPlaceDraft(null);
       setPlaces(await workspace.listPlaces());
       setScreen({ kind: 'places' });
+      await refreshHome();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not remove place.');
+      setError(caught instanceof Error ? caught.message : 'Could not archive place.');
     } finally {
       setBusy(false);
     }
-  }, [placeDraft, screen, workspace]);
+  }, [placeDraft, refreshHome, screen, workspace]);
+
+  const performPermanentPlaceDeletion = useCallback(
+    async (placeId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.deletePlacePermanently(placeId);
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        setPlaceDraft(null);
+        setPlaces(await workspace.listPlaces());
+        setScreen({ kind: 'places' });
+        await refreshHome();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not delete place.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshHome, workspace],
+  );
+
+  const confirmPermanentPlaceDeletion = useCallback(
+    (placeId: string) => {
+      void (async () => {
+        const place = await workspace.getPlace(placeId);
+        if (!place) {
+          setError('This place is no longer available.');
+          return;
+        }
+        const attemptCount = await workspace.countAttemptsReferencingPlace(placeId);
+        Alert.alert(
+          'Delete this place permanently?',
+          placePermanentDeletionMessage(place.name, attemptCount),
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete permanently',
+              style: 'destructive',
+              onPress: () => {
+                void performPermanentPlaceDeletion(placeId);
+              },
+            },
+          ],
+        );
+      })();
+    },
+    [performPermanentPlaceDeletion, workspace],
+  );
 
   const onUseCurrentLocation = useCallback(async () => {
     if (!placeDraft) {
@@ -941,7 +993,6 @@ export function AppRoot({ workspace }: AppRootProps) {
   ]);
 
   const resultTitle = journeyFocus?.summary.title ?? originName ?? 'Attempt';
-  const archiveOrDeleteLabel = placeDraft?.id ? 'ARCHIVE OR DELETE' : 'DELETE';
 
   return (
     <View style={styles.screen}>
@@ -1007,6 +1058,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           onOpenPlace={(placeId) => {
             void onOpenPlaceEditor(placeId);
           }}
+          onDeletePermanently={(placeId) => {
+            confirmPermanentPlaceDeletion(placeId);
+          }}
         />
       ) : null}
       {screen.kind === 'place-editor' && placeDraft ? (
@@ -1022,23 +1076,26 @@ export function AppRoot({ workspace }: AppRootProps) {
             void onSavePlace();
           }}
           onCancel={leavePlaceEditor}
-          onArchiveOrDelete={() => {
+          onArchive={() => {
             Alert.alert(
-              'Remove place?',
-              'If this place is used by historical attempts it will be archived instead of deleted.',
+              'Archive this place?',
+              'Archived places stop being used for start and finish. Their run history stays until you delete the place permanently.',
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
-                  text: 'Remove',
-                  style: 'destructive',
+                  text: 'Archive',
                   onPress: () => {
-                    void onArchiveOrDeletePlace();
+                    void onArchivePlace();
                   },
                 },
               ],
             );
           }}
-          archiveOrDeleteLabel={archiveOrDeleteLabel}
+          onDeletePermanently={() => {
+            if (placeDraft.id) {
+              confirmPermanentPlaceDeletion(placeDraft.id);
+            }
+          }}
         />
       ) : null}
       {screen.kind === 'settings' ? (

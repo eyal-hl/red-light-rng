@@ -12,6 +12,7 @@ type PlacesScreenProps = {
   onBack: () => void;
   onCreate: () => void;
   onOpenPlace: (placeId: string) => void;
+  onDeletePermanently: (placeId: string) => void;
 };
 
 export function PlacesScreen({
@@ -21,6 +22,7 @@ export function PlacesScreen({
   onBack,
   onCreate,
   onOpenPlace,
+  onDeletePermanently,
 }: PlacesScreenProps) {
   const { active, archived } = partitionPlacesByStatus(places);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -46,6 +48,7 @@ export function PlacesScreen({
                 place={place}
                 busy={busy}
                 onOpenPlace={onOpenPlace}
+                onDeletePermanently={onDeletePermanently}
               />
             ))}
             {archived.length > 0 ? (
@@ -69,6 +72,7 @@ export function PlacesScreen({
                         place={place}
                         busy={busy}
                         onOpenPlace={onOpenPlace}
+                        onDeletePermanently={onDeletePermanently}
                       />
                     ))
                   : null}
@@ -96,23 +100,35 @@ function PlaceListCard({
   place,
   busy,
   onOpenPlace,
+  onDeletePermanently,
 }: {
   place: Place;
   busy: boolean;
   onOpenPlace: (placeId: string) => void;
+  onDeletePermanently: (placeId: string) => void;
 }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={busy}
-      onPress={() => onOpenPlace(place.id)}
-      style={styles.card}
-    >
-      <Text style={styles.cardTitle}>{place.name}</Text>
-      <Text style={styles.cardMeta}>
-        {formatDistance(place.radiusMeters)} radius
-        {place.status === 'archived' ? ' · archived' : ''}
-      </Text>
-    </Pressable>
+    <View style={styles.card}>
+      <Pressable
+        accessibilityRole="button"
+        disabled={busy}
+        onPress={() => onOpenPlace(place.id)}
+      >
+        <Text style={styles.cardTitle}>{place.name}</Text>
+        <Text style={styles.cardMeta}>
+          {formatDistance(place.radiusMeters)} radius
+          {place.status === 'archived' ? ' · archived' : ''}
+        </Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Delete ${place.name} permanently`}
+        disabled={busy}
+        onPress={() => onDeletePermanently(place.id)}
+        style={styles.cardDangerAction}
+      >
+        <Text style={styles.cardDangerText}>DELETE PERMANENTLY</Text>
+      </Pressable>
+    </View>
   );
 }
