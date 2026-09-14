@@ -2,12 +2,41 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { pathDistanceMeters } from '../src/domain/geo';
+import { utcOffsetMinutesAt } from '../src/domain/attempt-local-time';
 import { applyMigrations, MIGRATIONS } from '../src/persistence/migrations';
 import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../src/persistence/schema';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
 
-describe('SQLite migrations', () => {
+function withTimeZone<T>(tz: string, run: () => T): T {
+  const previous = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = previous;
+    }
+  }
+}
+
+async function withTimeZoneAsync<T>(tz: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = previous;
+    }
+  }
+}
+
+describe('SQLite migrations', { concurrency: 1 }, () => {
   it('migrates spike schema rows, including an active legacy session, to non-product legacy data', async () => {
     const sql = createMemorySqlExecutor();
     await sql.exec('PRAGMA foreign_keys = ON;');
@@ -534,5 +563,67 @@ describe('SQLite migrations', () => {
     assert.equal(row?.kind, 'explicit');
     assert.equal(row?.cluster_signature, null);
     assert.equal(row?.classification_version, 1);
+  });
+
+  it('persists reconstructed start-time offsets for historical attempts and does not reclassify later', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    const nowMs = 1_000;
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 6)) {
+      await migration.up(sql, nowMs);
+      await sql.exec(`PRAGMA user_version = ${migration.version}`);
+    }
+    const before = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(before?.user_version, 6);
+
+    const startedAtMs = Date.parse('2026-09-14T05:05:00.000Z');
+    await sql.run(
+      `INSERT INTO tracking_session (
+         id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
+         background_permission_confirmed
+       ) VALUES (?, ?, ?, 0, 'attempt', 'finished', 'saved', 0)`,
+      ['att-tod', 3000, 4000],
+    );
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
+       ) VALUES (?, NULL, NULL, NULL, 'scooter', ?, 'completed', 'valid', ?, ?, ?, 1)`,
+      ['attempt-tod', 'att-tod', startedAtMs - 60_000, startedAtMs, startedAtMs + 12 * 60_000],
+    );
+
+    const expectedOffset = withTimeZone('Asia/Jerusalem', () => utcOffsetMinutesAt(startedAtMs));
+    await withTimeZoneAsync('Asia/Jerusalem', async () => {
+      await applyMigrations(sql, 9_000);
+    });
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const migrated = await sql.getFirst<{
+      started_utc_offset_minutes: number | null;
+      started_timezone_id: string | null;
+      started_local_time_source: string | null;
+      started_at_ms: number;
+    }>('SELECT started_utc_offset_minutes, started_timezone_id, started_local_time_source, started_at_ms FROM attempt WHERE id = ?', [
+      'attempt-tod',
+    ]);
+    assert.equal(migrated?.started_at_ms, startedAtMs);
+    assert.equal(migrated?.started_utc_offset_minutes, expectedOffset);
+    assert.equal(migrated?.started_local_time_source, 'reconstructed');
+    assert.equal(migrated?.started_timezone_id, 'Asia/Jerusalem');
+
+    await withTimeZoneAsync('America/New_York', async () => {
+      await applyMigrations(sql, 10_000);
+    });
+    const later = await sql.getFirst<{
+      started_utc_offset_minutes: number | null;
+      started_local_time_source: string | null;
+    }>('SELECT started_utc_offset_minutes, started_local_time_source FROM attempt WHERE id = ?', [
+      'attempt-tod',
+    ]);
+    assert.equal(later?.started_utc_offset_minutes, expectedOffset);
+    assert.equal(later?.started_local_time_source, 'reconstructed');
   });
 });

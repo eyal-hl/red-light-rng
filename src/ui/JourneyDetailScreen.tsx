@@ -1,13 +1,20 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { formatElapsed } from '../domain/duration';
+import type { JourneyDepartureGroup, JourneyDepartureGrouping } from '../domain/journey-departure';
 import type { JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
 import type { JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { placeZone, type Place } from '../domain/place';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
-import { durationOrDash, JourneyStatRow, JourneyStatisticsDashboard } from './JourneyStatisticsDashboard';
+import {
+  durationOrDash,
+  JourneyStatRow,
+  JourneyStatisticsDashboard,
+  type JourneyStatsView,
+} from './JourneyStatisticsDashboard';
 import { styles } from './styles';
 
 type JourneyDetailScreenProps = {
@@ -15,12 +22,14 @@ type JourneyDetailScreenProps = {
   destination: Place;
   summary: JourneyPoolSummary;
   statistics: JourneyPoolStatistics;
+  grouping: JourneyDepartureGrouping;
   history: JourneyHistoryRow[];
   pathVariants: JourneyPathVariantSummary[];
   busy: boolean;
   error: string | null;
   onBack: () => void;
   onHistory: () => void;
+  onOpenGroupAttempts: (group: JourneyDepartureGroup) => void;
   onOpenPathVariant: (routeId: string) => void;
 };
 
@@ -29,14 +38,17 @@ export function JourneyDetailScreen({
   destination,
   summary,
   statistics,
+  grouping,
   history,
   pathVariants,
   busy,
   error,
   onBack,
   onHistory,
+  onOpenGroupAttempts,
   onOpenPathVariant,
 }: JourneyDetailScreenProps) {
+  const [statsView, setStatsView] = useState<JourneyStatsView>('overall');
   const mapPath = pathVariants.length === 1 ? (pathVariants[0]?.route.referencePath ?? []) : [];
 
   return (
@@ -61,7 +73,17 @@ export function JourneyDetailScreen({
         <JourneyStatRow label="PB" value={durationOrDash(statistics.pbTimeMs ?? summary.pbTimeMs)} />
         <JourneyStatRow label="Last" value={durationOrDash(statistics.latestTimeMs ?? summary.lastTimeMs)} />
         <JourneyStatRow label="Attempts" value={String(statistics.validAttemptCount)} />
-        <JourneyStatisticsDashboard statistics={statistics} />
+        <JourneyStatisticsDashboard
+          statistics={statistics}
+          grouping={grouping}
+          view={statsView}
+          onChangeView={setStatsView}
+          onSelectGroup={(group) => {
+            if (group) {
+              onOpenGroupAttempts(group);
+            }
+          }}
+        />
         <Text style={styles.mutedText}>
           Any path between these places counts. Journey PB is the headline. Path variants are optional
           secondary analytics.

@@ -1,4 +1,5 @@
 import {
+  parseAttemptLocalTimeSource,
   type Attempt,
   type AttemptCheckpointCrossing,
   type AttemptLifecycle,
@@ -34,6 +35,9 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
     armedAtMs: row.armed_at_ms,
     startedAtMs: row.started_at_ms,
     finishedAtMs: row.finished_at_ms,
+    startedUtcOffsetMinutes: row.started_utc_offset_minutes,
+    startedTimezoneId: row.started_timezone_id,
+    startedLocalTimeSource: parseAttemptLocalTimeSource(row.started_local_time_source),
     resultAcknowledged: row.result_acknowledged === 1,
     crossings,
   };
@@ -184,8 +188,9 @@ export class SqliteAttemptStore implements AttemptStore {
     await sql.run(
       `INSERT INTO attempt (
          id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
-         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
+         started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          route_id = excluded.route_id,
          origin_place_id = excluded.origin_place_id,
@@ -195,6 +200,9 @@ export class SqliteAttemptStore implements AttemptStore {
          validity = excluded.validity,
          started_at_ms = excluded.started_at_ms,
          finished_at_ms = excluded.finished_at_ms,
+         started_utc_offset_minutes = excluded.started_utc_offset_minutes,
+         started_timezone_id = excluded.started_timezone_id,
+         started_local_time_source = excluded.started_local_time_source,
          result_acknowledged = excluded.result_acknowledged`,
       [
         attempt.id,
@@ -208,6 +216,9 @@ export class SqliteAttemptStore implements AttemptStore {
         attempt.armedAtMs,
         attempt.startedAtMs,
         attempt.finishedAtMs,
+        attempt.startedUtcOffsetMinutes,
+        attempt.startedTimezoneId,
+        attempt.startedLocalTimeSource,
         attempt.resultAcknowledged ? 1 : 0,
       ],
     );

@@ -39,6 +39,7 @@ import {
   type JourneyHistoryRow,
   type JourneyPoolSummary,
 } from '../domain/journey-analysis';
+import { computeJourneyPoolDepartureGrouping, type JourneyDepartureGrouping } from '../domain/journey-departure';
 import { computeJourneyPoolStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPoolId } from '../domain/journey';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
@@ -525,6 +526,7 @@ export class RouteWorkspace {
     destination: Place;
     summary: JourneyPoolSummary;
     statistics: JourneyPoolStatistics;
+    departureGrouping: JourneyDepartureGrouping;
     history: JourneyHistoryRow[];
     routes: Route[];
     pathVariants: JourneyPathVariantSummary[];
@@ -536,11 +538,13 @@ export class RouteWorkspace {
     }
     const traces = await this.tracesForAttempts(await this.attempts.listAttempts());
     const routes = await this.routes.listRoutes();
+    const asOfMs = this.now();
     return {
       origin,
       destination,
       summary: summarizeJourneyPool(pool, origin, destination, traces),
-      statistics: computeJourneyPoolStatistics(pool, traces, this.now()),
+      statistics: computeJourneyPoolStatistics(pool, traces, asOfMs),
+      departureGrouping: computeJourneyPoolDepartureGrouping(pool, traces, asOfMs),
       history: journeyHistoryRows(pool, traces),
       routes,
       pathVariants: summarizeJourneyPathVariants(

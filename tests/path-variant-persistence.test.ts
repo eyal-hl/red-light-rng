@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { EMPTY_ATTEMPT_LOCAL_START } from '../src/domain/attempt';
 import { makePlace } from './helpers/places';
 import { northPath } from './helpers/routes';
 import { offsetLatLng, traceAlongPath } from './helpers/samples';
@@ -75,6 +76,7 @@ describe('path variant persistence', () => {
         armedAtMs: samples[0]!.recordedAtMs - 5_000,
         startedAtMs: samples[0]!.recordedAtMs,
         finishedAtMs: samples[samples.length - 1]!.recordedAtMs,
+        ...EMPTY_ATTEMPT_LOCAL_START,
         resultAcknowledged: true,
         crossings: [],
       });
@@ -155,6 +157,7 @@ describe('path variant persistence', () => {
       armedAtMs: attemptSamples[0]!.recordedAtMs - 5_000,
       startedAtMs: attemptSamples[0]!.recordedAtMs,
       finishedAtMs: attemptSamples[attemptSamples.length - 1]!.recordedAtMs,
+      ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: true,
       crossings: [],
     });
@@ -239,6 +242,7 @@ describe('path variant persistence', () => {
         armedAtMs: samples[0]!.recordedAtMs - 5_000,
         startedAtMs: samples[0]!.recordedAtMs,
         finishedAtMs: samples[samples.length - 1]!.recordedAtMs,
+        ...EMPTY_ATTEMPT_LOCAL_START,
         resultAcknowledged: true,
         crossings: [],
       });

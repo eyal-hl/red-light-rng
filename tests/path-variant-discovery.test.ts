@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { officialTimeMs, type Attempt } from '../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, officialTimeMs, type Attempt } from '../src/domain/attempt';
 import { summarizeJourneyPool } from '../src/domain/journey-analysis';
 import { isCompatiblePathVariant } from '../src/domain/path-variant';
 import {
@@ -75,6 +75,7 @@ function completedTrace(
       armedAtMs: startedAtMs - 5_000,
       startedAtMs,
       finishedAtMs,
+      ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: true,
       crossings: [],
       ...overrides,

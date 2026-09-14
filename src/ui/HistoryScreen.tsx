@@ -1,9 +1,14 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { describeUnavailability, type HistoryRow } from '../domain/attempt-analysis';
 import { formatAttemptStamp, formatElapsed, formatOrdinal } from '../domain/duration';
+import type { JourneyDepartureGroup, JourneyDepartureGrouping } from '../domain/journey-departure';
 import type { JourneyPoolStatistics } from '../domain/journey-statistics';
-import { JourneyStatisticsDashboard } from './JourneyStatisticsDashboard';
+import {
+  JourneyStatisticsDashboard,
+  type JourneyStatsView,
+} from './JourneyStatisticsDashboard';
 import { styles } from './styles';
 
 type HistoryMode = 'chronological' | 'ranked';
@@ -11,12 +16,15 @@ type HistoryMode = 'chronological' | 'ranked';
 type HistoryScreenProps = {
   title: string;
   statistics: JourneyPoolStatistics;
+  grouping: JourneyDepartureGrouping;
   rows: HistoryRow[];
   rankedRows: HistoryRow[];
   mode: HistoryMode;
+  groupFilter: JourneyDepartureGroup | null;
   busy: boolean;
   error: string | null;
   onChangeMode: (mode: HistoryMode) => void;
+  onSelectGroup: (group: JourneyDepartureGroup | null) => void;
   onBack: () => void;
   onOpenAttempt: (attemptId: string) => void;
 };
@@ -24,16 +32,26 @@ type HistoryScreenProps = {
 export function HistoryScreen({
   title,
   statistics,
+  grouping,
   rows,
   rankedRows,
   mode,
+  groupFilter,
   busy,
   error,
   onChangeMode,
+  onSelectGroup,
   onBack,
   onOpenAttempt,
 }: HistoryScreenProps) {
-  const visible = mode === 'ranked' ? rankedRows : rows;
+  const [statsView, setStatsView] = useState<JourneyStatsView>(
+    groupFilter?.weekday != null ? 'weekday' : groupFilter?.hourBucket != null ? 'time-of-day' : 'overall',
+  );
+  const visibleBase = mode === 'ranked' ? rankedRows : rows;
+  const visible =
+    groupFilter == null
+      ? visibleBase
+      : visibleBase.filter((row) => groupFilter.attemptIds.includes(row.attemptId));
 
   return (
     <View style={styles.screen}>
@@ -43,7 +61,24 @@ export function HistoryScreen({
         </Pressable>
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.subtitle}>Attempt history</Text>
-        <JourneyStatisticsDashboard statistics={statistics} />
+        <JourneyStatisticsDashboard
+          statistics={statistics}
+          grouping={grouping}
+          view={statsView}
+          onChangeView={(next) => {
+            setStatsView(next);
+            if (next === 'overall') {
+              onSelectGroup(null);
+            }
+          }}
+          selectedGroupKey={groupFilter?.key ?? null}
+          onSelectGroup={onSelectGroup}
+        />
+        {groupFilter ? (
+          <Pressable accessibilityRole="button" onPress={() => onSelectGroup(null)}>
+            <Text style={styles.mutedText}>Showing {groupFilter.label} · Clear group</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.toggleRow}>
           <Pressable
             accessibilityRole="button"

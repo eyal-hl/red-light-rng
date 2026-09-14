@@ -285,6 +285,12 @@ export const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 16,
   },
+  statsViewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
   toggleChip: {
     paddingHorizontal: 12,
     paddingVertical: 10,

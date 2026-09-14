@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { EMPTY_ATTEMPT_LOCAL_START } from '../src/domain/attempt';
 import {
   addCheckpointFromPending,
   createCourseEditorDraft,
@@ -61,6 +62,9 @@ describe('attempt persistence', () => {
       armedAtMs: 3000,
       startedAtMs: 3100,
       finishedAtMs: 4000,
+      startedUtcOffsetMinutes: 180,
+      startedTimezoneId: 'Asia/Jerusalem',
+      startedLocalTimeSource: 'captured',
       resultAcknowledged: false,
       crossings: [
         {
@@ -86,6 +90,9 @@ describe('attempt persistence', () => {
     assert.equal(reloaded?.crossings[0]?.checkpointId, 'cp-park');
     assert.equal(reloaded?.crossings[0]?.checkpointName, 'Park');
     assert.equal(reloaded?.crossings[0]?.checkpointProgressMeters, 40);
+    assert.equal(reloaded?.startedUtcOffsetMinutes, 180);
+    assert.equal(reloaded?.startedTimezoneId, 'Asia/Jerusalem');
+    assert.equal(reloaded?.startedLocalTimeSource, 'captured');
     const fk = await sql.getFirst<{ sql: string }>(
       `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'attempt_checkpoint_crossing'`,
     );
@@ -110,6 +117,7 @@ describe('attempt persistence', () => {
       armedAtMs: 3000,
       startedAtMs: 3100,
       finishedAtMs: 4000,
+      ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: true,
       crossings: [],
     });

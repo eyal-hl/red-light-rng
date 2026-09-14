@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { officialTimeMs, type Attempt } from '../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, officialTimeMs, type Attempt } from '../src/domain/attempt';
 import {
   deriveCurrentLayoutAttempt,
   timingCourseFromRoute,
@@ -172,6 +172,7 @@ function completedAttempt(id: string, overrides: Partial<Attempt> = {}): Attempt
     armedAtMs: 1_000,
     startedAtMs: 2_000,
     finishedAtMs: 12_000,
+    ...EMPTY_ATTEMPT_LOCAL_START,
     resultAcknowledged: true,
     crossings: [],
     ...attemptIdentity(),

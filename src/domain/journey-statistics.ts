@@ -75,14 +75,14 @@ export function isInRollingElapsedWindow(
   return finishedAtMs >= windowStartMs && finishedAtMs <= asOfMs;
 }
 
-function meanOf(values: number[]): number | null {
+export function officialTimesMeanMs(values: readonly number[]): number | null {
   if (values.length < 2) {
     return null;
   }
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function medianOf(values: number[]): number | null {
+export function officialTimesMedianMs(values: readonly number[]): number | null {
   if (values.length < 2) {
     return null;
   }
@@ -92,6 +92,14 @@ function medianOf(values: number[]): number | null {
     return sorted[middle]!;
   }
   return (sorted[middle - 1]! + sorted[middle]!) / 2;
+}
+
+export function bestCompetitiveAttempt(attempts: readonly Attempt[]): Attempt | null {
+  const competitive = attempts.filter(isJourneyCompetitive);
+  if (competitive.length === 0) {
+    return null;
+  }
+  return [...competitive].sort(compareCompetitiveRank)[0] ?? null;
 }
 
 function sampleStandardDeviationOf(values: number[]): number | null {
@@ -189,8 +197,8 @@ export function computeJourneyStatistics(
     latestAttemptId: latest.id,
     latestTimeMs: officialTimeMs(latest),
     latestFinishedAtMs: latest.finishedAtMs,
-    meanOfficialTimeMs: showDistribution ? meanOf(officialTimes) : null,
-    medianOfficialTimeMs: showDistribution ? medianOf(officialTimes) : null,
+    meanOfficialTimeMs: showDistribution ? officialTimesMeanMs(officialTimes) : null,
+    medianOfficialTimeMs: showDistribution ? officialTimesMedianMs(officialTimes) : null,
     sampleStandardDeviationMs: showDistribution ? sampleStandardDeviationOf(officialTimes) : null,
     recentTrendPoints,
     recentTrendDeltaMs:

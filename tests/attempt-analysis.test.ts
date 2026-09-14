@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { Attempt } from '../src/domain/attempt';
+import { EMPTY_ATTEMPT_LOCAL_START, type Attempt } from '../src/domain/attempt';
 import {
   analyzeFocusAttempt,
   analyzeRouteAttempts,
@@ -114,6 +114,7 @@ function makeAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | 'session
     armedAtMs: 1_700_000_000_000,
     startedAtMs: 1_700_000_001_000,
     finishedAtMs: 1_700_000_200_000,
+    ...EMPTY_ATTEMPT_LOCAL_START,
     resultAcknowledged: true,
     crossings: [],
     ...overrides,

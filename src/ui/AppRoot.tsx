@@ -10,6 +10,11 @@ import {
 } from '../domain/course-editor';
 import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import {
+  emptyDepartureGrouping,
+  type JourneyDepartureGroup,
+  type JourneyDepartureGrouping,
+} from '../domain/journey-departure';
 import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { DEFAULT_PLACE_RADIUS_METERS, type Place } from '../domain/place';
@@ -83,6 +88,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [journeyStatistics, setJourneyStatistics] = useState<JourneyPoolStatistics>(() =>
     computeJourneyStatistics([], 0),
   );
+  const [journeyGrouping, setJourneyGrouping] = useState<JourneyDepartureGrouping>(() =>
+    emptyDepartureGrouping(),
+  );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
   const [journeyPathVariants, setJourneyPathVariants] = useState<JourneyPathVariantSummary[]>([]);
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
@@ -94,6 +102,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
   const [routeSummary, setRouteSummary] = useState<RouteCompetitiveSummary | null>(null);
   const [historyMode, setHistoryMode] = useState<'chronological' | 'ranked'>('chronological');
+  const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,6 +128,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setDestinationPlace(loaded.destination);
       setJourneySummary(loaded.summary);
       setJourneyStatistics(loaded.statistics);
+      setJourneyGrouping(loaded.departureGrouping);
       setJourneyHistory(loaded.history);
       setJourneyPathVariants(loaded.pathVariants);
       return loaded;
@@ -530,6 +540,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         return;
       }
       setError(null);
+      setHistoryGroupFilter(null);
       setScreen({ kind: 'journey', pool });
     },
     [loadJourney],
@@ -540,8 +551,21 @@ export function AppRoot({ workspace }: AppRootProps) {
       return;
     }
     setHistoryMode('chronological');
+    setHistoryGroupFilter(null);
     setScreen({ kind: 'history', pool: screen.pool });
   }, [screen]);
+
+  const onOpenGroupAttempts = useCallback(
+    (group: JourneyDepartureGroup) => {
+      if (screen.kind !== 'journey') {
+        return;
+      }
+      setHistoryMode('chronological');
+      setHistoryGroupFilter(group);
+      setScreen({ kind: 'history', pool: screen.pool });
+    },
+    [screen],
+  );
 
   const onOpenHistoryAttempt = useCallback(
     async (attemptId: string) => {
@@ -589,6 +613,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
     const pool = screen.pool;
     setError(null);
+    setHistoryGroupFilter(null);
     setScreen({ kind: 'journey', pool });
     void loadJourney(pool);
   }, [loadJourney, screen]);
@@ -1072,6 +1097,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           destination={destinationPlace}
           summary={journeySummary}
           statistics={journeyStatistics}
+          grouping={journeyGrouping}
           history={journeyHistory}
           pathVariants={journeyPathVariants}
           busy={busy}
@@ -1080,6 +1106,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           onHistory={() => {
             void onOpenHistory();
           }}
+          onOpenGroupAttempts={onOpenGroupAttempts}
           onOpenPathVariant={(routeId) => {
             void onOpenPathVariant(routeId);
           }}
@@ -1141,12 +1168,15 @@ export function AppRoot({ workspace }: AppRootProps) {
         <HistoryScreen
           title={journeySummary.title}
           statistics={journeyStatistics}
+          grouping={journeyGrouping}
           rows={journeyHistory}
           rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
           mode={historyMode}
+          groupFilter={historyGroupFilter}
           busy={busy}
           error={error}
           onChangeMode={setHistoryMode}
+          onSelectGroup={setHistoryGroupFilter}
           onBack={onBackFromHistory}
           onOpenAttempt={(attemptId) => {
             void onOpenHistoryAttempt(attemptId);
