@@ -32,7 +32,8 @@ import {
   startAppStartup,
   type AppStartupStage,
 } from '../product/app-startup';
-import type { CombinedAttemptDebug, HomeSnapshot, RouteWorkspace } from '../product/route-workspace';
+import type { CombinedAttemptDebug, HomeSnapshot, LoadedJourney, RouteWorkspace } from '../product/route-workspace';
+import { sameJourneyPool } from '../domain/journey';
 import { AttemptResultScreen } from './AttemptResultScreen';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
@@ -114,7 +115,25 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [error, setError] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
   const [startupNonce, setStartupNonce] = useState(0);
+  const [analysisPending, setAnalysisPending] = useState(false);
   const startupTokenRef = useRef(0);
+  const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
+  const secondaryLoadTokenRef = useRef(0);
+  const routeDetailTokenRef = useRef(0);
+
+  const applyLoadedJourney = useCallback((pool: JourneyPoolId, loaded: LoadedJourney) => {
+    const active = activeJourneyPoolRef.current;
+    if (!active || !sameJourneyPool(active, pool)) {
+      return;
+    }
+    setOriginPlace(loaded.origin);
+    setDestinationPlace(loaded.destination);
+    setJourneySummary(loaded.summary);
+    setJourneyStatistics(loaded.statistics);
+    setJourneyGrouping(loaded.departureGrouping);
+    setJourneyHistory(loaded.history);
+    setJourneyPathVariants(loaded.pathVariants);
+  }, []);
 
   const refreshHome = useCallback(async () => {
     const snapshot = await workspace.loadHome();
@@ -130,20 +149,15 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const loadJourney = useCallback(
     async (pool: JourneyPoolId) => {
+      activeJourneyPoolRef.current = pool;
       const loaded = await workspace.loadJourney(pool);
       if (!loaded) {
         return null;
       }
-      setOriginPlace(loaded.origin);
-      setDestinationPlace(loaded.destination);
-      setJourneySummary(loaded.summary);
-      setJourneyStatistics(loaded.statistics);
-      setJourneyGrouping(loaded.departureGrouping);
-      setJourneyHistory(loaded.history);
-      setJourneyPathVariants(loaded.pathVariants);
+      applyLoadedJourney(pool, loaded);
       return loaded;
     },
-    [workspace],
+    [applyLoadedJourney, workspace],
   );
 
   const openReview = useCallback(
@@ -184,37 +198,53 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const showAttemptResult = useCallback(
-    async (attempt: Attempt, signal?: AbortSignal) => {
+    async (attempt: Attempt, signal?: AbortSignal, nextScreen: AppScreen = { kind: 'attempt-result' }) => {
+      const token = secondaryLoadTokenRef.current + 1;
+      secondaryLoadTokenRef.current = token;
       setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
-      if (signal?.aborted) {
+      if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
         return;
       }
+      const pool =
+        attempt.originPlaceId && attempt.destinationPlaceId
+          ? {
+              originPlaceId: attempt.originPlaceId,
+              destinationPlaceId: attempt.destinationPlaceId,
+              transportationMode: attempt.transportationMode,
+            }
+          : null;
       let focus: JourneyFocusAnalysis | null = null;
-      if (attempt.originPlaceId && attempt.destinationPlaceId) {
-        const analyzed = await workspace.analyzeJourney(
-          {
-            originPlaceId: attempt.originPlaceId,
-            destinationPlaceId: attempt.destinationPlaceId,
-            transportationMode: attempt.transportationMode,
-          },
-          attempt.id,
-        );
-        if (signal?.aborted) {
+      if (pool) {
+        const headline = await workspace.analyzeJourneyHeadline(pool, attempt.id);
+        if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
           return;
         }
-        focus = analyzed?.focus ?? null;
-      }
-      const debug = await workspace.inspectAttempt(attempt.id);
-      if (signal?.aborted) {
-        return;
+        focus = headline?.focus ?? null;
       }
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
       setAttemptResult(attempt);
       setJourneyFocus(focus);
-      setAttemptDebug(debug);
-      setScreen({ kind: 'attempt-result' });
+      setAttemptDebug(null);
+      setAnalysisPending(pool != null);
+      setScreen(nextScreen);
+      if (!pool) {
+        setAnalysisPending(false);
+        return;
+      }
+      void (async () => {
+        const [analyzed, debug] = await Promise.all([
+          workspace.analyzeJourney(pool, attempt.id),
+          workspace.inspectAttempt(attempt.id),
+        ]);
+        if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
+          return;
+        }
+        setJourneyFocus(analyzed?.focus ?? focus);
+        setAttemptDebug(debug);
+        setAnalysisPending(false);
+      })();
     },
     [workspace],
   );
@@ -561,10 +591,13 @@ export function AppRoot({ workspace }: AppRootProps) {
       setAttemptResult(null);
       setJourneyFocus(null);
       setAttemptDebug(null);
+      setAnalysisPending(false);
+      secondaryLoadTokenRef.current += 1;
       if (pool) {
+        activeJourneyPoolRef.current = pool;
+        setScreen({ kind: 'journey', pool });
         const loaded = await loadJourney(pool);
         if (loaded) {
-          setScreen({ kind: 'journey', pool });
           return;
         }
       }
@@ -588,18 +621,21 @@ export function AppRoot({ workspace }: AppRootProps) {
       try {
         const updated = await workspace.setAttemptTransportationMode(attemptResult.id, mode);
         if (updated) {
-          await showAttemptResult(updated);
-          if (stayOnDetail && updated.originPlaceId && updated.destinationPlaceId) {
-            setScreen({
-              kind: 'attempt-detail',
-              pool: {
-                originPlaceId: updated.originPlaceId,
-                destinationPlaceId: updated.destinationPlaceId,
-                transportationMode: updated.transportationMode,
-              },
-              attemptId: updated.id,
-            });
-          }
+          await showAttemptResult(
+            updated,
+            undefined,
+            stayOnDetail && updated.originPlaceId && updated.destinationPlaceId
+              ? {
+                  kind: 'attempt-detail',
+                  pool: {
+                    originPlaceId: updated.originPlaceId,
+                    destinationPlaceId: updated.destinationPlaceId,
+                    transportationMode: updated.transportationMode,
+                  },
+                  attemptId: updated.id,
+                }
+              : { kind: 'attempt-result' },
+          );
         }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not change transportation mode.');
@@ -612,6 +648,9 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const leaveToHome = useCallback(() => {
     setError(null);
+    activeJourneyPoolRef.current = null;
+    secondaryLoadTokenRef.current += 1;
+    setAnalysisPending(false);
     setScreen({ kind: 'home' });
     void refreshHome();
   }, [refreshHome]);
@@ -619,16 +658,19 @@ export function AppRoot({ workspace }: AppRootProps) {
   const onOpenJourney = useCallback(
     async (originPlaceId: string, destinationPlaceId: string, transportationMode: TransportationMode) => {
       const pool = { originPlaceId, destinationPlaceId, transportationMode };
+      setError(null);
+      setHistoryGroupFilter(null);
+      activeJourneyPoolRef.current = pool;
+      setScreen({ kind: 'journey', pool });
       const loaded = await loadJourney(pool);
       if (!loaded) {
         setError('This journey is no longer available.');
-        return;
+        activeJourneyPoolRef.current = null;
+        await refreshHome();
+        setScreen({ kind: 'home' });
       }
-      setError(null);
-      setHistoryGroupFilter(null);
-      setScreen({ kind: 'journey', pool });
     },
-    [loadJourney],
+    [loadJourney, refreshHome],
   );
 
   const onOpenHistory = useCallback(async () => {
@@ -665,31 +707,32 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError('This attempt is no longer available.');
           return;
         }
-        setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
-        const analyzed = await workspace.analyzeJourney(screen.pool, attemptId);
-        const debug = await workspace.inspectAttempt(attemptId);
-        setAttemptResult(attempt);
-        setJourneyFocus(analyzed?.focus ?? null);
-        setAttemptDebug(debug);
-        setScreen({ kind: 'attempt-detail', pool: screen.pool, attemptId });
+        await showAttemptResult(attempt, undefined, {
+          kind: 'attempt-detail',
+          pool: screen.pool,
+          attemptId,
+        });
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
       } finally {
         setBusy(false);
       }
     },
-    [screen, workspace],
+    [screen, showAttemptResult, workspace],
   );
 
-  const onBackFromHistoryDetail = useCallback(async () => {
+  const onBackFromHistoryDetail = useCallback(() => {
     if (screen.kind !== 'attempt-detail') {
       return;
     }
+    secondaryLoadTokenRef.current += 1;
     setAttemptResult(null);
     setJourneyFocus(null);
     setAttemptDebug(null);
-    await loadJourney(screen.pool);
-    setScreen({ kind: 'history', pool: screen.pool });
+    setAnalysisPending(false);
+    const pool = screen.pool;
+    setScreen({ kind: 'history', pool });
+    void loadJourney(pool);
   }, [loadJourney, screen]);
 
   const onBackFromHistory = useCallback(() => {
@@ -773,6 +816,8 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const onOpenPathVariant = useCallback(
     async (routeId: string) => {
+      const token = routeDetailTokenRef.current + 1;
+      routeDetailTokenRef.current = token;
       setBusy(true);
       setError(null);
       try {
@@ -782,9 +827,14 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         setSelectedRoute(route);
-        const analyzed = await workspace.analyzeRoute(route.id);
-        setRouteSummary(analyzed?.analysis.summary ?? null);
+        setRouteSummary(null);
         setScreen({ kind: 'detail', routeId: route.id });
+        setBusy(false);
+        const analyzed = await workspace.analyzeRoute(route.id);
+        if (token !== routeDetailTokenRef.current) {
+          return;
+        }
+        setRouteSummary(analyzed?.analysis.summary ?? null);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not open this path variant.');
       } finally {
@@ -856,10 +906,10 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [destinationPlace, journeySummary, loadJourney, originPlace, screen, workspace]);
 
-  const onOpenPlaces = useCallback(async () => {
+  const onOpenPlaces = useCallback(() => {
     setError(null);
-    setPlaces(await workspace.listPlaces());
     setScreen({ kind: 'places' });
+    void workspace.listPlaces().then(setPlaces);
   }, [workspace]);
 
   const onOpenPlaceEditor = useCallback(
@@ -1022,6 +1072,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   }, [workspace]);
 
   const leaveDetailToJourney = useCallback(() => {
+    routeDetailTokenRef.current += 1;
     if (screen.kind === 'journey') {
       setScreen({ kind: 'home' });
       return;
@@ -1257,7 +1308,13 @@ export function AppRoot({ workspace }: AppRootProps) {
           onBack={leaveToHome}
         />
       ) : null}
-      {screen.kind === 'journey' && originPlace && destinationPlace && journeySummary ? (
+      {screen.kind === 'journey' ? (
+        originPlace &&
+        destinationPlace &&
+        journeySummary &&
+        originPlace.id === screen.pool.originPlaceId &&
+        destinationPlace.id === screen.pool.destinationPlaceId &&
+        journeySummary.transportationMode === screen.pool.transportationMode ? (
         <JourneyDetailScreen
           origin={originPlace}
           destination={destinationPlace}
@@ -1277,6 +1334,15 @@ export function AppRoot({ workspace }: AppRootProps) {
             void onOpenPathVariant(routeId);
           }}
         />
+        ) : (
+          <View style={styles.content}>
+            <Pressable accessibilityRole="button" onPress={leaveToHome}>
+              <Text style={styles.kicker}>← JOURNEYS</Text>
+            </Pressable>
+            <Text style={styles.title}>Loading journey…</Text>
+            <Text style={styles.mutedText}>Official time and PB load from saved attempts first.</Text>
+          </View>
+        )
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
         <RouteDetailScreen
@@ -1320,6 +1386,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={attemptResult}
           journey={journeyFocus}
           debug={attemptDebug}
+          secondaryPending={analysisPending}
           busy={busy}
           error={error}
           onDone={() => {
@@ -1356,6 +1423,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={attemptResult}
           journey={journeyFocus}
           debug={attemptDebug}
+          secondaryPending={analysisPending}
           busy={busy}
           error={error}
           doneLabel="BACK"

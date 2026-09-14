@@ -42,6 +42,7 @@ import {
   type WaitComparisonLocationEntry,
 } from '../domain/wait-comparison';
 import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
+import { DeferredMapSlot } from './DeferredMapSlot';
 import { GhostDeltaChart } from './GhostDeltaChart';
 import { styles } from './styles';
 
@@ -51,6 +52,7 @@ type AttemptResultScreenProps = {
   attempt: Attempt;
   journey: JourneyFocusAnalysis | null;
   debug?: CombinedAttemptDebug | null;
+  secondaryPending?: boolean;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
@@ -700,6 +702,7 @@ export function AttemptResultScreen({
   attempt,
   journey,
   debug = null,
+  secondaryPending = false,
   busy,
   error,
   doneLabel = 'DONE',
@@ -827,7 +830,7 @@ export function AttemptResultScreen({
           {journey?.rank != null ? (
             <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
           ) : null}
-          {journey ? (
+          {journey && !secondaryPending ? (
             <ResultExplanationBlock
               explanation={journey.resultExplanation}
               displayedComparisonLocations={displayedComparisonLocations}
@@ -835,12 +838,17 @@ export function AttemptResultScreen({
               onSelectLocation={selectComparison}
             />
           ) : null}
+          {secondaryPending ? (
+            <Text style={styles.mutedText}>Loading path analytics…</Text>
+          ) : null}
         </View>
       ) : null}
 
-      {route || debug?.place.recordedPath.length ? (
+      {route || debug?.place.recordedPath.length || secondaryPending ? (
         <View style={styles.attemptMapPane} collapsable={false}>
-          <RouteMap
+          {route || debug?.place.recordedPath.length ? (
+            <DeferredMapSlot style={styles.attemptMap} label="Loading map…">
+              <RouteMap
             path={route?.referencePath ?? []}
             startZone={route?.startZone}
             finishZone={route?.finishZone}
@@ -902,6 +910,10 @@ export function AttemptResultScreen({
             cameraGesturesEnabled={false}
             style={styles.attemptMap}
           />
+            </DeferredMapSlot>
+          ) : (
+            <Text style={styles.mutedText}>Loading map…</Text>
+          )}
         </View>
       ) : null}
 
@@ -934,6 +946,8 @@ export function AttemptResultScreen({
             selectedSample={selectedDebugSample}
             onSelectSample={setSelectedSampleId}
           />
+        ) : secondaryPending ? (
+          <Text style={styles.mutedText}>Loading debug trace…</Text>
         ) : null}
         {debug?.variant ? (
           <DebugTracePanel
@@ -959,7 +973,7 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {journey?.pathUnavailable ? (
+        {journey?.pathUnavailable && !secondaryPending ? (
           <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
         ) : null}
 

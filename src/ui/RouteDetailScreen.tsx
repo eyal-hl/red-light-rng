@@ -11,6 +11,7 @@ import {
 } from '../domain/route';
 import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { RouteMap } from '../map/RouteMap';
+import { DeferredMapSlot } from './DeferredMapSlot';
 import { styles } from './styles';
 
 type RouteDetailScreenProps = {
@@ -81,12 +82,14 @@ export function RouteDetailScreen({
         </Text>
 
         <View style={styles.mapSlot}>
-          <RouteMap
-            path={route.referencePath}
-            startZone={route.startZone}
-            finishZone={route.finishZone}
-            checkpoints={checkpoints}
-          />
+          <DeferredMapSlot style={styles.editorMap}>
+            <RouteMap
+              path={route.referencePath}
+              startZone={route.startZone}
+              finishZone={route.finishZone}
+              checkpoints={checkpoints}
+            />
+          </DeferredMapSlot>
         </View>
 
         <TextInput
@@ -97,6 +100,10 @@ export function RouteDetailScreen({
           placeholderTextColor="#6b7076"
           style={styles.input}
         />
+
+        {summary == null ? (
+          <Text style={styles.mutedText}>Loading variant stats…</Text>
+        ) : null}
 
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Variant PB</Text>

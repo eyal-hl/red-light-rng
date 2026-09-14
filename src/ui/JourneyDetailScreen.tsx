@@ -9,6 +9,7 @@ import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery
 import { placeZone, type Place } from '../domain/place';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
+import { DeferredMapSlot } from './DeferredMapSlot';
 import {
   durationOrDash,
   JourneyStatRow,
@@ -63,12 +64,14 @@ export function JourneyDetailScreen({
           {transportationModeLabel(summary.transportationMode)}
         </Text>
         <View style={styles.mapSlot}>
-          <RouteMap
-            path={mapPath}
-            startZone={placeZone(origin)}
-            finishZone={placeZone(destination)}
-            checkpoints={[]}
-          />
+          <DeferredMapSlot style={styles.editorMap}>
+            <RouteMap
+              path={mapPath}
+              startZone={placeZone(origin)}
+              finishZone={placeZone(destination)}
+              checkpoints={[]}
+            />
+          </DeferredMapSlot>
         </View>
         <JourneyStatRow label="PB" value={durationOrDash(statistics.pbTimeMs ?? summary.pbTimeMs)} />
         <JourneyStatRow label="Last" value={durationOrDash(statistics.latestTimeMs ?? summary.lastTimeMs)} />
