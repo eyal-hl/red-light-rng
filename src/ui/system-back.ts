@@ -1,5 +1,6 @@
 export type AppScreenKind =
   | 'loading'
+  | 'init-error'
   | 'home'
   | 'recording'
   | 'review'
@@ -39,12 +40,13 @@ export type SystemBackActions = {
 };
 
 export function isRootScreen(kind: AppScreenKind): boolean {
-  return kind === 'home' || kind === 'loading';
+  return kind === 'home' || kind === 'loading' || kind === 'init-error';
 }
 
 export function systemBackAction(kind: AppScreenKind): SystemBackAction {
   switch (kind) {
     case 'loading':
+    case 'init-error':
     case 'home':
       return 'none';
     case 'places':

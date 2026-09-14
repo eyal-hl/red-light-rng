@@ -8,11 +8,14 @@ import type { Place } from '../src/domain/place';
 import { applyMigrations, MIGRATIONS } from '../src/persistence/migrations';
 import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
 import { SqlitePlaceStore } from '../src/persistence/sqlite-place-store';
+import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
 import { CURRENT_SCHEMA_VERSION, LOCATION_SPIKE_SCHEMA } from '../src/persistence/schema';
 import type { SqlExecutor } from '../src/persistence/sql-executor';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
 import { createMemorySqlExecutor } from './helpers/node-sql-executor';
+import { makeRoute } from './helpers/routes';
 import { offsetLatLng } from './helpers/samples';
+import { createSqliteWorkspace } from './helpers/workspace';
 
 function withTimeZone<T>(tz: string, run: () => T): T {
   const previous = process.env.TZ;
@@ -675,7 +678,111 @@ describe('SQLite migrations', { concurrency: 1 }, () => {
       assert.equal(open?.origin_place_id, 'home-a', `from schema v${startingVersion}`);
     }
   });
+
+  it('heals old PR #50 preview v6 databases that claimed version 6 without route classification columns', async () => {
+    const sql = createMemorySqlExecutor();
+    await seedOldPr50PreviewV6(sql, 9_000);
+    const before = await tableColumnNames(sql, 'route');
+    assert.equal(before.has('status'), false);
+    assert.equal(before.has('kind'), false);
+    const versionBefore = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(versionBefore?.user_version, 6);
+
+    await applyMigrations(sql, 20_000);
+    await assertCanonicalRouteColumnsPresent(sql);
+    await assertReportedDuplicatePlaceInstallRepaired(sql);
+    await assertHealedPreviewCanBootstrap(sql);
+  });
+
+  it('heals a broken rebased preview already advanced to user_version 8 without route classification columns', async () => {
+    const sql = createMemorySqlExecutor();
+    await seedBrokenRebasedPreviewV8(sql, 9_000);
+    const before = await tableColumnNames(sql, 'route');
+    assert.equal(before.has('status'), false);
+    const versionBefore = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(versionBefore?.user_version, 8);
+
+    await applyMigrations(sql, 20_000);
+    await assertCanonicalRouteColumnsPresent(sql);
+    await assertReportedDuplicatePlaceInstallRepaired(sql);
+    await assertHealedPreviewCanBootstrap(sql);
+  });
+
+  it('treats canonical main v6/v7/v8 installs as a no-op for already-present route columns', async () => {
+    for (const startingVersion of [6, 7, 8] as const) {
+      const sql = createMemorySqlExecutor();
+      await migrateThrough(sql, startingVersion, 9_000);
+      const before = await tableColumnNames(sql, 'route');
+      assert.equal(before.has('status'), true, `from schema v${startingVersion}`);
+      assert.equal(before.has('classification_version'), true, `from schema v${startingVersion}`);
+
+      await applyMigrations(sql, 20_000);
+
+      const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+      assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION, `from schema v${startingVersion}`);
+      await assertCanonicalRouteColumnsPresent(sql);
+    }
+  });
 });
+
+async function tableColumnNames(sql: SqlExecutor, table: string): Promise<Set<string>> {
+  const rows = await sql.getAll<{ name: string }>(`PRAGMA table_info(${table})`);
+  return new Set(rows.map((row) => row.name));
+}
+
+async function seedOldPr50PreviewV6(sql: SqlExecutor, nowMs: number): Promise<void> {
+  await migrateThrough(sql, 5, nowMs);
+  await seedReportedDuplicatePlaceInstall(sql);
+  await sql.exec('PRAGMA user_version = 6');
+}
+
+async function seedBrokenRebasedPreviewV8(sql: SqlExecutor, nowMs: number): Promise<void> {
+  await seedOldPr50PreviewV6(sql, nowMs);
+  for (const migration of MIGRATIONS.filter((item) => item.version === 7 || item.version === 8)) {
+    await migration.up(sql, nowMs);
+  }
+  await sql.exec('PRAGMA user_version = 8');
+}
+
+async function assertCanonicalRouteColumnsPresent(sql: SqlExecutor): Promise<void> {
+  const columns = await tableColumnNames(sql, 'route');
+  for (const name of ['status', 'kind', 'cluster_signature', 'classification_version']) {
+    assert.ok(columns.has(name), `missing route.${name}`);
+  }
+  await sql.getFirst<{
+    status: string;
+    kind: string;
+    cluster_signature: string | null;
+    classification_version: number;
+  }>('SELECT status, kind, cluster_signature, classification_version FROM route LIMIT 1');
+}
+
+async function assertHealedPreviewCanBootstrap(sql: SqlExecutor): Promise<void> {
+  await insertSession(sql, 'sess-heal-route', 80_000);
+  const routeStore = new SqliteRouteStore(async () => sql);
+  await routeStore.createRoute(
+    makeRoute({
+      id: 'route-healed',
+      sourceRecordingId: 'sess-heal-route',
+    }),
+  );
+  const saved = await routeStore.getRoute('route-healed');
+  assert.equal(saved?.status, 'active');
+  assert.equal(saved?.kind, 'explicit');
+  assert.equal(saved?.classificationVersion, 1);
+
+  const { workspace } = createSqliteWorkspace(sql);
+  const home = await workspace.bootstrap();
+  assert.ok(home.places.some((place) => place.id === 'home-17'));
+  assert.ok(
+    home.journeys.some(
+      (journey) =>
+        journey.originPlaceId === 'home-17' &&
+        journey.destinationPlaceId === 'work-30' &&
+        journey.transportationMode === 'scooter',
+    ),
+  );
+}
 
 async function migrateThrough(sql: SqlExecutor, version: number, nowMs: number): Promise<void> {
   await sql.exec('PRAGMA foreign_keys = ON;');

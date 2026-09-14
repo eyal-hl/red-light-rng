@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, AppState, BackHandler, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, Pressable, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
 import {
@@ -192,34 +192,46 @@ export function AppRoot({ workspace }: AppRootProps) {
   );
 
   const bootstrap = useCallback(async () => {
-    const snapshot = await workspace.bootstrap();
-    setPlaces(snapshot.places);
-    setJourneys(snapshot.journeys);
-    setIncomplete(snapshot.incompleteAttempts);
-    setActiveMode(snapshot.activeTransportationMode);
-    setPendingRecording(snapshot.pendingRecording);
-    setCanStartNewRecording(snapshot.canStartNewRecording);
-    setCanStartAttempt(snapshot.canStartAttempt);
-    if (snapshot.activeAttempt) {
-      await showAttempt(snapshot.activeAttempt);
-      return;
+    try {
+      const snapshot = await workspace.bootstrap();
+      setError(null);
+      setPlaces(snapshot.places);
+      setJourneys(snapshot.journeys);
+      setIncomplete(snapshot.incompleteAttempts);
+      setActiveMode(snapshot.activeTransportationMode);
+      setPendingRecording(snapshot.pendingRecording);
+      setCanStartNewRecording(snapshot.canStartNewRecording);
+      setCanStartAttempt(snapshot.canStartAttempt);
+      if (snapshot.activeAttempt) {
+        await showAttempt(snapshot.activeAttempt);
+        return;
+      }
+      if (snapshot.attemptResult) {
+        await showAttemptResult(snapshot.attemptResult);
+        return;
+      }
+      if (snapshot.activeRecording) {
+        const state = await workspace.getTrackingState();
+        setTrackingState(state);
+        setScreen({ kind: 'recording' });
+        return;
+      }
+      if (snapshot.pendingRecording) {
+        await openReview(snapshot.pendingRecording.id);
+        return;
+      }
+      setScreen({ kind: 'home' });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not open your saved data.');
+      setScreen({ kind: 'init-error' });
     }
-    if (snapshot.attemptResult) {
-      await showAttemptResult(snapshot.attemptResult);
-      return;
-    }
-    if (snapshot.activeRecording) {
-      const state = await workspace.getTrackingState();
-      setTrackingState(state);
-      setScreen({ kind: 'recording' });
-      return;
-    }
-    if (snapshot.pendingRecording) {
-      await openReview(snapshot.pendingRecording.id);
-      return;
-    }
-    setScreen({ kind: 'home' });
   }, [openReview, showAttempt, showAttemptResult, workspace]);
+
+  const retryBootstrap = useCallback(() => {
+    setError(null);
+    setScreen({ kind: 'loading' });
+    void bootstrap();
+  }, [bootstrap]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -1000,6 +1012,27 @@ export function AppRoot({ workspace }: AppRootProps) {
       {screen.kind === 'loading' ? (
         <View style={styles.content}>
           <Text style={styles.mutedText}>Loading…</Text>
+        </View>
+      ) : null}
+      {screen.kind === 'init-error' ? (
+        <View style={styles.content}>
+          <Text style={styles.kicker}>RED LIGHT RNG</Text>
+          <Text style={styles.title}>Could not open your data</Text>
+          <Text style={styles.subtitle}>
+            Startup failed before Home could load. Your history is still on this device. Try again,
+            or keep this error to report the upgrade.
+          </Text>
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Try starting again"
+              onPress={retryBootstrap}
+              style={[styles.button, styles.primaryButton]}
+            >
+              <Text style={styles.buttonText}>TRY AGAIN</Text>
+            </Pressable>
+          </View>
         </View>
       ) : null}
       {screen.kind === 'home' ? (
