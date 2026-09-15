@@ -37,6 +37,12 @@ import {
   journeyPoolForAttempt,
   loadAttemptResultSecondary,
 } from '../product/attempt-result-load';
+import {
+  beginJourneySnapshotLoad,
+  canOpenJourneyHistory,
+  canPresentRetainedJourney,
+  finishJourneySnapshotLoad,
+} from '../product/journey-navigation';
 import type { CombinedAttemptDebug, HomeSnapshot, LoadedJourney, RouteWorkspace } from '../product/route-workspace';
 import { sameJourneyPool } from '../domain/journey';
 import { AttemptResultScreen } from './AttemptResultScreen';
@@ -76,6 +82,18 @@ type AppScreen =
 type AppRootProps = {
   workspace: RouteWorkspace;
 };
+
+function JourneyLoadingShell({ onBack }: { onBack: () => void }) {
+  return (
+    <View style={styles.content}>
+      <Pressable accessibilityRole="button" onPress={onBack}>
+        <Text style={styles.kicker}>← JOURNEYS</Text>
+      </Pressable>
+      <Text style={styles.title}>Loading journey…</Text>
+      <Text style={styles.mutedText}>Official time and PB load from saved attempts first.</Text>
+    </View>
+  );
+}
 
 export function AppRoot({ workspace }: AppRootProps) {
   const [screen, setScreen] = useState<AppScreen>({ kind: 'loading' });
@@ -124,8 +142,10 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [pathAnalyticsPending, setPathAnalyticsPending] = useState(false);
   const [debugError, setDebugError] = useState<string | null>(null);
   const [pathAnalyticsError, setPathAnalyticsError] = useState<string | null>(null);
+  const [journeySnapshotReady, setJourneySnapshotReady] = useState(false);
   const startupTokenRef = useRef(0);
   const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
+  const journeyLoadTokenRef = useRef(0);
   const secondaryLoadTokenRef = useRef(0);
   const routeDetailTokenRef = useRef(0);
 
@@ -157,13 +177,24 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const loadJourney = useCallback(
     async (pool: JourneyPoolId) => {
+      const began = beginJourneySnapshotLoad(journeyLoadTokenRef.current);
+      journeyLoadTokenRef.current = began.token;
       activeJourneyPoolRef.current = pool;
+      setJourneySnapshotReady(began.snapshotReady);
       const loaded = await workspace.loadJourney(pool);
-      if (!loaded) {
-        return null;
+      const outcome = finishJourneySnapshotLoad(
+        began.token,
+        journeyLoadTokenRef.current,
+        activeJourneyPoolRef.current,
+        pool,
+        loaded,
+      );
+      if (outcome.kind !== 'ready') {
+        return outcome;
       }
-      applyLoadedJourney(pool, loaded);
-      return loaded;
+      applyLoadedJourney(pool, outcome.loaded);
+      setJourneySnapshotReady(true);
+      return outcome;
     },
     [applyLoadedJourney, workspace],
   );
@@ -602,10 +633,9 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPathAnalyticsError(null);
       secondaryLoadTokenRef.current += 1;
       if (pool) {
-        activeJourneyPoolRef.current = pool;
         setScreen({ kind: 'journey', pool });
         const loaded = await loadJourney(pool);
-        if (loaded) {
+        if (loaded.kind === 'ready' || loaded.kind === 'superseded') {
           return;
         }
       }
@@ -656,7 +686,10 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const leaveToHome = useCallback(() => {
     setError(null);
+    const abandoned = beginJourneySnapshotLoad(journeyLoadTokenRef.current);
+    journeyLoadTokenRef.current = abandoned.token;
     activeJourneyPoolRef.current = null;
+    setJourneySnapshotReady(abandoned.snapshotReady);
     secondaryLoadTokenRef.current += 1;
     setDebugPending(false);
     setPathAnalyticsPending(false);
@@ -671,12 +704,15 @@ export function AppRoot({ workspace }: AppRootProps) {
       const pool = { originPlaceId, destinationPlaceId, transportationMode };
       setError(null);
       setHistoryGroupFilter(null);
-      activeJourneyPoolRef.current = pool;
       setScreen({ kind: 'journey', pool });
       const loaded = await loadJourney(pool);
-      if (!loaded) {
+      if (loaded.kind === 'superseded') {
+        return;
+      }
+      if (loaded.kind === 'missing') {
         setError('This journey is no longer available.');
         activeJourneyPoolRef.current = null;
+        setJourneySnapshotReady(false);
         await refreshHome();
         setScreen({ kind: 'home' });
       }
@@ -688,21 +724,43 @@ export function AppRoot({ workspace }: AppRootProps) {
     if (screen.kind !== 'journey') {
       return;
     }
+    if (
+      !canOpenJourneyHistory({
+        snapshotReady: journeySnapshotReady,
+        pool: screen.pool,
+        origin: originPlace,
+        destination: destinationPlace,
+        summary: journeySummary,
+      })
+    ) {
+      return;
+    }
     setHistoryMode('chronological');
     setHistoryGroupFilter(null);
     setScreen({ kind: 'history', pool: screen.pool });
-  }, [screen]);
+  }, [destinationPlace, journeySnapshotReady, journeySummary, originPlace, screen]);
 
   const onOpenGroupAttempts = useCallback(
     (group: JourneyDepartureGroup) => {
       if (screen.kind !== 'journey') {
         return;
       }
+      if (
+        !canOpenJourneyHistory({
+          snapshotReady: journeySnapshotReady,
+          pool: screen.pool,
+          origin: originPlace,
+          destination: destinationPlace,
+          summary: journeySummary,
+        })
+      ) {
+        return;
+      }
       setHistoryMode('chronological');
       setHistoryGroupFilter(group);
       setScreen({ kind: 'history', pool: screen.pool });
     },
-    [screen],
+    [destinationPlace, journeySnapshotReady, journeySummary, originPlace, screen],
   );
 
   const onOpenHistoryAttempt = useCallback(
@@ -1143,6 +1201,17 @@ export function AppRoot({ workspace }: AppRootProps) {
   ]);
 
   const resultTitle = journeyFocus?.summary.title ?? originName ?? 'Attempt';
+  const journeyPoolForSnapshot =
+    screen.kind === 'journey' || screen.kind === 'history' ? screen.pool : null;
+  const journeySnapshot = journeyPoolForSnapshot
+    ? {
+        snapshotReady: journeySnapshotReady,
+        pool: journeyPoolForSnapshot,
+        origin: originPlace,
+        destination: destinationPlace,
+        summary: journeySummary,
+      }
+    : null;
 
   return (
     <View style={styles.screen}>
@@ -1323,12 +1392,11 @@ export function AppRoot({ workspace }: AppRootProps) {
         />
       ) : null}
       {screen.kind === 'journey' ? (
+        journeySnapshot &&
+        canPresentRetainedJourney(journeySnapshot) &&
         originPlace &&
         destinationPlace &&
-        journeySummary &&
-        originPlace.id === screen.pool.originPlaceId &&
-        destinationPlace.id === screen.pool.destinationPlaceId &&
-        journeySummary.transportationMode === screen.pool.transportationMode ? (
+        journeySummary ? (
         <JourneyDetailScreen
           origin={originPlace}
           destination={destinationPlace}
@@ -1349,13 +1417,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
         />
         ) : (
-          <View style={styles.content}>
-            <Pressable accessibilityRole="button" onPress={leaveToHome}>
-              <Text style={styles.kicker}>← JOURNEYS</Text>
-            </Pressable>
-            <Text style={styles.title}>Loading journey…</Text>
-            <Text style={styles.mutedText}>Official time and PB load from saved attempts first.</Text>
-          </View>
+          <JourneyLoadingShell onBack={leaveToHome} />
         )
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
@@ -1414,7 +1476,8 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
         />
       ) : null}
-      {screen.kind === 'history' && journeySummary ? (
+      {screen.kind === 'history' ? (
+        journeySnapshot && canPresentRetainedJourney(journeySnapshot) && journeySummary ? (
         <HistoryScreen
           title={journeySummary.title}
           statistics={journeyStatistics}
@@ -1432,6 +1495,9 @@ export function AppRoot({ workspace }: AppRootProps) {
             void onOpenHistoryAttempt(attemptId);
           }}
         />
+        ) : (
+          <JourneyLoadingShell onBack={onBackFromHistory} />
+        )
       ) : null}
       {screen.kind === 'attempt-detail' && attemptResult ? (
         <AttemptResultScreen

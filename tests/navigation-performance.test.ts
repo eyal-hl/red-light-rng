@@ -404,6 +404,8 @@ describe('navigation performance and derivation reuse', () => {
     const workspace = readFileSync('src/product/route-workspace.ts', 'utf8');
 
     assert.match(appRoot, /setScreen\(\{ kind: 'journey', pool \}\);\s*const loaded = await loadJourney\(pool\);/s);
+    assert.match(appRoot, /canPresentRetainedJourney/);
+    assert.match(appRoot, /beginJourneySnapshotLoad/);
     assert.match(appRoot, /createAttemptResultShell\(attempt\)/);
     assert.match(appRoot, /setScreen\(nextScreen\);\s*void loadAttemptResultSecondary/s);
     assert.match(appRoot, /workspace\.analyzeJourneyHeadline/);
