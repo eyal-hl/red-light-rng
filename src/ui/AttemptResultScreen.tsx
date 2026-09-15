@@ -42,6 +42,7 @@ import {
   type WaitComparisonLocationEntry,
 } from '../domain/wait-comparison';
 import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
+import { DeferredMapSlot } from './DeferredMapSlot';
 import { GhostDeltaChart } from './GhostDeltaChart';
 import { styles } from './styles';
 
@@ -51,6 +52,10 @@ type AttemptResultScreenProps = {
   attempt: Attempt;
   journey: JourneyFocusAnalysis | null;
   debug?: CombinedAttemptDebug | null;
+  debugPending?: boolean;
+  pathAnalyticsPending?: boolean;
+  debugError?: string | null;
+  pathAnalyticsError?: string | null;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
@@ -700,6 +705,10 @@ export function AttemptResultScreen({
   attempt,
   journey,
   debug = null,
+  debugPending = false,
+  pathAnalyticsPending = false,
+  debugError = null,
+  pathAnalyticsError = null,
   busy,
   error,
   doneLabel = 'DONE',
@@ -827,7 +836,7 @@ export function AttemptResultScreen({
           {journey?.rank != null ? (
             <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
           ) : null}
-          {journey ? (
+          {journey && !pathAnalyticsPending ? (
             <ResultExplanationBlock
               explanation={journey.resultExplanation}
               displayedComparisonLocations={displayedComparisonLocations}
@@ -835,12 +844,19 @@ export function AttemptResultScreen({
               onSelectLocation={selectComparison}
             />
           ) : null}
+          {pathAnalyticsPending ? (
+            <Text style={styles.mutedText}>Loading path analytics…</Text>
+          ) : pathAnalyticsError ? (
+            <Text style={styles.errorText}>{pathAnalyticsError}</Text>
+          ) : null}
         </View>
       ) : null}
 
-      {route || debug?.place.recordedPath.length ? (
+      {route || debug?.place.recordedPath.length || debugPending || pathAnalyticsPending ? (
         <View style={styles.attemptMapPane} collapsable={false}>
-          <RouteMap
+          {route || debug?.place.recordedPath.length ? (
+            <DeferredMapSlot style={styles.attemptMap} label="Loading map…">
+              <RouteMap
             path={route?.referencePath ?? []}
             startZone={route?.startZone}
             finishZone={route?.finishZone}
@@ -902,6 +918,10 @@ export function AttemptResultScreen({
             cameraGesturesEnabled={false}
             style={styles.attemptMap}
           />
+            </DeferredMapSlot>
+          ) : (
+            <Text style={styles.mutedText}>Loading map…</Text>
+          )}
         </View>
       ) : null}
 
@@ -934,6 +954,10 @@ export function AttemptResultScreen({
             selectedSample={selectedDebugSample}
             onSelectSample={setSelectedSampleId}
           />
+        ) : debugPending ? (
+          <Text style={styles.mutedText}>Loading debug trace…</Text>
+        ) : debugError ? (
+          <Text style={styles.errorText}>{debugError}</Text>
         ) : null}
         {debug?.variant ? (
           <DebugTracePanel
@@ -959,7 +983,7 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {journey?.pathUnavailable ? (
+        {journey?.pathUnavailable && !pathAnalyticsPending ? (
           <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
         ) : null}
 

@@ -96,7 +96,7 @@ function mainRoute(overrides: Partial<Route> = {}) {
   });
 }
 
-function recompute(
+async function recompute(
   traces: JourneyAttemptTrace[],
   routes: Route[],
   options?: { createRouteId?: () => string; nowMs?: number },
@@ -114,13 +114,13 @@ function recompute(
 }
 
 describe('path variant discovery', () => {
-  it('groups ordinary recordings of the same path despite 15-25 m GPS noise', () => {
+  it('groups ordinary recordings of the same path despite 15-25 m GPS noise', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 15)),
       completedTrace('b', pathSamples('s-b', 20)),
       completedTrace('c', pathSamples('s-c', 25)),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 1);
     assert.equal(plan.classificationVersion, PATH_VARIANT_CLASSIFICATION_VERSION);
     assert.deepEqual(
@@ -129,18 +129,18 @@ describe('path variant discovery', () => {
     );
   });
 
-  it('keeps the same cluster when sampling frequency changes', () => {
+  it('keeps the same cluster when sampling frequency changes', async () => {
     const traces = [
       completedTrace('dense', pathSamples('s-dense', 10, { stepMeters: 4, intervalMs: 250, count: 250 })),
       completedTrace('mid', pathSamples('s-mid', 12, { stepMeters: 10, intervalMs: 1000, count: 100 })),
       completedTrace('sparse', pathSamples('s-sparse', 8, { stepMeters: 16, intervalMs: 1600, count: 62 })),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 1);
     assert.ok(plan.assignments.every((item) => item.routeId === plan.newRoutes[0]!.id));
   });
 
-  it('can split recurring 40-60 m parallel streets into distinct variants', () => {
+  it('can split recurring 40-60 m parallel streets into distinct variants', async () => {
     const traces = [
       completedTrace('main-1', pathSamples('s-m1', 0)),
       completedTrace('main-2', pathSamples('s-m2', 5)),
@@ -149,33 +149,33 @@ describe('path variant discovery', () => {
       completedTrace('side-2', pathSamples('s-p2', 52)),
       completedTrace('side-3', pathSamples('s-p3', 55)),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 2);
     const ids = new Set(plan.assignments.map((item) => item.routeId));
     assert.equal(ids.size, 2);
     assert.equal([...ids].includes(null), false);
   });
 
-  it('does not surface a user-facing variant from one outlier attempt', () => {
+  it('does not surface a user-facing variant from one outlier attempt', async () => {
     const traces = [
       completedTrace('main-1', pathSamples('s-m1', 0)),
       completedTrace('main-2', pathSamples('s-m2', 8)),
       completedTrace('main-3', pathSamples('s-m3', 12)),
       completedTrace('outlier', pathSamples('s-out', 55)),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 1);
     const outlier = plan.assignments.find((item) => item.attemptId === 'outlier');
     assert.equal(outlier?.routeId, null);
   });
 
-  it('surfaces a candidate once three recurring distinct attempts exist', () => {
-    const two = recompute(
+  it('surfaces a candidate once three recurring distinct attempts exist', async () => {
+    const two = await recompute(
       [completedTrace('a', pathSamples('s-a', 50)), completedTrace('b', pathSamples('s-b', 52))],
       [],
     );
     assert.equal(two.newRoutes.length, 0);
-    const three = recompute(
+    const three = await recompute(
       [
         completedTrace('a', pathSamples('s-a', 50)),
         completedTrace('b', pathSamples('s-b', 52)),
@@ -188,18 +188,18 @@ describe('path variant discovery', () => {
     assert.equal(three.newRoutes[0]!.name, 'Path 1');
   });
 
-  it('does not collapse A≈B and B≈C into one variant when A is far from C', () => {
+  it('does not collapse A≈B and B≈C into one variant when A is far from C', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 0)),
       completedTrace('b', pathSamples('s-b', 30)),
       completedTrace('c', pathSamples('s-c', 60)),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 0);
     assert.ok(plan.assignments.every((item) => item.routeId == null));
   });
 
-  it('keeps opposite direction and other modes out of a journey cluster', () => {
+  it('keeps opposite direction and other modes out of a journey cluster', async () => {
     const traces = [
       completedTrace('s1', pathSamples('s-1', 50)),
       completedTrace('s2', pathSamples('s-2', 52)),
@@ -210,7 +210,7 @@ describe('path variant discovery', () => {
         destinationPlaceId: HOME.id,
       }),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 1);
     assert.deepEqual(
       plan.assignments.map((item) => item.attemptId).sort(),
@@ -218,19 +218,19 @@ describe('path variant discovery', () => {
     );
   });
 
-  it('assigns a unique migrated/explicit route match and does not invent a duplicate', () => {
+  it('assigns a unique migrated/explicit route match and does not invent a duplicate', async () => {
     const route = mainRoute();
     const traces = [
       completedTrace('a', pathSamples('s-a', 0)),
       completedTrace('b', pathSamples('s-b', 8)),
       completedTrace('c', pathSamples('s-c', 12)),
     ];
-    const plan = recompute(traces, [route]);
+    const plan = await recompute(traces, [route]);
     assert.equal(plan.newRoutes.length, 0);
     assert.ok(plan.assignments.every((item) => item.routeId === route.id));
   });
 
-  it('leaves a 20-30 m overlap strip between two ~50 m-apart variants unassigned', () => {
+  it('leaves a 20-30 m overlap strip between two ~50 m-apart variants unassigned', async () => {
     const main = mainRoute();
     const parallel = mainRoute({
       id: 'route-park',
@@ -245,46 +245,46 @@ describe('path variant discovery', () => {
       completedTrace('overlap-25', pathSamples('s-25', 25)),
       completedTrace('overlap-30', pathSamples('s-30', 30)),
     ];
-    const plan = recompute(traces, [main, parallel]);
+    const plan = await recompute(traces, [main, parallel]);
     assert.equal(plan.newRoutes.length, 0);
     assert.ok(plan.assignments.every((item) => item.routeId == null));
   });
 
-  it('leaves attempts with no compatible variant unassigned and eligible for discovery', () => {
+  it('leaves attempts with no compatible variant unassigned and eligible for discovery', async () => {
     const route = mainRoute();
     const traces = [
       completedTrace('side-1', pathSamples('s-1', 50)),
       completedTrace('side-2', pathSamples('s-2', 52)),
       completedTrace('side-3', pathSamples('s-3', 55)),
     ];
-    const none = recompute(traces.slice(0, 1), [route]);
+    const none = await recompute(traces.slice(0, 1), [route]);
     assert.equal(none.newRoutes.length, 0);
     assert.equal(none.assignments[0]?.routeId, null);
-    const discovered = recompute(traces, [route]);
+    const discovered = await recompute(traces, [route]);
     assert.equal(discovered.newRoutes.length, 1);
     assert.ok(discovered.assignments.every((item) => item.routeId === discovered.newRoutes[0]!.id));
   });
 
-  it('gives each attempt at most one primary variant', () => {
+  it('gives each attempt at most one primary variant', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 0)),
       completedTrace('b', pathSamples('s-b', 6)),
       completedTrace('c', pathSamples('s-c', 10)),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     const assigned = plan.assignments.map((item) => item.routeId);
     assert.equal(new Set(assigned).size, 1);
     assert.notEqual(assigned[0], null);
   });
 
-  it('materializes deterministic reference geometry that existing path analytics can consume', () => {
+  it('materializes deterministic reference geometry that existing path analytics can consume', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 48)),
       completedTrace('b', pathSamples('s-b', 50)),
       completedTrace('c', pathSamples('s-c', 52)),
     ];
-    const first = recompute(traces, [], { nowMs: 9_000 });
-    const second = recompute(traces, [], { nowMs: 9_000 });
+    const first = await recompute(traces, [], { nowMs: 9_000 });
+    const second = await recompute(traces, [], { nowMs: 9_000 });
     assert.equal(first.newRoutes.length, 1);
     assert.deepEqual(first.newRoutes[0]!.referencePath, second.newRoutes[0]!.referencePath);
     assert.equal(first.newRoutes[0]!.clusterSignature, second.newRoutes[0]!.clusterSignature);
@@ -302,15 +302,15 @@ describe('path variant discovery', () => {
     assert.ok(shape.length >= 3);
   });
 
-  it('does not respawn an archived variant from the same traces on recompute', () => {
+  it('does not respawn an archived variant from the same traces on recompute', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 50)),
       completedTrace('b', pathSamples('s-b', 52)),
       completedTrace('c', pathSamples('s-c', 48)),
     ];
-    const created = recompute(traces, []);
+    const created = await recompute(traces, []);
     const archived = { ...created.newRoutes[0]!, status: 'archived' as const };
-    const again = recompute(
+    const again = await recompute(
       traces.map((trace, index) => ({
         ...trace,
         attempt: { ...trace.attempt, routeId: archived.id },
@@ -323,34 +323,34 @@ describe('path variant discovery', () => {
     assert.equal(visible.length, 0);
   });
 
-  it('assigns a unique active replacement after the same-path discovered variant is archived', () => {
+  it('assigns a unique active replacement after the same-path discovered variant is archived', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 0)),
       completedTrace('b', pathSamples('s-b', 6)),
       completedTrace('c', pathSamples('s-c', 10)),
     ];
-    const created = recompute(traces, []);
+    const created = await recompute(traces, []);
     const discovered = created.newRoutes[0]!;
     const explicit = mainRoute();
-    const bothActive = recompute(traces, [discovered, explicit]);
+    const bothActive = await recompute(traces, [discovered, explicit]);
     assert.equal(bothActive.newRoutes.length, 0);
     assert.ok(bothActive.assignments.every((item) => item.routeId == null));
 
-    const afterArchive = recompute(traces, [{ ...discovered, status: 'archived' }, explicit]);
+    const afterArchive = await recompute(traces, [{ ...discovered, status: 'archived' }, explicit]);
     assert.equal(afterArchive.newRoutes.length, 0);
     assert.ok(afterArchive.assignments.every((item) => item.routeId === explicit.id));
   });
 
-  it('keeps archived geometry and does not delete or move attempts', () => {
+  it('keeps archived geometry and does not delete or move attempts', async () => {
     const traces = [
       completedTrace('a', pathSamples('s-a', 50)),
       completedTrace('b', pathSamples('s-b', 52)),
       completedTrace('c', pathSamples('s-c', 48)),
     ];
-    const created = recompute(traces, []);
+    const created = await recompute(traces, []);
     const archived = { ...created.newRoutes[0]!, status: 'archived' as const, name: 'River route' };
     const beforeTimes = traces.map((trace) => officialTimeMs(trace.attempt));
-    const again = recompute(traces, [archived]);
+    const again = await recompute(traces, [archived]);
     assert.equal(again.newRoutes.length, 0);
     assert.deepEqual(
       traces.map((trace) => officialTimeMs(trace.attempt)),
@@ -360,18 +360,18 @@ describe('path variant discovery', () => {
     assert.equal(defaultDiscoveredPathName(['River route', 'Path 1']), 'Path 2');
   });
 
-  it('is deterministic across restart/recompute and does not change journey PB or validity', () => {
+  it('is deterministic across restart/recompute and does not change journey PB or validity', async () => {
     const traces = [
       completedTrace('fast', pathSamples('s-fast', 50, { intervalMs: 100 })),
       completedTrace('mid', pathSamples('s-mid', 52, { intervalMs: 120 })),
       completedTrace('slow', pathSamples('s-slow', 48, { intervalMs: 150 })),
     ];
-    const first = recompute(traces, [], { nowMs: 50_000 });
+    const first = await recompute(traces, [], { nowMs: 50_000 });
     const withAssignments = traces.map((trace) => {
       const routeId = first.assignments.find((item) => item.attemptId === trace.attempt.id)?.routeId ?? null;
       return { ...trace, attempt: { ...trace.attempt, routeId } };
     });
-    const second = recompute(withAssignments, first.newRoutes, { nowMs: 50_000 });
+    const second = await recompute(withAssignments, first.newRoutes, { nowMs: 50_000 });
     assert.equal(second.newRoutes.length, 0);
     assert.deepEqual(second.assignments, first.assignments);
     const pbBefore = summarizeJourneyPool(POOL, HOME, WORK, traces).pbTimeMs;
@@ -385,7 +385,7 @@ describe('path variant discovery', () => {
     assert.equal(summaries[0]?.pbTimeMs, pbBefore);
   });
 
-  it('does not let incomplete attempts seed competitive path variants', () => {
+  it('does not let incomplete attempts seed competitive path variants', async () => {
     const traces = [
       completedTrace('done-1', pathSamples('s-1', 50)),
       completedTrace('done-2', pathSamples('s-2', 52)),
@@ -395,12 +395,12 @@ describe('path variant discovery', () => {
         finishedAtMs: null,
       }),
     ];
-    const plan = recompute(traces, []);
+    const plan = await recompute(traces, []);
     assert.equal(plan.newRoutes.length, 0);
     assert.equal(plan.assignments.some((item) => item.attemptId === 'incomplete'), false);
   });
 
-  it('uses one geographic compatibility budget so explicit and discovered variants compete equally', () => {
+  it('uses one geographic compatibility budget so explicit and discovered variants compete equally', async () => {
     const explicit = mainRoute();
     const traces = [
       completedTrace('main-1', pathSamples('s-m1', 0)),
@@ -410,7 +410,7 @@ describe('path variant discovery', () => {
       completedTrace('park-3', pathSamples('s-p3', 55)),
       completedTrace('strip', pathSamples('s-strip', 25)),
     ];
-    const plan = recompute(traces, [explicit]);
+    const plan = await recompute(traces, [explicit]);
     assert.equal(plan.newRoutes.length, 1);
     const byId = new Map(plan.assignments.map((item) => [item.attemptId, item.routeId]));
     assert.equal(byId.get('main-1'), explicit.id);

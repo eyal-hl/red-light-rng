@@ -239,6 +239,7 @@ describe('RouteWorkspace', () => {
     const { workspace, attemptRuntime } = createMemoryWorkspace();
     attemptRuntime.recomputeAllPathVariants = async () => {
       await new Promise(() => {});
+      return { skipped: false, poolsProcessed: 0, listSamplesCalls: 0 };
     };
     const snapshot = await Promise.race([
       workspace.bootstrap(),

@@ -21,6 +21,7 @@ import { MIN_REFERENCE_POINTS, MIN_STEP_METERS } from './route-derivation';
 export const PATH_VARIANT_CLASSIFICATION_VERSION = 1;
 export const PATH_VARIANT_RECURRENCE_MIN_ATTEMPTS = 3;
 export const PATH_SHAPE_SPACING_METERS = 10;
+export const PATH_VARIANT_PLANNER_YIELD_EVERY_PAIRS = 4;
 
 export type JourneyAttemptTrace = {
   attempt: Attempt;
@@ -227,15 +228,17 @@ function tracesCompatible(
   );
 }
 
-function completeLinkageClusters(
+async function completeLinkageClusters(
   prepared: PreparedTrace[],
   origin: Place,
   destination: Place,
-): PreparedTrace[][] {
+  yieldToIdle?: () => Promise<void>,
+): Promise<PreparedTrace[][]> {
   const byId = new Map(prepared.map((trace) => [trace.attempt.id, trace] as const));
   const ids = [...byId.keys()].sort((a, b) => a.localeCompare(b));
   const compatible = new Map<string, boolean>();
   const pairKey = (left: string, right: string) => (left < right ? `${left}|${right}` : `${right}|${left}`);
+  let pairChecks = 0;
   for (let i = 0; i < ids.length; i += 1) {
     const leftId = ids[i]!;
     const left = byId.get(leftId)!;
@@ -243,6 +246,10 @@ function completeLinkageClusters(
       const rightId = ids[j]!;
       const right = byId.get(rightId)!;
       compatible.set(pairKey(leftId, rightId), tracesCompatible(left, right, origin, destination));
+      pairChecks += 1;
+      if (yieldToIdle && pairChecks % PATH_VARIANT_PLANNER_YIELD_EVERY_PAIRS === 0) {
+        await yieldToIdle();
+      }
     }
   }
 
@@ -320,11 +327,19 @@ function meanAcceptedSnapMeters(route: Route, samples: LocationSample[], window:
   return count === 0 ? Number.POSITIVE_INFINITY : total / count;
 }
 
-function pickMedoid(cluster: PreparedTrace[], origin: Place, destination: Place): PreparedTrace {
+async function pickMedoid(
+  cluster: PreparedTrace[],
+  origin: Place,
+  destination: Place,
+  yieldToIdle?: () => Promise<void>,
+): Promise<PreparedTrace> {
   const ranked = [...cluster].sort((a, b) => a.attempt.id.localeCompare(b.attempt.id));
   let best = ranked[0]!;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const candidate of ranked) {
+    if (yieldToIdle) {
+      await yieldToIdle();
+    }
     const route = routeFromDiscoveredShape(
       candidate.shape,
       origin,
@@ -345,6 +360,9 @@ function pickMedoid(cluster: PreparedTrace[], origin: Place, destination: Place)
     for (const other of ranked) {
       if (other.attempt.id === candidate.attempt.id) {
         continue;
+      }
+      if (yieldToIdle) {
+        await yieldToIdle();
       }
       score += meanAcceptedSnapMeters(route, other.samples, other.window);
     }
@@ -465,7 +483,7 @@ export function summarizeJourneyPathVariants(
   });
 }
 
-export function planPathVariantRecompute(input: {
+export async function planPathVariantRecompute(input: {
   pool: JourneyPoolId;
   origin: Place;
   destination: Place;
@@ -473,8 +491,9 @@ export function planPathVariantRecompute(input: {
   routes: Route[];
   nowMs: number;
   createRouteId: () => string;
-}): PathVariantRecomputePlan {
-  const { pool, origin, destination, traces, routes, nowMs, createRouteId } = input;
+  yieldToIdle?: () => Promise<void>;
+}): Promise<PathVariantRecomputePlan> {
+  const { pool, origin, destination, traces, routes, nowMs, createRouteId, yieldToIdle } = input;
   const existing = pathVariantsForJourney(routes, origin, destination, pool.transportationMode);
   const competitive = traces.filter(
     (trace) =>
@@ -486,6 +505,9 @@ export function planPathVariantRecompute(input: {
 
   const prepared: PreparedTrace[] = [];
   for (const trace of competitive) {
+    if (yieldToIdle) {
+      await yieldToIdle();
+    }
     const window = attemptWindow(trace.attempt);
     if (!window) {
       continue;
@@ -505,7 +527,7 @@ export function planPathVariantRecompute(input: {
   const discoveryPool = prepared.filter(
     (trace) => matchesExistingVariant(trace, existing, origin, destination).length === 0,
   );
-  const clusters = completeLinkageClusters(discoveryPool, origin, destination);
+  const clusters = await completeLinkageClusters(discoveryPool, origin, destination, yieldToIdle);
   const newRoutes: Route[] = [];
   const usedNames = existing.map((route) => route.name);
 
@@ -513,7 +535,10 @@ export function planPathVariantRecompute(input: {
     if (cluster.length < PATH_VARIANT_RECURRENCE_MIN_ATTEMPTS) {
       continue;
     }
-    const medoid = pickMedoid(cluster, origin, destination);
+    if (yieldToIdle) {
+      await yieldToIdle();
+    }
+    const medoid = await pickMedoid(cluster, origin, destination, yieldToIdle);
     const considered = [...existing, ...newRoutes];
     if (variantConsumesCluster(medoid, considered, origin, destination)) {
       continue;
@@ -535,10 +560,15 @@ export function planPathVariantRecompute(input: {
   }
 
   const allVariants = [...existing, ...newRoutes];
-  const assignments: PathVariantAssignment[] = competitive.map((trace) => {
+  const assignments: PathVariantAssignment[] = [];
+  for (const trace of competitive) {
+    if (yieldToIdle) {
+      await yieldToIdle();
+    }
     const window = attemptWindow(trace.attempt);
     if (!window) {
-      return { attemptId: trace.attempt.id, routeId: null };
+      assignments.push({ attemptId: trace.attempt.id, routeId: null });
+      continue;
     }
     const matches = listCompatiblePathVariants(
       allVariants,
@@ -549,11 +579,11 @@ export function planPathVariantRecompute(input: {
       window,
       { includeArchived: false },
     );
-    return {
+    assignments.push({
       attemptId: trace.attempt.id,
       routeId: matches.length === 1 ? matches[0]!.id : null,
-    };
-  });
+    });
+  }
 
   return {
     classificationVersion: PATH_VARIANT_CLASSIFICATION_VERSION,

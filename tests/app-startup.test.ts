@@ -111,6 +111,9 @@ describe('app startup watchdog', () => {
         setTimeout(() => reject(new Error('startup waited on hanging recomputeAllPathVariants')), 200);
       }),
     ]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     assert.equal(homeReady, true);
     assert.equal(recomputeStarted, true);
@@ -173,6 +176,7 @@ describe('app startup watchdog', () => {
     const { workspace } = createMemoryWorkspace();
     workspace.recomputePathVariants = async () => {
       await pending();
+      return { skipped: false, poolsProcessed: 0, listSamplesCalls: 0 };
     };
     const failures: AppStartupFailure[] = [];
     let snapshot: HomeSnapshot | null = null;
@@ -221,7 +225,7 @@ describe('app startup watchdog', () => {
     assert.match(appRoot, /new AbortController/);
     assert.match(appRoot, /Stage: \{startupStage\}/);
     assert.match(appRoot, /APP_STARTUP_STAGE_LABELS\[startupStage\]/);
-    assert.match(appRoot, /recomputePathVariants: \(\) => workspace\.recomputePathVariants\(\)/);
+    assert.match(appRoot, /recomputePathVariants: async \(\) => \{\s*await workspace\.recomputePathVariants\(\{ skipIfUnchanged: true \}\);/s);
     assert.match(appRoot, /watchdogMs: APP_STARTUP_WATCHDOG_MS/);
     assert.equal(APP_STARTUP_WATCHDOG_MS, 10_000);
     assert.equal(APP_STARTUP_STAGE_LABELS['path-variant-recompute'], 'path-variant recompute');
@@ -230,5 +234,15 @@ describe('app startup watchdog', () => {
     assert.match(bootstrap, /recoverTracker/);
     assert.match(bootstrap, /reconcileAttempts/);
     assert.match(bootstrap, /loadHome/);
+
+    const startup = readFileSync('src/product/app-startup.ts', 'utf8');
+    const deferred = startup.slice(
+      startup.indexOf('const startDeferredRecompute'),
+      startup.indexOf('void (async () => {'),
+    );
+    assert.match(deferred, /timers\.setTimeout/);
+    assert.doesNotMatch(deferred, /Promise\.resolve\(\)/);
+    const startupEffect = appRoot.slice(appRoot.indexOf('const session = startAppStartup'), appRoot.indexOf('return () =>'));
+    assert.doesNotMatch(startupEffect, /setBusy/);
   });
 });
