@@ -8,6 +8,7 @@ import {
   focusDerivationKey,
   homeDerivationKey,
   journeyDerivationKey,
+  pathVariantRecomputeInputKey,
   rollingWindowMembershipKey,
   routeAnalysisDerivationKey,
 } from '../src/product/derived-view-cache';
@@ -179,5 +180,35 @@ describe('derived view cache keys', () => {
       asOfMs: 20_000,
     });
     assert.notEqual(before, after);
+  });
+
+  it('changes the path-variant recompute fingerprint when classification version or routeId changes', () => {
+    const attempt = completedAttempt('a1', { routeId: null });
+    const assigned = completedAttempt('a1', { routeId: 'route-1' });
+    const route = makeRoute({ id: 'route-1' });
+    const samples = [{ sessionId: 'session-a1', lastSampleAtMs: 20_000 }];
+    const before = pathVariantRecomputeInputKey({
+      classificationVersion: 1,
+      attempts: [attempt],
+      places: [HOME, WORK],
+      routes: [route],
+      sampleIdentities: samples,
+    });
+    const afterAssignment = pathVariantRecomputeInputKey({
+      classificationVersion: 1,
+      attempts: [assigned],
+      places: [HOME, WORK],
+      routes: [route],
+      sampleIdentities: samples,
+    });
+    const afterVersion = pathVariantRecomputeInputKey({
+      classificationVersion: 2,
+      attempts: [attempt],
+      places: [HOME, WORK],
+      routes: [route],
+      sampleIdentities: samples,
+    });
+    assert.notEqual(before, afterAssignment);
+    assert.notEqual(before, afterVersion);
   });
 });

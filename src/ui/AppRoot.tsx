@@ -350,7 +350,9 @@ export function AppRoot({ workspace }: AppRootProps) {
         recoverTracker: () => workspace.recoverTracker(),
         reconcileAttempts: () => workspace.reconcileAttempts(),
         loadHome: () => workspace.loadHome(),
-        recomputePathVariants: () => workspace.recomputePathVariants(),
+        recomputePathVariants: async () => {
+          await workspace.recomputePathVariants({ skipIfUnchanged: true });
+        },
       },
       {
         onStage: (stage) => {

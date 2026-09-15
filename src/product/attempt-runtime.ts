@@ -18,15 +18,17 @@ import {
 import { replayPlaceTrace, type PlaceStartZoneStatus } from '../domain/place-timing';
 import type { JourneyPoolId } from '../domain/journey';
 import { attemptJourneyPool } from '../domain/journey-analysis';
-import { planPathVariantRecompute } from '../domain/path-variant-discovery';
+import { PATH_VARIANT_CLASSIFICATION_VERSION, planPathVariantRecompute } from '../domain/path-variant-discovery';
 import type { TransportationMode } from '../domain/route';
 import { timingCourseFromRoute } from '../domain/attempt-analysis';
 import type { AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
-import type { SettingsStore } from '../persistence/settings-store';
+import { PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY, type SettingsStore } from '../persistence/settings-store';
 import type { LocationPlatform, LocationTracker } from '../tracking/location-tracker';
+import { pathVariantRecomputeInputKey } from './derived-view-cache';
+import { yieldToEventLoop, type IdleYield } from './idle-yield';
 
 export type ArmAttemptResult =
   | { ok: true; attempt: Attempt }
@@ -36,6 +38,17 @@ export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
   startZoneStatus: PlaceStartZoneStatus;
   gpsReadiness: GpsReadiness;
+};
+
+export type PathVariantRecomputeResult = {
+  skipped: boolean;
+  poolsProcessed: number;
+  listSamplesCalls: number;
+};
+
+export type PathVariantRecomputeOptions = {
+  skipIfUnchanged?: boolean;
+  yieldToIdle?: IdleYield;
 };
 
 const LOCATING_START_ZONE: PlaceStartZoneStatus = {
@@ -262,7 +275,17 @@ export class AttemptRuntime {
     return this.attempts.getAttempt(attemptId);
   }
 
-  async recomputeAllPathVariants(): Promise<void> {
+  async recomputeAllPathVariants(options: PathVariantRecomputeOptions = {}): Promise<PathVariantRecomputeResult> {
+    const yieldToIdle = options.yieldToIdle ?? yieldToEventLoop;
+    await yieldToIdle();
+    const currentKey = await this.pathVariantRecomputeFingerprint();
+    if (options.skipIfUnchanged) {
+      const stored = await this.settings.getValue(PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY);
+      if (stored === currentKey) {
+        return { skipped: true, poolsProcessed: 0, listSamplesCalls: 0 };
+      }
+    }
+
     const attempts = await this.attempts.listAttempts();
     const keys = new Map<string, JourneyPoolId>();
     for (const attempt of attempts) {
@@ -272,12 +295,29 @@ export class AttemptRuntime {
       }
       keys.set(`${pool.originPlaceId}|${pool.destinationPlaceId}|${pool.transportationMode}`, pool);
     }
+    let listSamplesCalls = 0;
+    let poolsProcessed = 0;
     for (const pool of keys.values()) {
-      await this.recomputePathVariantsForPool(pool);
+      await yieldToIdle();
+      await this.recomputePathVariantsForPool(pool, undefined, {
+        yieldToIdle,
+        onListSamples: () => {
+          listSamplesCalls += 1;
+        },
+      });
+      poolsProcessed += 1;
     }
+    const afterKey = await this.pathVariantRecomputeFingerprint();
+    await this.settings.setValue(PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY, afterKey);
+    return { skipped: false, poolsProcessed, listSamplesCalls };
   }
 
-  async recomputePathVariantsForPool(pool: JourneyPoolId, extra?: { attempt: Attempt; samples: LocationSample[] }): Promise<Attempt | null> {
+  async recomputePathVariantsForPool(
+    pool: JourneyPoolId,
+    extra?: { attempt: Attempt; samples: LocationSample[] },
+    options: { yieldToIdle?: IdleYield; onListSamples?: () => void } = {},
+  ): Promise<Attempt | null> {
+    const yieldToIdle = options.yieldToIdle ?? yieldToEventLoop;
     const origin = await this.places.getPlace(pool.originPlaceId);
     const destination = await this.places.getPlace(pool.destinationPlaceId);
     if (!origin || !destination) {
@@ -293,6 +333,8 @@ export class AttemptRuntime {
       if (extra && attempt.id === extra.attempt.id) {
         continue;
       }
+      await yieldToIdle();
+      options.onListSamples?.();
       traces.push({
         attempt,
         samples: await this.sessions.listSamples(attempt.sessionId),
@@ -302,7 +344,8 @@ export class AttemptRuntime {
       traces.push(extra);
     }
     const routes = await this.routes.listRoutes();
-    const plan = planPathVariantRecompute({
+    await yieldToIdle();
+    const plan = await planPathVariantRecompute({
       pool,
       origin,
       destination,
@@ -310,6 +353,7 @@ export class AttemptRuntime {
       routes,
       nowMs: this.now(),
       createRouteId: this.createRouteId,
+      yieldToIdle,
     });
     const idByPlanned = new Map<string, string>();
     for (const route of plan.newRoutes) {
@@ -322,6 +366,7 @@ export class AttemptRuntime {
     const resolveRouteId = (routeId: string | null) => (routeId == null ? null : (idByPlanned.get(routeId) ?? routeId));
     let extraResult: Attempt | null = extra?.attempt ?? null;
     for (const assignment of plan.assignments) {
+      await yieldToIdle();
       const routeId = resolveRouteId(assignment.routeId);
       const trace = traces.find((item) => item.attempt.id === assignment.attemptId);
       if (!trace) {
@@ -345,6 +390,34 @@ export class AttemptRuntime {
       }
     }
     return extraResult;
+  }
+
+  private async pathVariantRecomputeFingerprint(): Promise<string> {
+    const [attempts, places, routes] = await Promise.all([
+      this.attempts.listAttempts(),
+      this.places.listPlaces(),
+      this.routes.listRoutes(),
+    ]);
+    const sampleIdentities = [];
+    const seenSessions = new Set<string>();
+    for (const attempt of attempts) {
+      if (seenSessions.has(attempt.sessionId)) {
+        continue;
+      }
+      seenSessions.add(attempt.sessionId);
+      const session = await this.sessions.getSession(attempt.sessionId);
+      sampleIdentities.push({
+        sessionId: attempt.sessionId,
+        lastSampleAtMs: session?.lastSampleAtMs ?? null,
+      });
+    }
+    return pathVariantRecomputeInputKey({
+      classificationVersion: PATH_VARIANT_CLASSIFICATION_VERSION,
+      attempts,
+      places,
+      routes,
+      sampleIdentities,
+    });
   }
 
   private async placesForAttempt(attempt: Attempt): Promise<Place[]> {

@@ -251,3 +251,20 @@ export function routeAnalysisDerivationKey(input: {
     fingerprintSampleIdentities(input.sampleIdentities),
   ].join('::');
 }
+
+export function pathVariantRecomputeInputKey(input: {
+  classificationVersion: number;
+  attempts: readonly Attempt[];
+  places: readonly Place[];
+  routes: readonly Route[];
+  sampleIdentities: readonly SampleIdentity[];
+}): string {
+  return [
+    'path-variant-recompute',
+    String(input.classificationVersion),
+    fingerprintAttempts(input.attempts),
+    fingerprintPlaces(input.places),
+    fingerprintRoutes(input.routes),
+    fingerprintSampleIdentities(input.sampleIdentities),
+  ].join('::');
+}

@@ -185,13 +185,15 @@ export function startAppStartup<TSnapshot>(
   const startDeferredRecompute = () => {
     currentStage = 'path-variant-recompute';
     events.onStage('path-variant-recompute');
-    void Promise.resolve()
-      .then(() => host.recomputePathVariants())
-      .catch((caught: unknown) => {
-        events.onDeferredRecomputeError?.(
-          errorMessage(caught, 'Path-variant recompute failed after Home was already shown.'),
-        );
-      });
+    timers.setTimeout(() => {
+      void host
+        .recomputePathVariants()
+        .catch((caught: unknown) => {
+          events.onDeferredRecomputeError?.(
+            errorMessage(caught, 'Path-variant recompute failed after Home was already shown.'),
+          );
+        });
+    }, 0);
   };
 
   void (async () => {

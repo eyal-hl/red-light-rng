@@ -59,6 +59,8 @@ import type { LocationPlatform, LocationFix, LocationTracker } from '../tracking
 import {
   AttemptRuntime,
   type ArmAttemptResult,
+  type PathVariantRecomputeOptions,
+  type PathVariantRecomputeResult,
   type ProcessActiveAttemptResult,
 } from './attempt-runtime';
 import {
@@ -132,6 +134,7 @@ export type AnalyzeJourneyResult = {
 
 export class RouteWorkspace {
   readonly navigationLoad: NavigationLoadState = createNavigationLoadState();
+  lastPathVariantRecompute: PathVariantRecomputeResult | null = null;
   private readonly homeCache = new SingleKeyedCache<HomeSnapshot>();
   private readonly journeyCache = new MapKeyedCache<LoadedJourney>();
   private readonly focusCache = new MapKeyedCache<AnalyzeJourneyResult>();
@@ -171,8 +174,19 @@ export class RouteWorkspace {
     await this.attempts.reconcile();
   }
 
-  async recomputePathVariants(): Promise<void> {
-    await this.attempts.recomputeAllPathVariants();
+  async recomputePathVariants(options: PathVariantRecomputeOptions = {}): Promise<PathVariantRecomputeResult> {
+    return timeNavigationLoad(this.navigationLoad, 'recomputePathVariants', async () => {
+      const result = await this.attempts.recomputeAllPathVariants(options);
+      this.lastPathVariantRecompute = result;
+      if (result.skipped) {
+        this.navigationLoad.counters.pathVariantRecomputeSkips += 1;
+      } else {
+        this.navigationLoad.counters.pathVariantRecomputeRuns += 1;
+      }
+      this.navigationLoad.counters.pathVariantRecomputeListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      return { value: result, cacheHit: result.skipped };
+    });
   }
 
   async bootstrap(): Promise<HomeSnapshot> {
