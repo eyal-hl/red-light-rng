@@ -23,6 +23,7 @@ type HomeScreenProps = {
   canStartNewRecording: boolean;
   busy: boolean;
   error: string | null;
+  failedReconciliationAttemptId: string | null;
   onStart: () => void;
   onOpenJourney: (originPlaceId: string, destinationPlaceId: string, mode: TransportationMode) => void;
   onOpenIncomplete: (attemptId: string) => void;
@@ -30,6 +31,7 @@ type HomeScreenProps = {
   onOpenSettings: () => void;
   onRecordPathVariant: () => void;
   onOpenPending: () => void;
+  onRetryReconciliation: () => void;
 };
 
 export function HomeScreen({
@@ -43,6 +45,7 @@ export function HomeScreen({
   canStartNewRecording,
   busy,
   error,
+  failedReconciliationAttemptId,
   onStart,
   onOpenJourney,
   onOpenIncomplete,
@@ -50,6 +53,7 @@ export function HomeScreen({
   onOpenSettings,
   onRecordPathVariant,
   onOpenPending,
+  onRetryReconciliation,
 }: HomeScreenProps) {
   const startDisabled = busy || !canStartAttempt;
   const recordDisabled = busy || !canStartNewRecording;
@@ -140,6 +144,24 @@ export function HomeScreen({
                 <Text style={styles.cardMeta}>Debug trace preserved</Text>
               </Pressable>
             ))}
+          </View>
+        ) : null}
+
+        {failedReconciliationAttemptId ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Could not finish one attempt</Text>
+            <Text style={styles.cardMeta}>
+              Retry repairs only that attempt. Historical attempts that already finished stay untouched.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry failed attempt reconciliation"
+              disabled={busy}
+              onPress={onRetryReconciliation}
+              style={[styles.button, styles.primaryButton, busy ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>RETRY</Text>
+            </Pressable>
           </View>
         ) : null}
 

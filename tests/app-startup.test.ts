@@ -26,6 +26,7 @@ const HOME: HomeSnapshot = {
   attemptResult: null,
   canStartNewRecording: true,
   canStartAttempt: true,
+  failedReconciliationAttemptId: null,
 };
 
 function pending<T>(): Promise<T> {
@@ -38,7 +39,7 @@ function resolvingHost(overrides: Partial<AppStartupHost<HomeSnapshot>> = {}): A
     recoverTracker: async () => {},
     reconcileAttempts: async () => {},
     loadHome: async () => HOME,
-    recomputePathVariants: async () => {},
+    reconcilePendingAttempts: async () => {},
     ...overrides,
   };
 }
@@ -78,15 +79,15 @@ describe('app startup watchdog', () => {
     assert.match(formatStartupError(failures[0]!), /tracker recovery/);
   });
 
-  it('does not wait for a hanging path-variant recompute before Home is ready', async () => {
+  it('does not wait for hanging pending attempt repair before Home is ready', async () => {
     let homeReady = false;
-    let recomputeStarted = false;
+    let pendingStarted = false;
     let deferredError: string | null = null;
     const failures: AppStartupFailure[] = [];
     const session = startAppStartup(
       resolvingHost({
-        recomputePathVariants: () => {
-          recomputeStarted = true;
+        reconcilePendingAttempts: () => {
+          pendingStarted = true;
           return pending();
         },
       }),
@@ -108,12 +109,15 @@ describe('app startup watchdog', () => {
     await Promise.race([
       session.finished,
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('startup waited on hanging recomputeAllPathVariants')), 200);
+        setTimeout(() => reject(new Error('startup waited on hanging reconcilePendingAttempts')), 200);
       }),
     ]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     assert.equal(homeReady, true);
-    assert.equal(recomputeStarted, true);
+    assert.equal(pendingStarted, true);
     assert.equal(failures.length, 0);
     assert.equal(deferredError, null);
     session.cancel();
@@ -169,10 +173,11 @@ describe('app startup watchdog', () => {
     assert.match(failures[0]?.message ?? '', /attempt-reconcile/);
   });
 
-  it('still reaches Home when a real workspace path-variant recompute is replaced with a hang', async () => {
+  it('still reaches Home when a real workspace pending-attempt repair is replaced with a hang', async () => {
     const { workspace } = createMemoryWorkspace();
-    workspace.recomputePathVariants = async () => {
+    workspace.reconcilePendingAttempts = async () => {
       await pending();
+      return workspace.lastAttemptReconciliation;
     };
     const failures: AppStartupFailure[] = [];
     let snapshot: HomeSnapshot | null = null;
@@ -182,7 +187,7 @@ describe('app startup watchdog', () => {
         recoverTracker: () => workspace.recoverTracker(),
         reconcileAttempts: () => workspace.reconcileAttempts(),
         loadHome: () => workspace.loadHome(),
-        recomputePathVariants: () => workspace.recomputePathVariants(),
+        reconcilePendingAttempts: () => workspace.reconcilePendingAttempts(),
       },
       {
         onStage: () => {},
@@ -199,7 +204,7 @@ describe('app startup watchdog', () => {
     await Promise.race([
       session.finished,
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('workspace startup waited on hanging recompute')), 400);
+        setTimeout(() => reject(new Error('workspace startup waited on hanging pending repair')), 400);
       }),
     ]);
 
@@ -208,7 +213,7 @@ describe('app startup watchdog', () => {
     session.cancel();
   });
 
-  it('wires AppRoot to the independent watchdog, shows the stuck stage, and defers recompute', () => {
+  it('wires AppRoot to the independent watchdog, shows the stuck stage, and defers pending repair', () => {
     const appRoot = readFileSync('src/ui/AppRoot.tsx', 'utf8');
     const workspace = readFileSync('src/product/route-workspace.ts', 'utf8');
     const bootstrap = workspace.slice(
@@ -221,14 +226,24 @@ describe('app startup watchdog', () => {
     assert.match(appRoot, /new AbortController/);
     assert.match(appRoot, /Stage: \{startupStage\}/);
     assert.match(appRoot, /APP_STARTUP_STAGE_LABELS\[startupStage\]/);
-    assert.match(appRoot, /recomputePathVariants: \(\) => workspace\.recomputePathVariants\(\)/);
+    assert.match(appRoot, /reconcilePendingAttempts: async \(\) => \{/);
     assert.match(appRoot, /watchdogMs: APP_STARTUP_WATCHDOG_MS/);
     assert.equal(APP_STARTUP_WATCHDOG_MS, 10_000);
-    assert.equal(APP_STARTUP_STAGE_LABELS['path-variant-recompute'], 'path-variant recompute');
-    assert.doesNotMatch(bootstrap, /recomputeAllPathVariants|recomputePathVariants/);
+    assert.equal(APP_STARTUP_STAGE_LABELS['pending-attempt-reconcile'], 'pending attempt repair');
+    assert.doesNotMatch(bootstrap, /recomputeAllPathVariants|recomputePathVariants|reconcilePendingAttempts/);
     assert.match(bootstrap, /preparePersistence/);
     assert.match(bootstrap, /recoverTracker/);
     assert.match(bootstrap, /reconcileAttempts/);
     assert.match(bootstrap, /loadHome/);
+
+    const startup = readFileSync('src/product/app-startup.ts', 'utf8');
+    const deferred = startup.slice(
+      startup.indexOf('const startDeferredPendingReconcile'),
+      startup.indexOf('void (async () => {'),
+    );
+    assert.match(deferred, /timers\.setTimeout/);
+    assert.doesNotMatch(deferred, /Promise\.resolve\(\)/);
+    const startupEffect = appRoot.slice(appRoot.indexOf('const session = startAppStartup'), appRoot.indexOf('return () =>'));
+    assert.doesNotMatch(startupEffect, /setBusy/);
   });
 });

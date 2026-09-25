@@ -37,7 +37,7 @@ describe('attempt display route', () => {
       appRoot.indexOf('const onBackFromHistoryDetail'),
     );
     assert.match(showAttemptResult, /resolveAttemptDisplayRoute\(attempt,/);
-    assert.match(onOpenHistoryAttempt, /resolveAttemptDisplayRoute\(attempt,/);
+    assert.match(onOpenHistoryAttempt, /showAttemptResult\(attempt/);
     assert.match(appRoot, /screen\.kind === 'attempt-detail' && attemptResult[\s\S]*route=\{selectedRoute\}/);
   });
 });

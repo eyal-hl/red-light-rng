@@ -6,7 +6,8 @@ export type AppStartupStage =
   | 'tracker-recover'
   | 'attempt-reconcile'
   | 'load-home'
-  | 'path-variant-recompute';
+  | 'path-variant-recompute'
+  | 'pending-attempt-reconcile';
 
 export const APP_STARTUP_STAGE_LABELS: Record<AppStartupStage, string> = {
   'opening-database': 'database open / migrations',
@@ -14,6 +15,7 @@ export const APP_STARTUP_STAGE_LABELS: Record<AppStartupStage, string> = {
   'attempt-reconcile': 'attempt reconcile',
   'load-home': 'load Home',
   'path-variant-recompute': 'path-variant recompute',
+  'pending-attempt-reconcile': 'pending attempt repair',
 };
 
 export type AppStartupFailure = {
@@ -27,7 +29,7 @@ export type AppStartupHost<TSnapshot> = {
   recoverTracker: () => Promise<void>;
   reconcileAttempts: () => Promise<void>;
   loadHome: () => Promise<TSnapshot>;
-  recomputePathVariants: () => Promise<void>;
+  reconcilePendingAttempts: () => Promise<void>;
 };
 
 export type AppStartupEvents<TSnapshot> = {
@@ -182,16 +184,18 @@ export function startAppStartup<TSnapshot>(
     });
   }, watchdogMs);
 
-  const startDeferredRecompute = () => {
-    currentStage = 'path-variant-recompute';
-    events.onStage('path-variant-recompute');
-    void Promise.resolve()
-      .then(() => host.recomputePathVariants())
-      .catch((caught: unknown) => {
-        events.onDeferredRecomputeError?.(
-          errorMessage(caught, 'Path-variant recompute failed after Home was already shown.'),
-        );
-      });
+  const startDeferredPendingReconcile = () => {
+    currentStage = 'pending-attempt-reconcile';
+    events.onStage('pending-attempt-reconcile');
+    timers.setTimeout(() => {
+      void host
+        .reconcilePendingAttempts()
+        .catch((caught: unknown) => {
+          events.onDeferredRecomputeError?.(
+            errorMessage(caught, 'Pending attempt repair failed after Home was already shown.'),
+          );
+        });
+    }, 0);
   };
 
   void (async () => {
@@ -209,7 +213,7 @@ export function startAppStartup<TSnapshot>(
       }
       settled = true;
       clearAllTimers();
-      startDeferredRecompute();
+      startDeferredPendingReconcile();
       resolveFinished();
     } catch (caught) {
       const timedOut = caught instanceof AppStartupTimeoutError;

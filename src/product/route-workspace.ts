@@ -25,6 +25,10 @@ import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-deriv
 import type { TrackingState } from '../domain/tracking-state';
 import { isOpenAttempt, type Attempt } from '../domain/attempt';
 import {
+  emptyAttemptReconciliationReport,
+  type AttemptReconciliationReport,
+} from '../domain/attempt-reconciliation';
+import {
   analyzeFocusAttempt,
   analyzeRouteAttempts,
   deriveAnchoredLayoutAttempt,
@@ -36,10 +40,13 @@ import {
 import { inspectAttemptRecord, type AttemptDebugReport } from '../domain/attempt-debug';
 import {
   analyzeJourneyFocus,
+  analyzeJourneyHeadline,
+  attemptInPool,
   incompleteAttempts,
   journeyHistoryRows,
   listJourneyPools,
   summarizeJourneyPool,
+  tracesFromAttempts,
   type JourneyAttemptTrace,
   type JourneyFocusAnalysis,
   type JourneyHistoryRow,
@@ -56,8 +63,25 @@ import type { LocationPlatform, LocationFix, LocationTracker } from '../tracking
 import {
   AttemptRuntime,
   type ArmAttemptResult,
+  type PathVariantRecomputeOptions,
+  type PathVariantRecomputeResult,
   type ProcessActiveAttemptResult,
 } from './attempt-runtime';
+import {
+  debugDerivationKey,
+  focusDerivationKey,
+  homeDerivationKey,
+  journeyDerivationKey,
+  MapKeyedCache,
+  routeAnalysisDerivationKey,
+  SingleKeyedCache,
+  type SampleIdentity,
+} from './derived-view-cache';
+import {
+  createNavigationLoadState,
+  timeNavigationLoad,
+  type NavigationLoadState,
+} from './navigation-load';
 
 export type HomeSnapshot = {
   routes: Route[];
@@ -71,6 +95,7 @@ export type HomeSnapshot = {
   attemptResult: Attempt | null;
   canStartNewRecording: boolean;
   canStartAttempt: boolean;
+  failedReconciliationAttemptId: string | null;
 };
 
 export type SaveRouteResult =
@@ -95,7 +120,36 @@ export type CombinedAttemptDebug = {
   variant: AttemptDebugReport | null;
 };
 
+export type LoadedJourney = {
+  origin: Place;
+  destination: Place;
+  summary: JourneyPoolSummary;
+  statistics: JourneyPoolStatistics;
+  departureGrouping: JourneyDepartureGrouping;
+  history: JourneyHistoryRow[];
+  routes: Route[];
+  pathVariants: JourneyPathVariantSummary[];
+};
+
+export type AnalyzeJourneyResult = {
+  summary: JourneyPoolSummary;
+  history: JourneyHistoryRow[];
+  focus: JourneyFocusAnalysis | null;
+};
+
 export class RouteWorkspace {
+  readonly navigationLoad: NavigationLoadState = createNavigationLoadState();
+  lastPathVariantRecompute: PathVariantRecomputeResult | null = null;
+  lastAttemptReconciliation: AttemptReconciliationReport = emptyAttemptReconciliationReport();
+  private readonly homeCache = new SingleKeyedCache<HomeSnapshot>();
+  private readonly journeyCache = new MapKeyedCache<LoadedJourney>();
+  private readonly focusCache = new MapKeyedCache<AnalyzeJourneyResult>();
+  private readonly debugCache = new MapKeyedCache<CombinedAttemptDebug | null>();
+  private readonly routeAnalysisCache = new MapKeyedCache<{
+    route: Route;
+    analysis: RouteAttemptAnalysis;
+  }>();
+
   constructor(
     private readonly tracker: LocationTracker,
     private readonly sessions: LocationSampleStore,
@@ -109,6 +163,11 @@ export class RouteWorkspace {
     private readonly createPlaceId: () => string = createId,
   ) {}
 
+  resetNavigationLoad(): void {
+    this.navigationLoad.counters = createNavigationLoadState().counters;
+    this.navigationLoad.timings = [];
+  }
+
   async preparePersistence(): Promise<void> {
     await this.settings.getActiveTransportationMode();
   }
@@ -121,8 +180,47 @@ export class RouteWorkspace {
     await this.attempts.reconcile();
   }
 
-  async recomputePathVariants(): Promise<void> {
-    await this.attempts.recomputeAllPathVariants();
+  async reconcilePendingAttempts(options: PathVariantRecomputeOptions = {}): Promise<AttemptReconciliationReport> {
+    return timeNavigationLoad(this.navigationLoad, 'reconcilePendingAttempts', async () => {
+      const result = await this.attempts.reconcilePendingAttempts(options);
+      this.lastAttemptReconciliation = result;
+      this.navigationLoad.counters.reconcilePendingSelected += result.selectedCount;
+      this.navigationLoad.counters.reconcilePendingListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      if (result.selectedCount === 0) {
+        this.navigationLoad.counters.reconcilePendingSkips += 1;
+      } else {
+        this.navigationLoad.counters.reconcilePendingRuns += 1;
+      }
+      return { value: result, cacheHit: result.selectedCount === 0 };
+    });
+  }
+
+  async retryAttemptReconciliation(attemptId: string): Promise<AttemptReconciliationReport> {
+    return timeNavigationLoad(this.navigationLoad, 'reconcilePendingAttempts', async () => {
+      const result = await this.attempts.retryAttemptReconciliation(attemptId);
+      this.lastAttemptReconciliation = result;
+      this.navigationLoad.counters.reconcilePendingSelected += result.selectedCount;
+      this.navigationLoad.counters.reconcilePendingListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      this.navigationLoad.counters.reconcilePendingRuns += 1;
+      return { value: result, cacheHit: false };
+    });
+  }
+
+  async recomputePathVariants(options: PathVariantRecomputeOptions = {}): Promise<PathVariantRecomputeResult> {
+    return timeNavigationLoad(this.navigationLoad, 'recomputePathVariants', async () => {
+      const result = await this.attempts.recomputeAllPathVariants(options);
+      this.lastPathVariantRecompute = result;
+      if (result.skipped) {
+        this.navigationLoad.counters.pathVariantRecomputeSkips += 1;
+      } else {
+        this.navigationLoad.counters.pathVariantRecomputeRuns += 1;
+      }
+      this.navigationLoad.counters.pathVariantRecomputeListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      return { value: result, cacheHit: result.skipped };
+    });
   }
 
   async bootstrap(): Promise<HomeSnapshot> {
@@ -133,42 +231,65 @@ export class RouteWorkspace {
   }
 
   async loadHome(): Promise<HomeSnapshot> {
-    const [
-      routes,
-      placeList,
-      activeSession,
-      pendingRecording,
-      activeAttempt,
-      attemptResult,
-      allAttempts,
-      activeTransportationMode,
-    ] = await Promise.all([
-      this.routes.listRoutes(),
-      this.places.listPlaces(),
-      this.sessions.getActiveSession(),
-      this.sessions.findPendingRouteCreation(),
-      this.attempts.getOpenAttempt(),
-      this.attempts.getUnacknowledgedResult(),
-      this.attempts.listAttempts(),
-      this.settings.getActiveTransportationMode(),
-    ]);
-    const traces = await this.tracesForAttempts(allAttempts);
-    const placesById = new Map(placeList.map((place) => [place.id, place]));
-    const activeRecording = activeSession?.purpose === 'route_creation' ? activeSession : null;
-    const canStart = activeSession == null && pendingRecording == null;
-    return {
-      routes,
-      places: placeList,
-      journeys: listJourneyPools(traces, placesById),
-      incompleteAttempts: incompleteAttempts(traces),
-      activeTransportationMode,
-      activeRecording,
-      pendingRecording,
-      activeAttempt,
-      attemptResult: activeAttempt ? null : attemptResult,
-      canStartNewRecording: canStart,
-      canStartAttempt: canStart,
-    };
+    return timeNavigationLoad(this.navigationLoad, 'loadHome', async () => {
+      this.navigationLoad.counters.loadHomeReads += 1;
+      const [
+        routes,
+        placeList,
+        activeSession,
+        pendingRecording,
+        activeAttempt,
+        attemptResult,
+        allAttempts,
+        activeTransportationMode,
+        failedReconciliationAttemptId,
+      ] = await Promise.all([
+        this.routes.listRoutes(),
+        this.places.listPlaces(),
+        this.sessions.getActiveSession(),
+        this.sessions.findPendingRouteCreation(),
+        this.attempts.getOpenAttempt(),
+        this.attempts.getUnacknowledgedResult(),
+        this.attempts.listAttempts(),
+        this.settings.getActiveTransportationMode(),
+        this.attempts.peekFailedReconciliationAttemptId(),
+      ]);
+      const activeRecording = activeSession?.purpose === 'route_creation' ? activeSession : null;
+      const key = homeDerivationKey({
+        attempts: allAttempts,
+        places: placeList,
+        activeTransportationMode,
+        activeRecording,
+        pendingRecording,
+        activeAttemptId: activeAttempt?.id ?? null,
+        attemptResultId: activeAttempt ? null : (attemptResult?.id ?? null),
+      });
+      const cached = this.homeCache.get(key);
+      if (cached) {
+        this.navigationLoad.counters.loadHomeHits += 1;
+        return { value: cached, cacheHit: true };
+      }
+      this.navigationLoad.counters.loadHomeMisses += 1;
+      const traces = tracesFromAttempts(allAttempts);
+      const placesById = new Map(placeList.map((place) => [place.id, place]));
+      const canStart = activeSession == null && pendingRecording == null;
+      const snapshot: HomeSnapshot = {
+        routes,
+        places: placeList,
+        journeys: listJourneyPools(traces, placesById),
+        incompleteAttempts: incompleteAttempts(traces),
+        activeTransportationMode,
+        activeRecording,
+        pendingRecording,
+        activeAttempt,
+        attemptResult: activeAttempt ? null : attemptResult,
+        canStartNewRecording: canStart,
+        canStartAttempt: canStart,
+        failedReconciliationAttemptId,
+      };
+      this.homeCache.set(key, snapshot);
+      return { value: snapshot, cacheHit: false };
+    });
   }
 
   async startRouteRecording(): Promise<void> {
@@ -218,7 +339,7 @@ export class RouteWorkspace {
     derivation: RouteDerivation;
   }> {
     const session = await this.sessions.getSession(sessionId);
-    const samples = await this.sessions.listSamples(sessionId);
+    const samples = await this.listAttemptSamples(sessionId);
     return {
       session,
       samples,
@@ -451,23 +572,45 @@ export class RouteWorkspace {
   }
 
   async inspectAttempt(attemptId: string): Promise<CombinedAttemptDebug | null> {
-    const attempt = await this.attempts.getAttempt(attemptId);
-    if (!attempt) {
-      return null;
-    }
-    const samples = await this.sessions.listSamples(attempt.sessionId);
-    const places = await this.places.listPlaces();
-    const session = await this.sessions.getSession(attempt.sessionId);
-    const inspectNow = isOpenAttempt(attempt) ? this.now() : (session?.stoppedAtMs ?? this.now());
-    const place = inspectPlaceAttemptRecord(attempt, places, samples, inspectNow);
-    let variant: AttemptDebugReport | null = null;
-    if (attempt.routeId) {
-      const route = await this.routes.getRoute(attempt.routeId);
+    return timeNavigationLoad(this.navigationLoad, 'inspectAttempt', async () => {
+      this.navigationLoad.counters.inspectAttemptReads += 1;
+      const attempt = await this.attempts.getAttempt(attemptId);
+      if (!attempt) {
+        this.navigationLoad.counters.inspectAttemptMisses += 1;
+        return { value: null, cacheHit: false };
+      }
+      const [places, session, route] = await Promise.all([
+        this.places.listPlaces(),
+        this.sessions.getSession(attempt.sessionId),
+        attempt.routeId ? this.routes.getRoute(attempt.routeId) : Promise.resolve(null),
+      ]);
+      const sampleIdentity: SampleIdentity = {
+        sessionId: attempt.sessionId,
+        lastSampleAtMs: session?.lastSampleAtMs ?? null,
+      };
+      const key = debugDerivationKey({
+        attempt,
+        places,
+        route,
+        sampleIdentity,
+      });
+      const cached = this.debugCache.get(key);
+      if (cached !== undefined) {
+        this.navigationLoad.counters.inspectAttemptHits += 1;
+        return { value: cached, cacheHit: true };
+      }
+      this.navigationLoad.counters.inspectAttemptMisses += 1;
+      const samples = await this.listAttemptSamples(attempt.sessionId);
+      const inspectNow = isOpenAttempt(attempt) ? this.now() : (session?.stoppedAtMs ?? this.now());
+      const place = inspectPlaceAttemptRecord(attempt, places, samples, inspectNow);
+      let variant: AttemptDebugReport | null = null;
       if (route) {
         variant = inspectAttemptRecord(attempt, timingCourseFromRoute(route), samples);
       }
-    }
-    return { place, variant };
+      const debug: CombinedAttemptDebug = { place, variant };
+      this.debugCache.set(key, debug);
+      return { value: debug, cacheHit: false };
+    });
   }
 
   async processActiveAttempt(): Promise<Attempt | null> {
@@ -515,25 +658,47 @@ export class RouteWorkspace {
     for (const attempt of attempts) {
       traces.push({
         attempt,
-        samples: await this.sessions.listSamples(attempt.sessionId),
+        samples: await this.listAttemptSamples(attempt.sessionId),
       });
     }
     return { route, traces };
   }
 
   async analyzeRoute(routeId: string): Promise<{ route: Route; analysis: RouteAttemptAnalysis } | null> {
-    const loaded = await this.loadRouteTraces(routeId);
-    if (!loaded) {
-      return null;
-    }
-    return {
-      route: loaded.route,
-      analysis: analyzeRouteAttempts(
-        timingCourseFromRoute(loaded.route),
-        loaded.traces,
-        deriveAnchoredLayoutAttempt,
-      ),
-    };
+    return timeNavigationLoad(this.navigationLoad, 'analyzeRoute', async () => {
+      this.navigationLoad.counters.analyzeRouteReads += 1;
+      const route = await this.routes.getRoute(routeId);
+      if (!route) {
+        this.navigationLoad.counters.analyzeRouteMisses += 1;
+        return { value: null, cacheHit: false };
+      }
+      const attempts = await this.attempts.listAttemptsForRoute(routeId);
+      const sampleIdentities = await this.sampleIdentitiesFor(attempts);
+      const key = routeAnalysisDerivationKey({ route, attempts, sampleIdentities });
+      const cached = this.routeAnalysisCache.get(key);
+      if (cached) {
+        this.navigationLoad.counters.analyzeRouteHits += 1;
+        return { value: cached, cacheHit: true };
+      }
+      this.navigationLoad.counters.analyzeRouteMisses += 1;
+      const traces: AttemptTrace[] = [];
+      for (const attempt of attempts) {
+        traces.push({
+          attempt,
+          samples: await this.listAttemptSamples(attempt.sessionId),
+        });
+      }
+      const result = {
+        route,
+        analysis: analyzeRouteAttempts(
+          timingCourseFromRoute(route),
+          traces,
+          deriveAnchoredLayoutAttempt,
+        ),
+      };
+      this.routeAnalysisCache.set(key, result);
+      return { value: result, cacheHit: false };
+    });
   }
 
   async analyzeAttempt(routeId: string, attemptId: string): Promise<FocusAttemptAnalysis | null> {
@@ -549,72 +714,151 @@ export class RouteWorkspace {
     );
   }
 
-  async analyzeJourney(
+  async analyzeJourneyHeadline(
     pool: JourneyPoolId,
     attemptId: string,
-  ): Promise<{
-    summary: JourneyPoolSummary;
-    history: JourneyHistoryRow[];
-    focus: JourneyFocusAnalysis | null;
-  } | null> {
-    const origin = await this.places.getPlace(pool.originPlaceId);
-    const destination = await this.places.getPlace(pool.destinationPlaceId);
-    if (!origin || !destination) {
-      return null;
-    }
-    const traces = await this.tracesForAttempts(await this.attempts.listAttempts());
-    const routes = await this.routes.listRoutes();
-    return {
-      summary: summarizeJourneyPool(pool, origin, destination, traces),
-      history: journeyHistoryRows(pool, traces),
-      focus: analyzeJourneyFocus(pool, origin, destination, traces, attemptId, routes),
-    };
+  ): Promise<AnalyzeJourneyResult | null> {
+    return timeNavigationLoad(this.navigationLoad, 'analyzeJourneyHeadline', async () => {
+      this.navigationLoad.counters.analyzeJourneyHeadlineReads += 1;
+      const origin = await this.places.getPlace(pool.originPlaceId);
+      const destination = await this.places.getPlace(pool.destinationPlaceId);
+      if (!origin || !destination) {
+        return { value: null, cacheHit: false };
+      }
+      const attempts = await this.attempts.listAttempts();
+      const traces = tracesFromAttempts(attempts);
+      return {
+        value: {
+          summary: summarizeJourneyPool(pool, origin, destination, traces),
+          history: journeyHistoryRows(pool, traces),
+          focus: analyzeJourneyHeadline(pool, origin, destination, traces, attemptId),
+        },
+        cacheHit: false,
+      };
+    });
   }
 
-  async loadJourney(
-    pool: JourneyPoolId,
-  ): Promise<{
-    origin: Place;
-    destination: Place;
-    summary: JourneyPoolSummary;
-    statistics: JourneyPoolStatistics;
-    departureGrouping: JourneyDepartureGrouping;
-    history: JourneyHistoryRow[];
-    routes: Route[];
-    pathVariants: JourneyPathVariantSummary[];
-  } | null> {
-    const origin = await this.places.getPlace(pool.originPlaceId);
-    const destination = await this.places.getPlace(pool.destinationPlaceId);
-    if (!origin || !destination) {
-      return null;
-    }
-    const traces = await this.tracesForAttempts(await this.attempts.listAttempts());
-    const routes = await this.routes.listRoutes();
-    const asOfMs = this.now();
-    return {
-      origin,
-      destination,
-      summary: summarizeJourneyPool(pool, origin, destination, traces),
-      statistics: computeJourneyPoolStatistics(pool, traces, asOfMs),
-      departureGrouping: computeJourneyPoolDepartureGrouping(pool, traces, asOfMs),
-      history: journeyHistoryRows(pool, traces),
-      routes,
-      pathVariants: summarizeJourneyPathVariants(
+  async analyzeJourney(pool: JourneyPoolId, attemptId: string): Promise<AnalyzeJourneyResult | null> {
+    return timeNavigationLoad(this.navigationLoad, 'analyzeJourney', async () => {
+      this.navigationLoad.counters.analyzeJourneyReads += 1;
+      const origin = await this.places.getPlace(pool.originPlaceId);
+      const destination = await this.places.getPlace(pool.destinationPlaceId);
+      if (!origin || !destination) {
+        this.navigationLoad.counters.analyzeJourneyMisses += 1;
+        return { value: null, cacheHit: false };
+      }
+      const [allAttempts, routes] = await Promise.all([
+        this.attempts.listAttempts(),
+        this.routes.listRoutes(),
+      ]);
+      const poolAttempts = allAttempts.filter((attempt) => attemptInPool(attempt, pool));
+      const sampleIdentities = await this.sampleIdentitiesFor(poolAttempts);
+      const key = focusDerivationKey({
+        pool,
+        attemptId,
+        attempts: poolAttempts,
         origin,
         destination,
-        pool.transportationMode,
-        traces,
         routes,
-      ),
-    };
+        sampleIdentities,
+      });
+      const cached = this.focusCache.get(key);
+      if (cached) {
+        this.navigationLoad.counters.analyzeJourneyHits += 1;
+        return { value: cached, cacheHit: true };
+      }
+      this.navigationLoad.counters.analyzeJourneyMisses += 1;
+      const traces = await this.tracesWithSamples(poolAttempts);
+      const result: AnalyzeJourneyResult = {
+        summary: summarizeJourneyPool(pool, origin, destination, traces),
+        history: journeyHistoryRows(pool, traces),
+        focus: analyzeJourneyFocus(pool, origin, destination, traces, attemptId, routes),
+      };
+      this.focusCache.set(key, result);
+      return { value: result, cacheHit: false };
+    });
   }
 
-  private async tracesForAttempts(attempts: Attempt[]): Promise<JourneyAttemptTrace[]> {
+  async loadJourney(pool: JourneyPoolId): Promise<LoadedJourney | null> {
+    return timeNavigationLoad(this.navigationLoad, 'loadJourney', async () => {
+      this.navigationLoad.counters.loadJourneyReads += 1;
+      const origin = await this.places.getPlace(pool.originPlaceId);
+      const destination = await this.places.getPlace(pool.destinationPlaceId);
+      if (!origin || !destination) {
+        this.navigationLoad.counters.loadJourneyMisses += 1;
+        return { value: null, cacheHit: false };
+      }
+      const [allAttempts, routes] = await Promise.all([
+        this.attempts.listAttempts(),
+        this.routes.listRoutes(),
+      ]);
+      const asOfMs = this.now();
+      const poolAttempts = allAttempts.filter((attempt) => attemptInPool(attempt, pool));
+      const key = journeyDerivationKey({
+        pool,
+        attempts: poolAttempts,
+        origin,
+        destination,
+        routes,
+        asOfMs,
+      });
+      const cached = this.journeyCache.get(key);
+      if (cached) {
+        this.navigationLoad.counters.loadJourneyHits += 1;
+        return {
+          value: {
+            ...cached,
+            statistics: { ...cached.statistics, asOfMs },
+          },
+          cacheHit: true,
+        };
+      }
+      this.navigationLoad.counters.loadJourneyMisses += 1;
+      const traces = tracesFromAttempts(poolAttempts);
+      const loaded: LoadedJourney = {
+        origin,
+        destination,
+        summary: summarizeJourneyPool(pool, origin, destination, traces),
+        statistics: computeJourneyPoolStatistics(pool, traces, asOfMs),
+        departureGrouping: computeJourneyPoolDepartureGrouping(pool, traces, asOfMs),
+        history: journeyHistoryRows(pool, traces),
+        routes,
+        pathVariants: summarizeJourneyPathVariants(
+          origin,
+          destination,
+          pool.transportationMode,
+          traces,
+          routes,
+        ),
+      };
+      this.journeyCache.set(key, loaded);
+      return { value: loaded, cacheHit: false };
+    });
+  }
+
+  private async listAttemptSamples(sessionId: string): Promise<LocationSample[]> {
+    this.navigationLoad.counters.listSamplesCalls += 1;
+    return this.sessions.listSamples(sessionId);
+  }
+
+  private async sampleIdentitiesFor(attempts: Attempt[]): Promise<SampleIdentity[]> {
+    const identities: SampleIdentity[] = [];
+    for (const attempt of attempts) {
+      const session = await this.sessions.getSession(attempt.sessionId);
+      identities.push({
+        sessionId: attempt.sessionId,
+        lastSampleAtMs: session?.lastSampleAtMs ?? null,
+      });
+    }
+    return identities;
+  }
+
+  private async tracesWithSamples(attempts: Attempt[]): Promise<JourneyAttemptTrace[]> {
     const traces: JourneyAttemptTrace[] = [];
     for (const attempt of attempts) {
       traces.push({
         attempt,
-        samples: await this.sessions.listSamples(attempt.sessionId),
+        samples: await this.listAttemptSamples(attempt.sessionId),
       });
     }
     return traces;

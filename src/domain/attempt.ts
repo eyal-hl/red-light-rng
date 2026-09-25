@@ -1,4 +1,5 @@
 import type { TransportationMode } from './route';
+import type { AttemptReconciliationStatus } from './attempt-reconciliation';
 
 export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 'abandoned' | 'ended';
 
@@ -44,6 +45,8 @@ export type Attempt = {
   startedLocalTimeSource: AttemptLocalTimeSource | null;
   resultAcknowledged: boolean;
   crossings: AttemptCheckpointCrossing[];
+  reconciliationStatus?: AttemptReconciliationStatus;
+  reconciliationVersion?: number;
 };
 
 export function isOpenAttempt(attempt: Attempt): boolean {

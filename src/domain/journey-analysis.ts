@@ -33,6 +33,20 @@ export type JourneyAttemptTrace = {
   samples: LocationSample[];
 };
 
+export function tracesFromAttempts(attempts: readonly Attempt[]): JourneyAttemptTrace[] {
+  return attempts.map((attempt) => ({ attempt, samples: [] }));
+}
+
+export function attemptInPool(attempt: Attempt, pool: JourneyPoolId): boolean {
+  const id = attemptJourneyPool(attempt);
+  return (
+    id != null &&
+    id.originPlaceId === pool.originPlaceId &&
+    id.destinationPlaceId === pool.destinationPlaceId &&
+    id.transportationMode === pool.transportationMode
+  );
+}
+
 export type JourneyPoolSummary = {
   originPlaceId: string;
   destinationPlaceId: string;
@@ -117,15 +131,7 @@ export function filterTracesForJourney(
   traces: JourneyAttemptTrace[],
   pool: JourneyPoolId,
 ): JourneyAttemptTrace[] {
-  return traces.filter((trace) => {
-    const id = attemptJourneyPool(trace.attempt);
-    return (
-      id != null &&
-      id.originPlaceId === pool.originPlaceId &&
-      id.destinationPlaceId === pool.destinationPlaceId &&
-      id.transportationMode === pool.transportationMode
-    );
-  });
+  return traces.filter((trace) => attemptInPool(trace.attempt, pool));
 }
 
 export function summarizeJourneyPool(
@@ -253,14 +259,29 @@ function headlineDelta(
   return focusTimeMs - currentPbTimeMs;
 }
 
-export function analyzeJourneyFocus(
+type JourneyHeadlineParts = {
+  inPool: JourneyAttemptTrace[];
+  focusTrace: JourneyAttemptTrace;
+  summary: JourneyPoolSummary;
+  competitive: Attempt[];
+  ranked: Attempt[];
+  focus: Attempt;
+  focusTime: number | null;
+  rankIndex: number;
+  isPb: boolean;
+  previous: Attempt | null;
+  pbBefore: Attempt | null;
+  comparisonAttempt: Attempt | null;
+  deltaVsPbMs: number | null;
+};
+
+function journeyHeadlineParts(
   pool: JourneyPoolId,
   origin: Place,
   destination: Place,
   traces: JourneyAttemptTrace[],
   focusAttemptId: string,
-  routes: Route[],
-): JourneyFocusAnalysis | null {
+): JourneyHeadlineParts | null {
   const inPool = filterTracesForJourney(traces, pool);
   const focusTrace = inPool.find((trace) => trace.attempt.id === focusAttemptId);
   if (!focusTrace) {
@@ -282,7 +303,80 @@ export function analyzeJourneyFocus(
     currentPb: ranked[0] ?? null,
     focusId: focus.id,
   });
-  const deltaVsPbMs = headlineDelta(focusTime, summary.pbTimeMs, pbBefore ? officialTimeMs(pbBefore) : null, isPb);
+  return {
+    inPool,
+    focusTrace,
+    summary,
+    competitive,
+    ranked,
+    focus,
+    focusTime,
+    rankIndex,
+    isPb,
+    previous,
+    pbBefore,
+    comparisonAttempt,
+    deltaVsPbMs: headlineDelta(focusTime, summary.pbTimeMs, pbBefore ? officialTimeMs(pbBefore) : null, isPb),
+  };
+}
+
+function journeyHeadlineAnalysis(parts: JourneyHeadlineParts): JourneyFocusAnalysis {
+  return {
+    summary: parts.summary,
+    officialTimeMs: parts.focusTime,
+    rank: parts.rankIndex >= 0 ? parts.rankIndex + 1 : null,
+    isPb: parts.isPb,
+    previousAttemptId: parts.previous?.id ?? null,
+    previousTimeMs: parts.previous ? officialTimeMs(parts.previous) : null,
+    deltaVsPreviousMs:
+      parts.focusTime != null && parts.previous != null && officialTimeMs(parts.previous) != null
+        ? parts.focusTime - (officialTimeMs(parts.previous) as number)
+        : null,
+    pbBeforeThisTimeMs: parts.pbBefore ? officialTimeMs(parts.pbBefore) : null,
+    deltaVsPbMs: parts.deltaVsPbMs,
+    comparisonAttemptId: parts.comparisonAttempt?.id ?? null,
+    resultExplanation: emptyResultExplanation({ availability: 'no_comparison_target' }),
+    pathAnalytics: null,
+    pathUnavailable: false,
+  };
+}
+
+export function analyzeJourneyHeadline(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+  focusAttemptId: string,
+): JourneyFocusAnalysis | null {
+  const parts = journeyHeadlineParts(pool, origin, destination, traces, focusAttemptId);
+  return parts ? journeyHeadlineAnalysis(parts) : null;
+}
+
+export function analyzeJourneyFocus(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+  focusAttemptId: string,
+  routes: Route[],
+): JourneyFocusAnalysis | null {
+  const parts = journeyHeadlineParts(pool, origin, destination, traces, focusAttemptId);
+  if (!parts) {
+    return null;
+  }
+  const {
+    inPool,
+    focusTrace,
+    summary,
+    focus,
+    focusTime,
+    rankIndex,
+    isPb,
+    previous,
+    pbBefore,
+    comparisonAttempt,
+    deltaVsPbMs,
+  } = parts;
   const variantTraces = inPool.filter((trace) => {
     if (!isJourneyCompetitive(trace.attempt) || !trace.attempt.routeId) {
       return false;

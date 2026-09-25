@@ -18,15 +18,24 @@ import {
 import { replayPlaceTrace, type PlaceStartZoneStatus } from '../domain/place-timing';
 import type { JourneyPoolId } from '../domain/journey';
 import { attemptJourneyPool } from '../domain/journey-analysis';
-import { planPathVariantRecompute } from '../domain/path-variant-discovery';
+import { PATH_VARIANT_CLASSIFICATION_VERSION, planPathVariantRecompute } from '../domain/path-variant-discovery';
 import type { TransportationMode } from '../domain/route';
 import { timingCourseFromRoute } from '../domain/attempt-analysis';
 import type { AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
-import type { SettingsStore } from '../persistence/settings-store';
+import { PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY, type SettingsStore } from '../persistence/settings-store';
 import type { LocationPlatform, LocationTracker } from '../tracking/location-tracker';
+import { pathVariantRecomputeInputKey } from './derived-view-cache';
+import { yieldToEventLoop, type IdleYield } from './idle-yield';
+import {
+  CURRENT_ATTEMPT_RECONCILIATION_VERSION,
+  emptyAttemptReconciliationReport,
+  withAttemptReconciliation,
+  type AttemptReconciliationReport,
+} from '../domain/attempt-reconciliation';
+import { findCompatiblePathVariant } from '../domain/path-variant';
 
 export type ArmAttemptResult =
   | { ok: true; attempt: Attempt }
@@ -36,6 +45,17 @@ export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
   startZoneStatus: PlaceStartZoneStatus;
   gpsReadiness: GpsReadiness;
+};
+
+export type PathVariantRecomputeResult = {
+  skipped: boolean;
+  poolsProcessed: number;
+  listSamplesCalls: number;
+};
+
+export type PathVariantRecomputeOptions = {
+  skipIfUnchanged?: boolean;
+  yieldToIdle?: IdleYield;
 };
 
 const LOCATING_START_ZONE: PlaceStartZoneStatus = {
@@ -113,6 +133,8 @@ export class AttemptRuntime {
       ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: false,
       crossings: [],
+      reconciliationStatus: 'pending',
+      reconciliationVersion: 0,
     };
     try {
       await this.attempts.createAttempt(attempt);
@@ -133,6 +155,8 @@ export class AttemptRuntime {
       lifecycle: 'cancelled',
       validity: 'unranked',
       resultAcknowledged: true,
+      reconciliationStatus: 'reconciled',
+      reconciliationVersion: CURRENT_ATTEMPT_RECONCILIATION_VERSION,
     };
     await this.tracker.stopLocationUpdates();
     await this.attempts.finalizeAttempt(cancelled, terminalSessionInput(cancelled, this.now()));
@@ -148,14 +172,23 @@ export class AttemptRuntime {
     let next = await this.applyPlaceEngine(open, samples);
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
-      await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
-      return next;
+      const pending = withAttemptReconciliation(next, 'pending', 0);
+      await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
+      try {
+        return await this.reconcileDerivedAttempt(pending, samples);
+      } catch {
+        const failed = withAttemptReconciliation(pending, 'failed', 0);
+        await this.attempts.saveAttempt(failed);
+        return failed;
+      }
     }
     const ended: Attempt = {
       ...next,
       lifecycle: 'ended',
       validity: 'unranked',
       resultAcknowledged: false,
+      reconciliationStatus: 'reconciled',
+      reconciliationVersion: CURRENT_ATTEMPT_RECONCILIATION_VERSION,
     };
     await this.tracker.stopLocationUpdates();
     await this.attempts.finalizeAttempt(ended, terminalSessionInput(ended, this.now()));
@@ -181,8 +214,16 @@ export class AttemptRuntime {
 
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
-      await this.attempts.finalizeAttempt(next, terminalSessionInput(next, this.now()));
-      return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
+      const pending = withAttemptReconciliation(next, 'pending', 0);
+      await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
+      try {
+        const derived = await this.reconcileDerivedAttempt(pending, samples);
+        return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness };
+      } catch {
+        const failed = withAttemptReconciliation(pending, 'failed', 0);
+        await this.attempts.saveAttempt(failed);
+        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness };
+      }
     }
     await this.attempts.saveAttempt(next);
     return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
@@ -228,6 +269,16 @@ export class AttemptRuntime {
     return this.attempts.listAttempts();
   }
 
+  async peekFailedReconciliationAttemptId(): Promise<string | null> {
+    return this.attempts.peekFailedReconciliationAttemptId();
+  }
+
+  async listAttemptsNeedingReconciliation(
+    currentVersion: number = CURRENT_ATTEMPT_RECONCILIATION_VERSION,
+  ): Promise<Attempt[]> {
+    return this.attempts.listAttemptsNeedingReconciliation(currentVersion);
+  }
+
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
     return this.attempts.listAttemptsForRoute(routeId);
   }
@@ -257,12 +308,98 @@ export class AttemptRuntime {
       return null;
     }
     const next: Attempt = { ...attempt, transportationMode, routeId: null, crossings: [] };
-    await this.attempts.saveAttempt(next);
-    await this.recomputeAllPathVariants();
+    await this.attempts.saveAttempt(withAttemptReconciliation(next, 'pending', 0));
+    const report = await this.reconcileSelectedAttempts(
+      [(await this.attempts.getAttempt(attemptId)) ?? withAttemptReconciliation(next, 'pending', 0)],
+    );
+    if (report.perAttempt[0]?.status === 'failed') {
+      return this.attempts.getAttempt(attemptId);
+    }
     return this.attempts.getAttempt(attemptId);
   }
 
-  async recomputeAllPathVariants(): Promise<void> {
+  async reconcilePendingAttempts(options: PathVariantRecomputeOptions = {}): Promise<AttemptReconciliationReport> {
+    const selected = await this.attempts.listAttemptsNeedingReconciliation(CURRENT_ATTEMPT_RECONCILIATION_VERSION);
+    return this.reconcileSelectedAttempts(selected, options);
+  }
+
+  async retryAttemptReconciliation(
+    attemptId: string,
+    options: PathVariantRecomputeOptions = {},
+  ): Promise<AttemptReconciliationReport> {
+    const attempt = await this.attempts.getAttempt(attemptId);
+    if (!attempt || isOpenAttempt(attempt)) {
+      return emptyAttemptReconciliationReport();
+    }
+    const pending = withAttemptReconciliation(attempt, 'pending', 0);
+    await this.attempts.saveAttempt(pending);
+    return this.reconcileSelectedAttempts([pending], options);
+  }
+
+  private async reconcileSelectedAttempts(
+    selected: Attempt[],
+    options: PathVariantRecomputeOptions = {},
+  ): Promise<AttemptReconciliationReport> {
+    const yieldToIdle = options.yieldToIdle ?? yieldToEventLoop;
+    const startedAt = performance.now();
+    const report: AttemptReconciliationReport = {
+      selectedAttemptIds: selected.map((attempt) => attempt.id),
+      selectedCount: selected.length,
+      listSamplesCalls: 0,
+      perAttempt: [],
+      totalDurationMs: 0,
+    };
+    if (selected.length === 0) {
+      report.totalDurationMs = performance.now() - startedAt;
+      return report;
+    }
+    await yieldToIdle();
+    for (const attempt of selected) {
+      await yieldToIdle();
+      const attemptStartedAt = performance.now();
+      let listSamplesCalls = 0;
+      try {
+        const derived = await this.reconcileDerivedAttempt(attempt, undefined, {
+          yieldToIdle,
+          onListSamples: () => {
+            listSamplesCalls += 1;
+            report.listSamplesCalls += 1;
+          },
+        });
+        report.perAttempt.push({
+          attemptId: attempt.id,
+          durationMs: performance.now() - attemptStartedAt,
+          listSamplesCalls,
+          status: derived.reconciliationStatus ?? 'reconciled',
+          error: null,
+        });
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : 'Attempt reconciliation failed.';
+        await this.attempts.saveAttempt(withAttemptReconciliation(attempt, 'failed', attempt.reconciliationVersion ?? 0));
+        report.perAttempt.push({
+          attemptId: attempt.id,
+          durationMs: performance.now() - attemptStartedAt,
+          listSamplesCalls,
+          status: 'failed',
+          error: message,
+        });
+      }
+    }
+    report.totalDurationMs = performance.now() - startedAt;
+    return report;
+  }
+
+  async recomputeAllPathVariants(options: PathVariantRecomputeOptions = {}): Promise<PathVariantRecomputeResult> {
+    const yieldToIdle = options.yieldToIdle ?? yieldToEventLoop;
+    await yieldToIdle();
+    const currentKey = await this.pathVariantRecomputeFingerprint();
+    if (options.skipIfUnchanged) {
+      const stored = await this.settings.getValue(PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY);
+      if (stored === currentKey) {
+        return { skipped: true, poolsProcessed: 0, listSamplesCalls: 0 };
+      }
+    }
+
     const attempts = await this.attempts.listAttempts();
     const keys = new Map<string, JourneyPoolId>();
     for (const attempt of attempts) {
@@ -272,12 +409,33 @@ export class AttemptRuntime {
       }
       keys.set(`${pool.originPlaceId}|${pool.destinationPlaceId}|${pool.transportationMode}`, pool);
     }
+    let listSamplesCalls = 0;
+    let poolsProcessed = 0;
     for (const pool of keys.values()) {
-      await this.recomputePathVariantsForPool(pool);
+      await yieldToIdle();
+      await this.recomputePathVariantsForPool(pool, undefined, {
+        yieldToIdle,
+        onListSamples: () => {
+          listSamplesCalls += 1;
+        },
+      });
+      poolsProcessed += 1;
     }
+    const afterKey = await this.pathVariantRecomputeFingerprint();
+    await this.settings.setValue(PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY, afterKey);
+    const leftovers = await this.attempts.listAttemptsNeedingReconciliation(CURRENT_ATTEMPT_RECONCILIATION_VERSION);
+    for (const leftover of leftovers) {
+      await this.attempts.saveAttempt(withAttemptReconciliation(leftover, 'reconciled'));
+    }
+    return { skipped: false, poolsProcessed, listSamplesCalls };
   }
 
-  async recomputePathVariantsForPool(pool: JourneyPoolId, extra?: { attempt: Attempt; samples: LocationSample[] }): Promise<Attempt | null> {
+  async recomputePathVariantsForPool(
+    pool: JourneyPoolId,
+    extra?: { attempt: Attempt; samples: LocationSample[] },
+    options: { yieldToIdle?: IdleYield; onListSamples?: () => void } = {},
+  ): Promise<Attempt | null> {
+    const yieldToIdle = options.yieldToIdle ?? yieldToEventLoop;
     const origin = await this.places.getPlace(pool.originPlaceId);
     const destination = await this.places.getPlace(pool.destinationPlaceId);
     if (!origin || !destination) {
@@ -293,6 +451,8 @@ export class AttemptRuntime {
       if (extra && attempt.id === extra.attempt.id) {
         continue;
       }
+      await yieldToIdle();
+      options.onListSamples?.();
       traces.push({
         attempt,
         samples: await this.sessions.listSamples(attempt.sessionId),
@@ -302,7 +462,8 @@ export class AttemptRuntime {
       traces.push(extra);
     }
     const routes = await this.routes.listRoutes();
-    const plan = planPathVariantRecompute({
+    await yieldToIdle();
+    const plan = await planPathVariantRecompute({
       pool,
       origin,
       destination,
@@ -310,6 +471,7 @@ export class AttemptRuntime {
       routes,
       nowMs: this.now(),
       createRouteId: this.createRouteId,
+      yieldToIdle,
     });
     const idByPlanned = new Map<string, string>();
     for (const route of plan.newRoutes) {
@@ -322,29 +484,49 @@ export class AttemptRuntime {
     const resolveRouteId = (routeId: string | null) => (routeId == null ? null : (idByPlanned.get(routeId) ?? routeId));
     let extraResult: Attempt | null = extra?.attempt ?? null;
     for (const assignment of plan.assignments) {
+      await yieldToIdle();
       const routeId = resolveRouteId(assignment.routeId);
       const trace = traces.find((item) => item.attempt.id === assignment.attemptId);
       if (!trace) {
         continue;
       }
       const assigned = await this.applyAssignment(trace.attempt, trace.samples, routeId);
+      const marked = withAttemptReconciliation(assigned, 'reconciled');
       if (extra && assignment.attemptId === extra.attempt.id) {
-        extraResult = assigned;
+        extraResult = marked;
         continue;
       }
-      if (assigned.routeId !== trace.attempt.routeId || assigned.crossings.length !== trace.attempt.crossings.length) {
-        await this.attempts.saveAttempt(assigned);
-      } else {
-        const sameCrossings = assigned.crossings.every((crossing, index) => {
-          const previous = trace.attempt.crossings[index];
-          return previous != null && previous.checkpointId === crossing.checkpointId && previous.crossedAtMs === crossing.crossedAtMs;
-        });
-        if (!sameCrossings) {
-          await this.attempts.saveAttempt(assigned);
-        }
-      }
+      await this.attempts.saveAttempt(marked);
     }
     return extraResult;
+  }
+
+  private async pathVariantRecomputeFingerprint(): Promise<string> {
+    const [attempts, places, routes] = await Promise.all([
+      this.attempts.listAttempts(),
+      this.places.listPlaces(),
+      this.routes.listRoutes(),
+    ]);
+    const sampleIdentities = [];
+    const seenSessions = new Set<string>();
+    for (const attempt of attempts) {
+      if (seenSessions.has(attempt.sessionId)) {
+        continue;
+      }
+      seenSessions.add(attempt.sessionId);
+      const session = await this.sessions.getSession(attempt.sessionId);
+      sampleIdentities.push({
+        sessionId: attempt.sessionId,
+        lastSampleAtMs: session?.lastSampleAtMs ?? null,
+      });
+    }
+    return pathVariantRecomputeInputKey({
+      classificationVersion: PATH_VARIANT_CLASSIFICATION_VERSION,
+      attempts,
+      places,
+      routes,
+      sampleIdentities,
+    });
   }
 
   private async placesForAttempt(attempt: Attempt): Promise<Place[]> {
@@ -381,13 +563,41 @@ export class AttemptRuntime {
       startedAtMs: engine.startedAtMs,
       finishedAtMs: engine.finishedAtMs,
     });
-    if (next.lifecycle === 'completed' && next.startedAtMs != null && next.finishedAtMs != null) {
-      return this.associateVariant(next, samples);
-    }
     return next;
   }
 
-  private async associateVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
+  private async reconcileDerivedAttempt(
+    attempt: Attempt,
+    samples?: LocationSample[],
+    options: { yieldToIdle?: IdleYield; onListSamples?: () => void } = {},
+  ): Promise<Attempt> {
+    if (isOpenAttempt(attempt)) {
+      return attempt;
+    }
+    let working = attempt;
+    let loaded = samples;
+    const needsPathAssignment =
+      working.lifecycle === 'completed' &&
+      working.originPlaceId != null &&
+      working.destinationPlaceId != null &&
+      working.startedAtMs != null &&
+      working.finishedAtMs != null;
+    if (needsPathAssignment) {
+      if (!loaded) {
+        options.onListSamples?.();
+        loaded = await this.sessions.listSamples(working.sessionId);
+      }
+      if (options.yieldToIdle) {
+        await options.yieldToIdle();
+      }
+      working = await this.assignExistingVariant(working, loaded);
+    }
+    const reconciled = withAttemptReconciliation(working, 'reconciled');
+    await this.attempts.saveAttempt(reconciled);
+    return reconciled;
+  }
+
+  private async assignExistingVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
     if (
       attempt.originPlaceId == null ||
       attempt.destinationPlaceId == null ||
@@ -396,15 +606,22 @@ export class AttemptRuntime {
     ) {
       return { ...attempt, routeId: null, crossings: [] };
     }
-    const classified = await this.recomputePathVariantsForPool(
-      {
-        originPlaceId: attempt.originPlaceId,
-        destinationPlaceId: attempt.destinationPlaceId,
-        transportationMode: attempt.transportationMode,
-      },
-      { attempt, samples },
+    const origin = await this.places.getPlace(attempt.originPlaceId);
+    const destination = await this.places.getPlace(attempt.destinationPlaceId);
+    if (!origin || !destination) {
+      return { ...attempt, routeId: null, crossings: [] };
+    }
+    const routes = await this.routes.listRoutes();
+    const match = findCompatiblePathVariant(
+      routes,
+      origin,
+      destination,
+      attempt.transportationMode,
+      samples,
+      { startedAtMs: attempt.startedAtMs, finishedAtMs: attempt.finishedAtMs },
+      { includeArchived: false },
     );
-    return classified ?? { ...attempt, routeId: null, crossings: [] };
+    return this.applyAssignment(attempt, samples, match?.id ?? null);
   }
 
   private async applyAssignment(attempt: Attempt, samples: LocationSample[], routeId: string | null): Promise<Attempt> {
@@ -458,6 +675,8 @@ export class AttemptRuntime {
       ...open,
       lifecycle: 'abandoned',
       validity,
+      reconciliationStatus: 'reconciled',
+      reconciliationVersion: CURRENT_ATTEMPT_RECONCILIATION_VERSION,
     };
     await this.tracker.stopLocationUpdates();
     await this.attempts.finalizeAttempt(abandoned, terminalSessionInput(abandoned, this.now()));

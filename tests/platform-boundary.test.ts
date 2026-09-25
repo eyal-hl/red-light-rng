@@ -14,6 +14,7 @@ describe('platform boundary', () => {
       'src/domain/course-editor.ts',
       'src/domain/course-matching.ts',
       'src/domain/attempt.ts',
+      'src/domain/attempt-reconciliation.ts',
       'src/domain/attempt-timing.ts',
       'src/domain/attempt-debug.ts',
       'src/domain/attempt-analysis.ts',
@@ -56,6 +57,8 @@ describe('platform boundary', () => {
       'src/persistence/memory-settings-store.ts',
       'src/product/route-workspace.ts',
       'src/product/attempt-runtime.ts',
+      'src/product/derived-view-cache.ts',
+      'src/product/navigation-load.ts',
       'src/tracking/location-tracker.ts',
       'src/tracking/shared-location-tracker.ts',
       'src/tracking/tracking-session-service.ts',
@@ -67,6 +70,7 @@ describe('platform boundary', () => {
       'src/ui/CourseEditorScreen.tsx',
       'src/ui/AttemptScreen.tsx',
       'src/ui/AttemptResultScreen.tsx',
+      'src/ui/DeferredMapSlot.tsx',
       'src/ui/GhostDeltaChart.tsx',
       'src/ui/HistoryScreen.tsx',
       'src/ui/JourneyDetailScreen.tsx',
@@ -104,6 +108,7 @@ describe('platform boundary', () => {
       'src/domain/course-editor.ts',
       'src/domain/course-matching.ts',
       'src/domain/attempt.ts',
+      'src/domain/attempt-reconciliation.ts',
       'src/domain/attempt-timing.ts',
       'src/domain/attempt-debug.ts',
       'src/domain/attempt-analysis.ts',
@@ -138,6 +143,8 @@ describe('platform boundary', () => {
       'src/persistence/migrations.ts',
       'src/product/route-workspace.ts',
       'src/product/attempt-runtime.ts',
+      'src/product/derived-view-cache.ts',
+      'src/product/navigation-load.ts',
     ];
     for (const file of domainFiles) {
       const source = readFileSync(file, 'utf8');
