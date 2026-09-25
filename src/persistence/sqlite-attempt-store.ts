@@ -5,6 +5,7 @@ import {
   type AttemptLifecycle,
   type AttemptValidity,
 } from '../domain/attempt';
+import { parseAttemptReconciliationStatus } from '../domain/attempt-reconciliation';
 import type { TransportationMode } from '../domain/route';
 import { OpenAttemptExistsError, type AttemptStore } from './attempt-store';
 import type { CompleteSessionInput } from './location-sample-store';
@@ -40,6 +41,8 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
     startedLocalTimeSource: parseAttemptLocalTimeSource(row.started_local_time_source),
     resultAcknowledged: row.result_acknowledged === 1,
     crossings,
+    reconciliationStatus: parseAttemptReconciliationStatus(row.reconciliation_status),
+    reconciliationVersion: row.reconciliation_version ?? 0,
   };
 }
 
@@ -182,6 +185,37 @@ export class SqliteAttemptStore implements AttemptStore {
     return row?.count ?? 0;
   }
 
+  async listAttemptsNeedingReconciliation(currentVersion: number): Promise<Attempt[]> {
+    const sql = await this.getSql();
+    const rows = await sql.getAll<AttemptRow>(
+      `SELECT * FROM attempt
+       WHERE lifecycle NOT IN ('armed', 'active')
+         AND (
+           reconciliation_status IN ('pending', 'failed')
+           OR reconciliation_version IS NULL
+           OR reconciliation_version != ?
+         )
+       ORDER BY armed_at_ms DESC`,
+      [currentVersion],
+    );
+    const attempts: Attempt[] = [];
+    for (const row of rows) {
+      attempts.push(mapAttempt(row, await this.loadCrossings(sql, row.id)));
+    }
+    return attempts;
+  }
+
+  async peekFailedReconciliationAttemptId(): Promise<string | null> {
+    const sql = await this.getSql();
+    const row = await sql.getFirst<{ id: string }>(
+      `SELECT id FROM attempt
+       WHERE reconciliation_status = 'failed'
+       ORDER BY armed_at_ms DESC
+       LIMIT 1`,
+    );
+    return row?.id ?? null;
+  }
+
   async deleteAttempt(attemptId: string): Promise<void> {
     const sql = await this.getSql();
     await sql.withTransaction(async () => {
@@ -200,8 +234,9 @@ export class SqliteAttemptStore implements AttemptStore {
       `INSERT INTO attempt (
          id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
          lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
-         started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged,
+         reconciliation_status, reconciliation_version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          route_id = excluded.route_id,
          origin_place_id = excluded.origin_place_id,
@@ -214,7 +249,9 @@ export class SqliteAttemptStore implements AttemptStore {
          started_utc_offset_minutes = excluded.started_utc_offset_minutes,
          started_timezone_id = excluded.started_timezone_id,
          started_local_time_source = excluded.started_local_time_source,
-         result_acknowledged = excluded.result_acknowledged`,
+         result_acknowledged = excluded.result_acknowledged,
+         reconciliation_status = excluded.reconciliation_status,
+         reconciliation_version = excluded.reconciliation_version`,
       [
         attempt.id,
         attempt.routeId,
@@ -231,6 +268,8 @@ export class SqliteAttemptStore implements AttemptStore {
         attempt.startedTimezoneId,
         attempt.startedLocalTimeSource,
         attempt.resultAcknowledged ? 1 : 0,
+        parseAttemptReconciliationStatus(attempt.reconciliationStatus),
+        attempt.reconciliationVersion ?? 0,
       ],
     );
     await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attempt.id]);

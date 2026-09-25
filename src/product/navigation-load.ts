@@ -6,13 +6,18 @@ export type NavigationLoadOperation =
   | 'inspectAttempt'
   | 'analyzeRoute'
   | 'legacySampleScan'
-  | 'recomputePathVariants';
+  | 'recomputePathVariants'
+  | 'reconcilePendingAttempts';
 
 export type NavigationLoadCounters = {
   listSamplesCalls: number;
   pathVariantRecomputeRuns: number;
   pathVariantRecomputeSkips: number;
   pathVariantRecomputeListSamples: number;
+  reconcilePendingRuns: number;
+  reconcilePendingSkips: number;
+  reconcilePendingSelected: number;
+  reconcilePendingListSamples: number;
   loadHomeReads: number;
   loadHomeHits: number;
   loadHomeMisses: number;
@@ -44,6 +49,10 @@ export function emptyNavigationLoadCounters(): NavigationLoadCounters {
     pathVariantRecomputeRuns: 0,
     pathVariantRecomputeSkips: 0,
     pathVariantRecomputeListSamples: 0,
+    reconcilePendingRuns: 0,
+    reconcilePendingSkips: 0,
+    reconcilePendingSelected: 0,
+    reconcilePendingListSamples: 0,
     loadHomeReads: 0,
     loadHomeHits: 0,
     loadHomeMisses: 0,

@@ -136,6 +136,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [failedReconciliationAttemptId, setFailedReconciliationAttemptId] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
   const [startupNonce, setStartupNonce] = useState(0);
   const [debugPending, setDebugPending] = useState(false);
@@ -172,6 +173,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     setPendingRecording(snapshot.pendingRecording);
     setCanStartNewRecording(snapshot.canStartNewRecording);
     setCanStartAttempt(snapshot.canStartAttempt);
+    setFailedReconciliationAttemptId(snapshot.failedReconciliationAttemptId);
     return snapshot;
   }, [workspace]);
 
@@ -298,6 +300,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPendingRecording(snapshot.pendingRecording);
       setCanStartNewRecording(snapshot.canStartNewRecording);
       setCanStartAttempt(snapshot.canStartAttempt);
+      setFailedReconciliationAttemptId(snapshot.failedReconciliationAttemptId);
       if (snapshot.activeAttempt) {
         await showAttempt(snapshot.activeAttempt, signal);
         return;
@@ -350,8 +353,12 @@ export function AppRoot({ workspace }: AppRootProps) {
         recoverTracker: () => workspace.recoverTracker(),
         reconcileAttempts: () => workspace.reconcileAttempts(),
         loadHome: () => workspace.loadHome(),
-        recomputePathVariants: async () => {
-          await workspace.recomputePathVariants({ skipIfUnchanged: true });
+        reconcilePendingAttempts: async () => {
+          const report = await workspace.reconcilePendingAttempts();
+          const failed = report.perAttempt.find((item) => item.status === 'failed');
+          if (startupTokenRef.current === token) {
+            setFailedReconciliationAttemptId(failed?.attemptId ?? null);
+          }
         },
       },
       {
@@ -1259,6 +1266,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           canStartNewRecording={canStartNewRecording}
           busy={busy}
           error={error}
+          failedReconciliationAttemptId={failedReconciliationAttemptId}
           onStart={() => {
             void onStartAttempt();
           }}
@@ -1288,6 +1296,24 @@ export function AppRoot({ workspace }: AppRootProps) {
               setError(null);
               void openReview(pendingRecording.id);
             }
+          }}
+          onRetryReconciliation={() => {
+            if (!failedReconciliationAttemptId) {
+              return;
+            }
+            void (async () => {
+              setBusy(true);
+              try {
+                const report = await workspace.retryAttemptReconciliation(failedReconciliationAttemptId);
+                const failed = report.perAttempt.find((item) => item.status === 'failed');
+                setFailedReconciliationAttemptId(failed?.attemptId ?? null);
+                await refreshHome();
+              } catch (caught) {
+                setError(caught instanceof Error ? caught.message : 'Could not retry that attempt.');
+              } finally {
+                setBusy(false);
+              }
+            })();
           }}
         />
       ) : null}

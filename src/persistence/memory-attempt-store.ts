@@ -3,12 +3,18 @@ import {
   type Attempt,
   type AttemptCheckpointCrossing,
 } from '../domain/attempt';
+import {
+  attemptNeedsReconciliation,
+  parseAttemptReconciliationStatus,
+} from '../domain/attempt-reconciliation';
 import { OpenAttemptExistsError, type AttemptStore } from './attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from './location-sample-store';
 
 function cloneAttempt(attempt: Attempt): Attempt {
   return {
     ...attempt,
+    reconciliationStatus: parseAttemptReconciliationStatus(attempt.reconciliationStatus),
+    reconciliationVersion: attempt.reconciliationVersion ?? 0,
     crossings: attempt.crossings.map((crossing) => ({ ...crossing })),
   };
 }
@@ -115,6 +121,26 @@ export class MemoryAttemptStore implements AttemptStore {
       }
     }
     return count;
+  }
+
+  async listAttemptsNeedingReconciliation(currentVersion: number): Promise<Attempt[]> {
+    return [...this.attempts.values()]
+      .filter((attempt) => attemptNeedsReconciliation(attempt, currentVersion))
+      .sort((a, b) => b.armedAtMs - a.armedAtMs)
+      .map((attempt) => cloneAttempt(attempt));
+  }
+
+  async peekFailedReconciliationAttemptId(): Promise<string | null> {
+    let latest: Attempt | null = null;
+    for (const attempt of this.attempts.values()) {
+      if (attempt.reconciliationStatus !== 'failed') {
+        continue;
+      }
+      if (!latest || attempt.armedAtMs > latest.armedAtMs) {
+        latest = attempt;
+      }
+    }
+    return latest?.id ?? null;
   }
 
   async deleteAttempt(attemptId: string): Promise<void> {

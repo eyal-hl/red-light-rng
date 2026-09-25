@@ -9,6 +9,7 @@ import {
   parseTransportationMode,
 } from './settings-store';
 import { reconstructAttemptLocalStart } from '../domain/attempt-local-time';
+import { CURRENT_ATTEMPT_RECONCILIATION_VERSION } from '../domain/attempt-reconciliation';
 import { LOCATION_SPIKE_SCHEMA, CURRENT_SCHEMA_VERSION } from './schema';
 import type { SqlExecutor } from './sql-executor';
 
@@ -446,6 +447,12 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 10,
+    async up(sql) {
+      await ensureAttemptReconciliationColumns(sql);
+    },
+  },
 ];
 
 async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {
@@ -499,6 +506,31 @@ async function ensureAttemptLocalStartColumns(sql: SqlExecutor): Promise<boolean
     `started_local_time_source TEXT`,
   );
   return addedOffset || addedTimezone || addedSource;
+}
+
+async function ensureAttemptReconciliationColumns(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(
+    sql,
+    'attempt',
+    'reconciliation_status',
+    `reconciliation_status TEXT NOT NULL DEFAULT 'pending'`,
+  );
+  await addColumnIfMissing(
+    sql,
+    'attempt',
+    'reconciliation_version',
+    `reconciliation_version INTEGER NOT NULL DEFAULT 0`,
+  );
+  await sql.exec(`
+    CREATE INDEX IF NOT EXISTS idx_attempt_reconciliation
+    ON attempt(reconciliation_status, reconciliation_version);
+  `);
+  await sql.run(
+    `UPDATE attempt
+     SET reconciliation_status = 'reconciled',
+         reconciliation_version = ${CURRENT_ATTEMPT_RECONCILIATION_VERSION}
+     WHERE lifecycle NOT IN ('armed', 'active')`,
+  );
 }
 
 async function reconstructAttemptLocalStarts(sql: SqlExecutor): Promise<void> {

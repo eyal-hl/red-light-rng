@@ -7,6 +7,7 @@ import { planPathVariantRecompute } from '../src/domain/path-variant-discovery';
 import { startAppStartup, type AppStartupFailure } from '../src/product/app-startup';
 import { yieldToEventLoop } from '../src/product/idle-yield';
 import type { LoadedJourney } from '../src/product/route-workspace';
+import { RECONCILED_ATTEMPT } from './helpers/attempts';
 import { makePlace } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
 import { offsetLatLng, traceAlongPath } from './helpers/samples';
@@ -59,6 +60,7 @@ function completedAttempt(id: string, overrides: Partial<Attempt> = {}): Attempt
     originPlaceId: HOME.id,
     destinationPlaceId: WORK.id,
     transportationMode: 'scooter',
+    ...RECONCILED_ATTEMPT,
     ...overrides,
   };
 }
@@ -101,8 +103,8 @@ function busyWaitMs(ms: number) {
   }
 }
 
-describe('post-Home interaction during deferred path-variant maintenance', () => {
-  it('keeps a queued navigation callback runnable before heavy GPS recompute finishes, then skips unchanged startups', async () => {
+describe('post-Home interaction during deferred pending-attempt repair', () => {
+  it('keeps a queued navigation callback runnable before a pending attempt GPS repair finishes, then skips unchanged startups', async () => {
     const { workspace, sessions, attempts, places, routes } = createMemoryWorkspace();
     await places.createPlace(HOME);
     await places.createPlace(WORK);
@@ -131,6 +133,17 @@ describe('post-Home interaction during deferred path-variant maintenance', () =>
       }),
       80,
       GYM_PATH,
+    );
+    await seedAttempt(
+      sessions,
+      attempts,
+      completedAttempt('pending-hw', {
+        sessionId: 'session-pending-hw',
+        routeId: null,
+        reconciliationStatus: 'pending',
+        reconciliationVersion: 0,
+      }),
+      80,
     );
 
     const originalListSamples = sessions.listSamples.bind(sessions);
@@ -180,9 +193,9 @@ describe('post-Home interaction during deferred path-variant maintenance', () =>
         recoverTracker: () => workspace.recoverTracker(),
         reconcileAttempts: () => workspace.reconcileAttempts(),
         loadHome: () => workspace.loadHome(),
-        recomputePathVariants: async () => {
+        reconcilePendingAttempts: async () => {
           try {
-            await workspace.recomputePathVariants({ skipIfUnchanged: true });
+            await workspace.reconcilePendingAttempts();
           } finally {
             recomputeDone = true;
             resolveRecompute();
@@ -217,24 +230,25 @@ describe('post-Home interaction during deferred path-variant maintenance', () =>
     assert.equal(navigationDuringRecompute, true);
     assert.equal(journeyCompletedDuringRecompute, true);
     assert.ok(journeyDuringRecompute);
-    assert.equal(journeyDuringRecompute.summary.rankedAttemptCount, 4);
+    assert.equal(journeyDuringRecompute.summary.rankedAttemptCount, 5);
     assert.ok(midInteractiveAt < recomputeFinishedAt);
     const homeCallbackMs = homeInteractiveAt - homeReadyAt;
     const midCallbackMs = midInteractiveAt - firstSampleAt;
     const maintenanceMs = recomputeFinishedAt - startedAt;
     assert.ok(homeCallbackMs < 200, `Home tap callback took ${homeCallbackMs}ms`);
     assert.ok(
-      midCallbackMs < maintenanceMs / 2,
+      midCallbackMs < maintenanceMs,
       `queued input after a blocking GPS chunk took ${midCallbackMs}ms; maintenance was ${maintenanceMs}ms`,
     );
-    assert.ok(maintenanceMs > CHUNK_MS * 3);
-    const firstPass = workspace.lastPathVariantRecompute;
-    const firstPassTiming = workspace.navigationLoad.timings.find((item) => item.operation === 'recomputePathVariants');
-    assert.equal(firstPass?.skipped, false);
-    assert.ok((firstPass?.listSamplesCalls ?? 0) >= 6);
+    assert.ok(maintenanceMs > CHUNK_MS);
+    const firstPass = workspace.lastAttemptReconciliation;
+    const firstPassTiming = workspace.navigationLoad.timings.find((item) => item.operation === 'reconcilePendingAttempts');
+    assert.deepEqual(firstPass.selectedAttemptIds, ['pending-hw']);
+    assert.equal(firstPass.listSamplesCalls, 1);
 
-    const assigned = await attempts.getAttempt('hw-1');
+    const assigned = await attempts.getAttempt('pending-hw');
     assert.equal(assigned?.routeId, 'route-1');
+    assert.equal(assigned?.reconciliationStatus, 'reconciled');
 
     const samplesAfterFirst = listSamplesCalls;
     workspace.resetNavigationLoad();
@@ -250,9 +264,9 @@ describe('post-Home interaction during deferred path-variant maintenance', () =>
         recoverTracker: () => workspace.recoverTracker(),
         reconcileAttempts: () => workspace.reconcileAttempts(),
         loadHome: () => workspace.loadHome(),
-        recomputePathVariants: async () => {
+        reconcilePendingAttempts: async () => {
           try {
-            await workspace.recomputePathVariants({ skipIfUnchanged: true });
+            await workspace.reconcilePendingAttempts();
           } finally {
             secondRecomputeDone = true;
             resolveSecond();
@@ -274,17 +288,28 @@ describe('post-Home interaction during deferred path-variant maintenance', () =>
     await secondFinished;
     assert.equal(secondHomeReady, true);
     assert.equal(secondRecomputeDone, true);
-    assert.equal(workspace.lastPathVariantRecompute?.skipped, true);
-    assert.equal(workspace.lastPathVariantRecompute?.listSamplesCalls, 0);
+    assert.equal(workspace.lastAttemptReconciliation.selectedCount, 0);
+    assert.equal(workspace.lastAttemptReconciliation.listSamplesCalls, 0);
     assert.equal(listSamplesCalls, samplesAfterFirst);
-    assert.equal(workspace.navigationLoad.counters.pathVariantRecomputeSkips, 1);
-    const secondPass = workspace.lastPathVariantRecompute;
+    assert.equal(workspace.navigationLoad.counters.reconcilePendingSkips, 1);
+    const secondPass = workspace.lastAttemptReconciliation;
 
-    await seedAttempt(sessions, attempts, completedAttempt('hw-5', { sessionId: 'session-hw-5' }), 80);
+    await seedAttempt(
+      sessions,
+      attempts,
+      completedAttempt('hw-5', {
+        sessionId: 'session-hw-5',
+        routeId: null,
+        reconciliationStatus: 'pending',
+        reconciliationVersion: 0,
+      }),
+      80,
+    );
     workspace.resetNavigationLoad();
-    const third = await workspace.recomputePathVariants({ skipIfUnchanged: true });
-    assert.equal(third.skipped, false);
-    assert.ok(third.listSamplesCalls > 0);
+    const third = await workspace.reconcilePendingAttempts();
+    assert.equal(third.selectedCount, 1);
+    assert.deepEqual(third.selectedAttemptIds, ['hw-5']);
+    assert.equal(third.listSamplesCalls, 1);
 
     const report = {
       environment: 'node-memory-workspace',

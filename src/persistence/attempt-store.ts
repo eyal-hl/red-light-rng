@@ -28,6 +28,8 @@ export interface AttemptStore {
   ): Promise<Attempt[]>;
   isPlaceReferenced(placeId: string): Promise<boolean>;
   countAttemptsReferencingPlace(placeId: string): Promise<number>;
+  listAttemptsNeedingReconciliation(currentVersion: number): Promise<Attempt[]>;
+  peekFailedReconciliationAttemptId(): Promise<string | null>;
   deleteAttempt(attemptId: string): Promise<void>;
   acknowledgeResult(attemptId: string): Promise<void>;
 }

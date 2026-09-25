@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 export type AttemptRow = {
   id: string;
@@ -40,6 +40,8 @@ export type AttemptRow = {
   started_timezone_id: string | null;
   started_local_time_source: string | null;
   result_acknowledged: number;
+  reconciliation_status: string;
+  reconciliation_version: number;
 };
 
 export type AttemptCheckpointCrossingRow = {

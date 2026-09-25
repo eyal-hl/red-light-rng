@@ -25,6 +25,10 @@ import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-deriv
 import type { TrackingState } from '../domain/tracking-state';
 import { isOpenAttempt, type Attempt } from '../domain/attempt';
 import {
+  emptyAttemptReconciliationReport,
+  type AttemptReconciliationReport,
+} from '../domain/attempt-reconciliation';
+import {
   analyzeFocusAttempt,
   analyzeRouteAttempts,
   deriveAnchoredLayoutAttempt,
@@ -91,6 +95,7 @@ export type HomeSnapshot = {
   attemptResult: Attempt | null;
   canStartNewRecording: boolean;
   canStartAttempt: boolean;
+  failedReconciliationAttemptId: string | null;
 };
 
 export type SaveRouteResult =
@@ -135,6 +140,7 @@ export type AnalyzeJourneyResult = {
 export class RouteWorkspace {
   readonly navigationLoad: NavigationLoadState = createNavigationLoadState();
   lastPathVariantRecompute: PathVariantRecomputeResult | null = null;
+  lastAttemptReconciliation: AttemptReconciliationReport = emptyAttemptReconciliationReport();
   private readonly homeCache = new SingleKeyedCache<HomeSnapshot>();
   private readonly journeyCache = new MapKeyedCache<LoadedJourney>();
   private readonly focusCache = new MapKeyedCache<AnalyzeJourneyResult>();
@@ -174,6 +180,34 @@ export class RouteWorkspace {
     await this.attempts.reconcile();
   }
 
+  async reconcilePendingAttempts(options: PathVariantRecomputeOptions = {}): Promise<AttemptReconciliationReport> {
+    return timeNavigationLoad(this.navigationLoad, 'reconcilePendingAttempts', async () => {
+      const result = await this.attempts.reconcilePendingAttempts(options);
+      this.lastAttemptReconciliation = result;
+      this.navigationLoad.counters.reconcilePendingSelected += result.selectedCount;
+      this.navigationLoad.counters.reconcilePendingListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      if (result.selectedCount === 0) {
+        this.navigationLoad.counters.reconcilePendingSkips += 1;
+      } else {
+        this.navigationLoad.counters.reconcilePendingRuns += 1;
+      }
+      return { value: result, cacheHit: result.selectedCount === 0 };
+    });
+  }
+
+  async retryAttemptReconciliation(attemptId: string): Promise<AttemptReconciliationReport> {
+    return timeNavigationLoad(this.navigationLoad, 'reconcilePendingAttempts', async () => {
+      const result = await this.attempts.retryAttemptReconciliation(attemptId);
+      this.lastAttemptReconciliation = result;
+      this.navigationLoad.counters.reconcilePendingSelected += result.selectedCount;
+      this.navigationLoad.counters.reconcilePendingListSamples += result.listSamplesCalls;
+      this.navigationLoad.counters.listSamplesCalls += result.listSamplesCalls;
+      this.navigationLoad.counters.reconcilePendingRuns += 1;
+      return { value: result, cacheHit: false };
+    });
+  }
+
   async recomputePathVariants(options: PathVariantRecomputeOptions = {}): Promise<PathVariantRecomputeResult> {
     return timeNavigationLoad(this.navigationLoad, 'recomputePathVariants', async () => {
       const result = await this.attempts.recomputeAllPathVariants(options);
@@ -208,6 +242,7 @@ export class RouteWorkspace {
         attemptResult,
         allAttempts,
         activeTransportationMode,
+        failedReconciliationAttemptId,
       ] = await Promise.all([
         this.routes.listRoutes(),
         this.places.listPlaces(),
@@ -217,6 +252,7 @@ export class RouteWorkspace {
         this.attempts.getUnacknowledgedResult(),
         this.attempts.listAttempts(),
         this.settings.getActiveTransportationMode(),
+        this.attempts.peekFailedReconciliationAttemptId(),
       ]);
       const activeRecording = activeSession?.purpose === 'route_creation' ? activeSession : null;
       const key = homeDerivationKey({
@@ -249,6 +285,7 @@ export class RouteWorkspace {
         attemptResult: activeAttempt ? null : attemptResult,
         canStartNewRecording: canStart,
         canStartAttempt: canStart,
+        failedReconciliationAttemptId,
       };
       this.homeCache.set(key, snapshot);
       return { value: snapshot, cacheHit: false };

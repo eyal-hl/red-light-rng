@@ -64,6 +64,8 @@ export function fingerprintAttempt(attempt: Attempt): string {
     attempt.startedLocalTimeSource ?? '',
     attempt.resultAcknowledged ? '1' : '0',
     attempt.sessionId,
+    attempt.reconciliationStatus ?? 'pending',
+    String(attempt.reconciliationVersion ?? 0),
     crossings,
   ].join('|');
 }
