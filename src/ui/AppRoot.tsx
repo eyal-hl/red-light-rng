@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, BackHandler, Pressable, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
+import { HIDE_INCOMPLETE_MESSAGE, HIDE_INCOMPLETE_TITLE } from '../domain/attempt';
 import {
   createCourseEditorDraft,
   toCourseLayout,
@@ -100,6 +101,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [places, setPlaces] = useState<Place[]>([]);
   const [journeys, setJourneys] = useState<JourneyPoolSummary[]>([]);
   const [incomplete, setIncomplete] = useState<Attempt[]>([]);
+  const [hiddenIncomplete, setHiddenIncomplete] = useState<Attempt[]>([]);
   const [activeMode, setActiveMode] = useState<TransportationMode>('scooter');
   const [pendingRecording, setPendingRecording] = useState<TrackingSessionRecord | null>(null);
   const [canStartNewRecording, setCanStartNewRecording] = useState(true);
@@ -169,6 +171,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     setPlaces(snapshot.places);
     setJourneys(snapshot.journeys);
     setIncomplete(snapshot.incompleteAttempts);
+    setHiddenIncomplete(snapshot.hiddenIncompleteAttempts);
     setActiveMode(snapshot.activeTransportationMode);
     setPendingRecording(snapshot.pendingRecording);
     setCanStartNewRecording(snapshot.canStartNewRecording);
@@ -296,6 +299,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPlaces(snapshot.places);
       setJourneys(snapshot.journeys);
       setIncomplete(snapshot.incompleteAttempts);
+      setHiddenIncomplete(snapshot.hiddenIncompleteAttempts);
       setActiveMode(snapshot.activeTransportationMode);
       setPendingRecording(snapshot.pendingRecording);
       setCanStartNewRecording(snapshot.canStartNewRecording);
@@ -656,6 +660,91 @@ export function AppRoot({ workspace }: AppRootProps) {
       setBusy(false);
     }
   }, [attemptResult, loadJourney, refreshHome, workspace]);
+
+  const leaveResultAfterHide = useCallback(
+    async (attempt: Attempt) => {
+      const stayOnHistory = screen.kind === 'attempt-detail' && 'pool' in screen;
+      const pool = stayOnHistory && screen.kind === 'attempt-detail' ? screen.pool : null;
+      if (attemptResult?.id === attempt.id) {
+        setAttemptResult(null);
+        setJourneyFocus(null);
+        setAttemptDebug(null);
+        setDebugPending(false);
+        setPathAnalyticsPending(false);
+        setDebugError(null);
+        setPathAnalyticsError(null);
+        secondaryLoadTokenRef.current += 1;
+      }
+      await refreshHome();
+      if (pool) {
+        setScreen({ kind: 'history', pool });
+        await loadJourney(pool);
+        return;
+      }
+      if (screen.kind === 'attempt-result' || screen.kind === 'attempt-detail') {
+        setScreen({ kind: 'home' });
+      }
+    },
+    [attemptResult, loadJourney, refreshHome, screen],
+  );
+
+  const performHideIncomplete = useCallback(
+    async (attemptId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.hideIncompleteAttempt(attemptId);
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        await leaveResultAfterHide(result.attempt);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not hide this incomplete attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [leaveResultAfterHide, workspace],
+  );
+
+  const confirmHideIncomplete = useCallback(
+    (attemptId: string) => {
+      Alert.alert(HIDE_INCOMPLETE_TITLE, HIDE_INCOMPLETE_MESSAGE, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Hide',
+          onPress: () => {
+            void performHideIncomplete(attemptId);
+          },
+        },
+      ]);
+    },
+    [performHideIncomplete],
+  );
+
+  const performRestoreIncomplete = useCallback(
+    async (attemptId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.restoreIncompleteAttempt(attemptId);
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        if (attemptResult?.id === attemptId) {
+          setAttemptResult(result.attempt);
+        }
+        await refreshHome();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not restore this incomplete attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [attemptResult, refreshHome, workspace],
+  );
 
   const onChangeResultMode = useCallback(
     async (mode: TransportationMode) => {
@@ -1259,6 +1348,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           journeys={journeys}
           places={places}
           incompleteAttempts={incomplete}
+          hiddenIncompleteAttempts={hiddenIncomplete}
           activeTransportationMode={activeMode}
           pendingRecording={pendingRecording != null}
           pendingInterrupted={pendingRecording?.captureOutcome === 'interrupted'}
@@ -1280,6 +1370,12 @@ export function AppRoot({ workspace }: AppRootProps) {
                 await showAttemptResult(attempt);
               }
             })();
+          }}
+          onHideIncomplete={(attemptId) => {
+            confirmHideIncomplete(attemptId);
+          }}
+          onRestoreIncomplete={(attemptId) => {
+            void performRestoreIncomplete(attemptId);
           }}
           onOpenPlaces={() => {
             void onOpenPlaces();
@@ -1499,6 +1595,16 @@ export function AppRoot({ workspace }: AppRootProps) {
           onDone={() => {
             void onAcknowledgeAttempt();
           }}
+          onHideIncomplete={() => {
+            if (attemptResult) {
+              confirmHideIncomplete(attemptResult.id);
+            }
+          }}
+          onRestoreIncomplete={() => {
+            if (attemptResult) {
+              void performRestoreIncomplete(attemptResult.id);
+            }
+          }}
           onChangeMode={(mode) => {
             void onChangeResultMode(mode);
           }}
@@ -1543,6 +1649,12 @@ export function AppRoot({ workspace }: AppRootProps) {
           doneLabel="BACK"
           onDone={() => {
             void onBackFromHistoryDetail();
+          }}
+          onHideIncomplete={() => {
+            confirmHideIncomplete(attemptResult.id);
+          }}
+          onRestoreIncomplete={() => {
+            void performRestoreIncomplete(attemptResult.id);
           }}
           onChangeMode={(mode) => {
             void onChangeResultMode(mode);

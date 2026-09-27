@@ -496,6 +496,29 @@ describe('attempt analysis', () => {
     assert.equal(row?.lifecycle, 'ended');
   });
 
+  it('omits hidden ended incomplete attempts from chronological history', () => {
+    const course = courseFromPath();
+    const official = makeAttempt({ id: 'official', sessionId: 'official', armedAtMs: 1_000 });
+    const ended = makeAttempt({
+      id: 'ended',
+      sessionId: 'ended',
+      lifecycle: 'ended',
+      validity: 'unranked',
+      startedAtMs: null,
+      finishedAtMs: null,
+      armedAtMs: 2_000,
+      hiddenIncomplete: true,
+    });
+    const traces = [
+      traceFor(course, official, coveringTrace(course.referencePath, { sessionId: 'official', startMs: 1_000 })),
+      traceFor(course, ended, coveringTrace(course.referencePath, { sessionId: 'ended', startMs: 50_000 })),
+    ];
+    const analysis = analyzeRouteAttempts(course, traces);
+    assert.equal(analysis.chronologicalHistory.some((row) => row.attemptId === 'ended'), false);
+    assert.equal(analysis.rankedHistory.some((row) => row.attemptId === 'ended'), false);
+    assert.equal(analysis.summary.rankedAttemptCount, 1);
+  });
+
   it('orders chronological history newest-first and ranked history by official time', () => {
     const course = courseFromPath();
     const first = makeAttempt({ id: 'first', sessionId: 'first', armedAtMs: 1_000, finishedAtMs: 10_000 });

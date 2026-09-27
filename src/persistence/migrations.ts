@@ -453,6 +453,12 @@ export const MIGRATIONS: Migration[] = [
       await ensureAttemptReconciliationColumns(sql);
     },
   },
+  {
+    version: 11,
+    async up(sql) {
+      await ensureAttemptHiddenIncompleteColumn(sql);
+    },
+  },
 ];
 
 async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {
@@ -506,6 +512,15 @@ async function ensureAttemptLocalStartColumns(sql: SqlExecutor): Promise<boolean
     `started_local_time_source TEXT`,
   );
   return addedOffset || addedTimezone || addedSource;
+}
+
+async function ensureAttemptHiddenIncompleteColumn(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(
+    sql,
+    'attempt',
+    'hidden_incomplete',
+    `hidden_incomplete INTEGER NOT NULL DEFAULT 0`,
+  );
 }
 
 async function ensureAttemptReconciliationColumns(sql: SqlExecutor): Promise<void> {

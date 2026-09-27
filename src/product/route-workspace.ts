@@ -42,6 +42,7 @@ import {
   analyzeJourneyFocus,
   analyzeJourneyHeadline,
   attemptInPool,
+  hiddenIncompleteAttempts,
   incompleteAttempts,
   journeyHistoryRows,
   listJourneyPools,
@@ -63,6 +64,7 @@ import type { LocationPlatform, LocationFix, LocationTracker } from '../tracking
 import {
   AttemptRuntime,
   type ArmAttemptResult,
+  type HideIncompleteAttemptResult,
   type PathVariantRecomputeOptions,
   type PathVariantRecomputeResult,
   type ProcessActiveAttemptResult,
@@ -88,6 +90,7 @@ export type HomeSnapshot = {
   places: Place[];
   journeys: JourneyPoolSummary[];
   incompleteAttempts: Attempt[];
+  hiddenIncompleteAttempts: Attempt[];
   activeTransportationMode: TransportationMode;
   activeRecording: TrackingSessionRecord | null;
   pendingRecording: TrackingSessionRecord | null;
@@ -278,6 +281,7 @@ export class RouteWorkspace {
         places: placeList,
         journeys: listJourneyPools(traces, placesById),
         incompleteAttempts: incompleteAttempts(traces),
+        hiddenIncompleteAttempts: hiddenIncompleteAttempts(traces),
         activeTransportationMode,
         activeRecording,
         pendingRecording,
@@ -631,6 +635,14 @@ export class RouteWorkspace {
 
   async acknowledgeAttemptResult(attemptId: string): Promise<void> {
     await this.attempts.acknowledgeResult(attemptId);
+  }
+
+  async hideIncompleteAttempt(attemptId: string): Promise<HideIncompleteAttemptResult> {
+    return this.attempts.hideIncompleteAttempt(attemptId);
+  }
+
+  async restoreIncompleteAttempt(attemptId: string): Promise<HideIncompleteAttemptResult> {
+    return this.attempts.restoreIncompleteAttempt(attemptId);
   }
 
   async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {

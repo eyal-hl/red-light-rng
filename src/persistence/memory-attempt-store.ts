@@ -13,6 +13,7 @@ import type { CompleteSessionInput, LocationSampleStore } from './location-sampl
 function cloneAttempt(attempt: Attempt): Attempt {
   return {
     ...attempt,
+    hiddenIncomplete: attempt.hiddenIncomplete === true,
     reconciliationStatus: parseAttemptReconciliationStatus(attempt.reconciliationStatus),
     reconciliationVersion: attempt.reconciliationVersion ?? 0,
     crossings: attempt.crossings.map((crossing) => ({ ...crossing })),
@@ -70,7 +71,7 @@ export class MemoryAttemptStore implements AttemptStore {
   async getUnacknowledgedResult(): Promise<Attempt | null> {
     let latest: Attempt | null = null;
     for (const attempt of this.attempts.values()) {
-      if (isOpenAttempt(attempt) || attempt.resultAcknowledged) {
+      if (isOpenAttempt(attempt) || attempt.resultAcknowledged || attempt.hiddenIncomplete === true) {
         continue;
       }
       if (!latest || attempt.armedAtMs > latest.armedAtMs) {

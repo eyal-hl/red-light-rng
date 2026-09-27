@@ -1,6 +1,8 @@
 import {
   EMPTY_ATTEMPT_LOCAL_START,
+  hideIncompleteAttemptRecord,
   isOpenAttempt,
+  restoreIncompleteAttemptRecord,
   type Attempt,
   type AttemptCheckpointCrossing,
 } from '../domain/attempt';
@@ -57,6 +59,10 @@ export type PathVariantRecomputeOptions = {
   skipIfUnchanged?: boolean;
   yieldToIdle?: IdleYield;
 };
+
+export type HideIncompleteAttemptResult =
+  | { ok: true; attempt: Attempt }
+  | { ok: false; reason: string };
 
 const LOCATING_START_ZONE: PlaceStartZoneStatus = {
   status: 'locating',
@@ -132,6 +138,7 @@ export class AttemptRuntime {
       finishedAtMs: null,
       ...EMPTY_ATTEMPT_LOCAL_START,
       resultAcknowledged: false,
+      hiddenIncomplete: false,
       crossings: [],
       reconciliationStatus: 'pending',
       reconciliationVersion: 0,
@@ -251,6 +258,32 @@ export class AttemptRuntime {
 
   async acknowledgeResult(attemptId: string): Promise<void> {
     await this.attempts.acknowledgeResult(attemptId);
+  }
+
+  async hideIncompleteAttempt(attemptId: string): Promise<HideIncompleteAttemptResult> {
+    const attempt = await this.attempts.getAttempt(attemptId);
+    if (!attempt) {
+      return { ok: false, reason: 'This attempt is no longer available.' };
+    }
+    const next = hideIncompleteAttemptRecord(attempt);
+    if (!next) {
+      return { ok: false, reason: 'Only incomplete attempts can be hidden.' };
+    }
+    await this.attempts.saveAttempt(next);
+    return { ok: true, attempt: next };
+  }
+
+  async restoreIncompleteAttempt(attemptId: string): Promise<HideIncompleteAttemptResult> {
+    const attempt = await this.attempts.getAttempt(attemptId);
+    if (!attempt) {
+      return { ok: false, reason: 'This attempt is no longer available.' };
+    }
+    const next = restoreIncompleteAttemptRecord(attempt);
+    if (!next) {
+      return { ok: false, reason: 'Only hidden incomplete attempts can be restored.' };
+    }
+    await this.attempts.saveAttempt(next);
+    return { ok: true, attempt: next };
   }
 
   async getOpenAttempt(): Promise<Attempt | null> {

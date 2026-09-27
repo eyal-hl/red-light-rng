@@ -1,5 +1,6 @@
 import {
   incompleteAttemptLabel,
+  isHiddenIncomplete,
   isJourneyCompetitive,
   officialTimeMs,
   type Attempt,
@@ -197,7 +198,10 @@ export function journeyHistoryRows(
   const pbId = ranked[0]?.id ?? null;
   return inPool
     .map((trace) => trace.attempt)
-    .filter((attempt) => isJourneyCompetitive(attempt) || attempt.lifecycle === 'ended')
+    .filter(
+      (attempt) =>
+        (isJourneyCompetitive(attempt) || attempt.lifecycle === 'ended') && !isHiddenIncomplete(attempt),
+    )
     .map((attempt) => {
       const eligible = isJourneyCompetitive(attempt);
       return {
@@ -537,7 +541,14 @@ function waitComparisonForHeadlineTarget(input: {
 export function incompleteAttempts(traces: JourneyAttemptTrace[]): Attempt[] {
   return traces
     .map((trace) => trace.attempt)
-    .filter((attempt) => attempt.lifecycle === 'ended')
+    .filter((attempt) => attempt.lifecycle === 'ended' && !isHiddenIncomplete(attempt))
+    .sort((a, b) => b.armedAtMs - a.armedAtMs);
+}
+
+export function hiddenIncompleteAttempts(traces: JourneyAttemptTrace[]): Attempt[] {
+  return traces
+    .map((trace) => trace.attempt)
+    .filter((attempt) => isHiddenIncomplete(attempt))
     .sort((a, b) => b.armedAtMs - a.armedAtMs);
 }
 

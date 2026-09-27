@@ -63,6 +63,7 @@ export function fingerprintAttempt(attempt: Attempt): string {
     attempt.startedTimezoneId ?? '',
     attempt.startedLocalTimeSource ?? '',
     attempt.resultAcknowledged ? '1' : '0',
+    attempt.hiddenIncomplete === true ? '1' : '0',
     attempt.sessionId,
     attempt.reconciliationStatus ?? 'pending',
     String(attempt.reconciliationVersion ?? 0),
