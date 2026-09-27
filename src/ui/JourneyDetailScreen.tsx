@@ -111,15 +111,7 @@ export function JourneyDetailScreen({
                       accessibilityLabel={`${item.route.name} path color`}
                       style={[
                         styles.variantSwatch,
-                        {
-                          backgroundColor: variantStyle.color,
-                          borderStyle:
-                            variantStyle.dashKind === 'solid'
-                              ? 'solid'
-                              : variantStyle.dashKind === 'dot'
-                                ? 'dotted'
-                                : 'dashed',
-                        },
+                        { backgroundColor: variantStyle.color },
                       ]}
                     />
                     <Text style={[styles.cardTitle, styles.variantCardTitle]}>{item.route.name}</Text>

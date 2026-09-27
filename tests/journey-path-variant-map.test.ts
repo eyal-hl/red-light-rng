@@ -12,7 +12,6 @@ import {
   pathVariantDisplayStyle,
   pathVariantsToMapLines,
   PATH_VARIANT_COLORS,
-  PATH_VARIANT_DASH_KINDS,
   sanitizeReferencePath,
 } from '../src/map/path-variant-display';
 import { placeZone } from '../src/domain/place';
@@ -91,13 +90,15 @@ describe('journey path variant map', () => {
     assert.doesNotMatch(detail, /pathVariants\.length === 1/);
   });
 
-  it('renders one route line from the persisted reference path', () => {
+  it('renders one continuous solid route line from the persisted reference path', () => {
     const path = northPath({ points: 12, stepMeters: 20 });
     const route = makeRoute({ id: 'route-under', name: 'Under', referencePath: path });
     const lines = pathVariantsToMapLines([summaryFor(route)]);
     assert.equal(lines.length, 1);
     assert.equal(lines[0]?.id, 'route-under');
     assert.deepEqual(lines[0]?.path, path);
+    assert.equal(lines[0]?.color, pathVariantDisplayStyle(route.id).color);
+    assert.equal('dashKind' in (lines[0] ?? {}), false);
   });
 
   it('renders every PATH VARIANTS route that has geometry, including explicit recordings', () => {
@@ -116,13 +117,14 @@ describe('journey path variant map', () => {
     assert.equal(lines[1]?.name, 'Above');
   });
 
-  it('assigns deterministic styles by stable route id across rerender, restart, and reorder', () => {
+  it('assigns deterministic colors by stable route id across rerender, restart, and reorder', () => {
     const first = pathVariantDisplayStyle('route-under');
     const second = pathVariantDisplayStyle('route-under');
     const other = pathVariantDisplayStyle('route-above');
     assert.deepEqual(first, second);
     assert.equal(PATH_VARIANT_COLORS.includes(first.color as (typeof PATH_VARIANT_COLORS)[number]), true);
-    assert.equal(PATH_VARIANT_DASH_KINDS.includes(first.dashKind), true);
+    assert.equal('dashKind' in first, false);
+    assert.notEqual(first.color, other.color);
 
     const under = northPath({ points: 8, stepMeters: 25 });
     const above = parallelPath(under, 45);
@@ -133,11 +135,8 @@ describe('journey path variant map', () => {
     const underStyle = original.find((line) => line.id === 'route-under');
     const reorderedUnder = reordered.find((line) => line.id === 'route-under');
     assert.equal(underStyle?.color, reorderedUnder?.color);
-    assert.equal(underStyle?.dashKind, reorderedUnder?.dashKind);
     assert.equal(underStyle?.color, first.color);
-    if (first.color === other.color) {
-      assert.notEqual(first.dashKind, other.dashKind);
-    }
+    assert.notEqual(original[0]?.color, original[1]?.color);
   });
 
   it('keeps Path Variant card indicators matched to the rendered route identity', () => {
@@ -151,7 +150,20 @@ describe('journey path variant map', () => {
     const style = pathVariantDisplayStyle(route.id);
     const [line] = pathVariantsToMapLines([summaryFor(route)]);
     assert.equal(line?.color, style.color);
-    assert.equal(line?.dashKind, style.dashKind);
+  });
+
+  it('never uses dashed, cut, striped, or gapped route strokes', () => {
+    const display = readFileSync('src/map/path-variant-display.ts', 'utf8');
+    const map = readFileSync('src/map/RouteMap.tsx', 'utf8');
+    const fallback = readFileSync('src/map/FallbackRoutePreview.tsx', 'utf8');
+    const detail = readFileSync('src/ui/JourneyDetailScreen.tsx', 'utf8');
+    assert.doesNotMatch(display, /dashKind|DASH_KINDS|lineDash|dasharray/);
+    assert.doesNotMatch(map, /line-dasharray|dashKind|PATH_VARIANT_LINE_LAYERS/);
+    assert.doesNotMatch(fallback, /dashKind|variantDash|variantDot|fallbackStrokePoints/);
+    assert.doesNotMatch(detail, /borderStyle|dashed|dotted/);
+    assert.match(map, /id="path-variant-line"/);
+    assert.match(map, /'line-color': \['get', 'color'\]/);
+    assert.match(detail, /backgroundColor: variantStyle\.color/);
   });
 
   it('fits map bounds to every rendered variant plus start and finish', () => {

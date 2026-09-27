@@ -2,11 +2,7 @@ import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { geoZoneExtentPoints, type GeoZone, type LatLng } from '../domain/geo';
-import {
-  boundFallbackPathVertices,
-  type PathVariantDashKind,
-  type PathVariantMapLine,
-} from './path-variant-display';
+import { boundFallbackPathVertices, type PathVariantMapLine } from './path-variant-display';
 
 type FallbackCheckpoint = {
   id: string;
@@ -44,16 +40,6 @@ type FallbackRoutePreviewProps = {
 
 type Point = { x: number; y: number };
 
-function fallbackStrokePoints(points: Point[], dashKind: PathVariantDashKind): Point[] {
-  if (points.length <= 2 || dashKind === 'solid') {
-    return points;
-  }
-  const step = dashKind === 'dot' ? 3 : 2;
-  return points.filter(
-    (_, index) => index === 0 || index === points.length - 1 || index % step === 0,
-  );
-}
-
 function project(
   path: LatLng[],
   startZone?: GeoZone | null,
@@ -83,7 +69,6 @@ function project(
     id: string;
     name: string;
     color: string;
-    dashKind: PathVariantDashKind;
     points: Point[];
   }[];
 } {
@@ -176,7 +161,6 @@ function project(
       id: variant.id,
       name: variant.name,
       color: variant.color,
-      dashKind: variant.dashKind,
       points: variant.path.map(toPoint),
     })),
   };
@@ -243,14 +227,12 @@ export function FallbackRoutePreview({
         />
       ))}
       {projected.variantStrokes.map((stroke) =>
-        fallbackStrokePoints(stroke.points, stroke.dashKind).map((point, index) => (
+        stroke.points.map((point, index) => (
           <View
             key={`variant-${stroke.id}-${index}`}
             accessibilityLabel={`${stroke.name} path`}
             style={[
               styles.dot,
-              stroke.dashKind === 'dot' ? styles.variantDot : null,
-              stroke.dashKind === 'long' ? styles.variantDash : null,
               {
                 left: `${point.x}%`,
                 top: `${point.y}%`,
@@ -474,20 +456,6 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#8a2f2f',
     zIndex: 5,
-  },
-  variantDot: {
-    width: 4,
-    height: 4,
-    marginLeft: -2,
-    marginTop: -2,
-    borderRadius: 2,
-  },
-  variantDash: {
-    width: 8,
-    height: 4,
-    marginLeft: -4,
-    marginTop: -2,
-    borderRadius: 2,
   },
   recordedDot: {
     position: 'absolute',

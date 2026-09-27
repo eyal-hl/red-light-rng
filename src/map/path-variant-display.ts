@@ -12,14 +12,10 @@ export const PATH_VARIANT_COLORS = [
   '#ffcc80',
 ] as const;
 
-export const PATH_VARIANT_DASH_KINDS = ['solid', 'short', 'long', 'dot'] as const;
-export type PathVariantDashKind = (typeof PATH_VARIANT_DASH_KINDS)[number];
-
 export const FALLBACK_MAX_PATH_VERTICES = 96;
 
 export type PathVariantDisplayStyle = {
   color: string;
-  dashKind: PathVariantDashKind;
 };
 
 export type PathVariantMapLine = {
@@ -27,7 +23,6 @@ export type PathVariantMapLine = {
   name: string;
   path: LatLng[];
   color: string;
-  dashKind: PathVariantDashKind;
 };
 
 export function isRenderableReferencePath(path: LatLng[] | null | undefined): boolean {
@@ -65,7 +60,6 @@ export function pathVariantDisplayStyle(routeId: string): PathVariantDisplayStyl
   const hash = hashString(routeId);
   return {
     color: PATH_VARIANT_COLORS[hash % PATH_VARIANT_COLORS.length]!,
-    dashKind: PATH_VARIANT_DASH_KINDS[(hash >>> 8) % PATH_VARIANT_DASH_KINDS.length]!,
   };
 }
 
@@ -84,7 +78,6 @@ export function pathVariantsToMapLines(
       name: item.route.name,
       path,
       color: style.color,
-      dashKind: style.dashKind,
     });
   }
   return lines;

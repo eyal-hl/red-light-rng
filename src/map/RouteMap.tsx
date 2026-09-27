@@ -9,7 +9,6 @@ import { OPENFREEMAP_LIBERTY_STYLE_URL, OPENFREEMAP_LIBERTY_TEXT_FONT } from './
 import {
   isRenderableReferencePath,
   pathVariantCameraPoints,
-  type PathVariantDashKind,
   type PathVariantMapLine,
 } from './path-variant-display';
 
@@ -69,7 +68,6 @@ type FeatureCollection = {
       sampleId: string;
       accepted: string;
       color: string;
-      dashKind: string;
       routeId: string;
     };
     geometry:
@@ -103,17 +101,9 @@ function emptyProperties(kind: string, selected = false): FeatureCollection['fea
     sampleId: '',
     accepted: 'no',
     color: '#4fc3f7',
-    dashKind: 'solid',
     routeId: '',
   };
 }
-
-const PATH_VARIANT_LINE_LAYERS: { dashKind: PathVariantDashKind; dasharray?: [number, number] }[] = [
-  { dashKind: 'solid' },
-  { dashKind: 'short', dasharray: [2, 2] },
-  { dashKind: 'long', dasharray: [4, 2] },
-  { dashKind: 'dot', dasharray: [0.75, 1.5] },
-];
 
 const WAIT_MARKER_RADIUS = 8;
 const WAIT_MARKER_SELECTED_RADIUS = 11;
@@ -147,7 +137,6 @@ function toGeoJson(
       properties: {
         ...emptyProperties('path-variant'),
         color: variant.color,
-        dashKind: variant.dashKind,
         routeId: variant.id,
       },
       geometry: {
@@ -223,7 +212,6 @@ function toWaitGeoJson(
         sampleId: '',
         accepted: 'no',
         color: '#4fc3f7',
-        dashKind: 'solid',
         routeId: '',
       },
       geometry: {
@@ -270,7 +258,6 @@ function toDebugSampleGeoJson(
         sampleId: sample.id,
         accepted: sample.accepted ? 'yes' : 'no',
         color: '#4fc3f7',
-        dashKind: 'solid',
         routeId: '',
       },
       geometry: {
@@ -455,24 +442,16 @@ function MapLibreRouteMap({
           filter={['==', ['get', 'kind'], 'path']}
           paint={{ 'line-color': '#4fc3f7', 'line-width': 4, 'line-opacity': 0.95 }}
         />
-        {PATH_VARIANT_LINE_LAYERS.map((layer) => (
-          <Layer
-            key={layer.dashKind}
-            id={`path-variant-${layer.dashKind}`}
-            type="line"
-            filter={[
-              'all',
-              ['==', ['get', 'kind'], 'path-variant'],
-              ['==', ['get', 'dashKind'], layer.dashKind],
-            ]}
-            paint={{
-              'line-color': ['get', 'color'],
-              'line-width': 4,
-              'line-opacity': 0.92,
-              ...(layer.dasharray ? { 'line-dasharray': layer.dasharray } : {}),
-            }}
-          />
-        ))}
+        <Layer
+          id="path-variant-line"
+          type="line"
+          filter={['==', ['get', 'kind'], 'path-variant']}
+          paint={{
+            'line-color': ['get', 'color'],
+            'line-width': 4,
+            'line-opacity': 0.92,
+          }}
+        />
         <Layer
           id="start-point"
           type="circle"
