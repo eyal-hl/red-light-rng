@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
@@ -16,6 +17,7 @@ type HomeScreenProps = {
   journeys: JourneyPoolSummary[];
   places: Place[];
   incompleteAttempts: Attempt[];
+  hiddenIncompleteAttempts: Attempt[];
   activeTransportationMode: TransportationMode;
   pendingRecording: boolean;
   pendingInterrupted: boolean;
@@ -27,6 +29,8 @@ type HomeScreenProps = {
   onStart: () => void;
   onOpenJourney: (originPlaceId: string, destinationPlaceId: string, mode: TransportationMode) => void;
   onOpenIncomplete: (attemptId: string) => void;
+  onHideIncomplete: (attemptId: string) => void;
+  onRestoreIncomplete: (attemptId: string) => void;
   onOpenPlaces: () => void;
   onOpenSettings: () => void;
   onRecordPathVariant: () => void;
@@ -38,6 +42,7 @@ export function HomeScreen({
   journeys,
   places,
   incompleteAttempts,
+  hiddenIncompleteAttempts,
   activeTransportationMode,
   pendingRecording,
   pendingInterrupted,
@@ -49,6 +54,8 @@ export function HomeScreen({
   onStart,
   onOpenJourney,
   onOpenIncomplete,
+  onHideIncomplete,
+  onRestoreIncomplete,
   onOpenPlaces,
   onOpenSettings,
   onRecordPathVariant,
@@ -58,6 +65,7 @@ export function HomeScreen({
   const startDisabled = busy || !canStartAttempt;
   const recordDisabled = busy || !canStartNewRecording;
   const activePlaceCount = places.filter((place) => place.status === 'active').length;
+  const [showingHidden, setShowingHidden] = useState(false);
 
   return (
     <View style={styles.screen}>
@@ -134,16 +142,50 @@ export function HomeScreen({
           <View>
             <Text style={styles.sectionLabel}>INCOMPLETE</Text>
             {incompleteAttempts.map((attempt) => (
-              <Pressable
+              <IncompleteAttemptCard
                 key={attempt.id}
-                accessibilityRole="button"
-                onPress={() => onOpenIncomplete(attempt.id)}
-                style={styles.card}
-              >
-                <Text style={styles.cardTitle}>{incompleteAttemptLabel(attempt) ?? 'Ended attempt'}</Text>
-                <Text style={styles.cardMeta}>Debug trace preserved</Text>
-              </Pressable>
+                attempt={attempt}
+                busy={busy}
+                actionLabel="HIDE"
+                accessibilityLabel={`Hide ${incompleteAttemptLabel(attempt) ?? 'incomplete attempt'}`}
+                onOpen={() => onOpenIncomplete(attempt.id)}
+                onAction={() => onHideIncomplete(attempt.id)}
+                actionStyle="danger"
+              />
             ))}
+          </View>
+        ) : null}
+
+        {hiddenIncompleteAttempts.length > 0 ? (
+          <View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: showingHidden }}
+              accessibilityLabel={
+                showingHidden ? 'Hide hidden incomplete attempts' : 'Show hidden incomplete attempts'
+              }
+              onPress={() => setShowingHidden((open) => !open)}
+            >
+              <Text style={styles.sectionLabel}>
+                {showingHidden
+                  ? '▾ HIDDEN INCOMPLETE'
+                  : `▸ SHOW HIDDEN INCOMPLETE · ${hiddenIncompleteAttempts.length}`}
+              </Text>
+            </Pressable>
+            {showingHidden
+              ? hiddenIncompleteAttempts.map((attempt) => (
+                  <IncompleteAttemptCard
+                    key={attempt.id}
+                    attempt={attempt}
+                    busy={busy}
+                    actionLabel="RESTORE"
+                    accessibilityLabel={`Restore ${incompleteAttemptLabel(attempt) ?? 'incomplete attempt'}`}
+                    onOpen={() => onOpenIncomplete(attempt.id)}
+                    onAction={() => onRestoreIncomplete(attempt.id)}
+                    actionStyle="restore"
+                  />
+                ))
+              : null}
           </View>
         ) : null}
 
@@ -194,6 +236,44 @@ export function HomeScreen({
           </Pressable>
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+function IncompleteAttemptCard({
+  attempt,
+  busy,
+  actionLabel,
+  accessibilityLabel,
+  onOpen,
+  onAction,
+  actionStyle,
+}: {
+  attempt: Attempt;
+  busy: boolean;
+  actionLabel: string;
+  accessibilityLabel: string;
+  onOpen: () => void;
+  onAction: () => void;
+  actionStyle: 'danger' | 'restore';
+}) {
+  return (
+    <View style={styles.card}>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={onOpen}>
+        <Text style={styles.cardTitle}>{incompleteAttemptLabel(attempt) ?? 'Ended attempt'}</Text>
+        <Text style={styles.cardMeta}>Debug trace preserved</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        disabled={busy}
+        onPress={onAction}
+        style={styles.cardDangerAction}
+      >
+        <Text style={actionStyle === 'danger' ? styles.cardDangerText : styles.cardRestoreText}>
+          {actionLabel}
+        </Text>
+      </Pressable>
     </View>
   );
 }

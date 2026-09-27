@@ -40,6 +40,7 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
     startedTimezoneId: row.started_timezone_id,
     startedLocalTimeSource: parseAttemptLocalTimeSource(row.started_local_time_source),
     resultAcknowledged: row.result_acknowledged === 1,
+    hiddenIncomplete: Number(row.hidden_incomplete) === 1,
     crossings,
     reconciliationStatus: parseAttemptReconciliationStatus(row.reconciliation_status),
     reconciliationVersion: row.reconciliation_version ?? 0,
@@ -119,6 +120,7 @@ export class SqliteAttemptStore implements AttemptStore {
     const row = await sql.getFirst<AttemptRow>(
       `SELECT * FROM attempt
        WHERE result_acknowledged = 0
+         AND hidden_incomplete = 0
          AND lifecycle NOT IN ('armed', 'active')
        ORDER BY armed_at_ms DESC
        LIMIT 1`,
@@ -235,8 +237,8 @@ export class SqliteAttemptStore implements AttemptStore {
          id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
          lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
          started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged,
-         reconciliation_status, reconciliation_version
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         hidden_incomplete, reconciliation_status, reconciliation_version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          route_id = excluded.route_id,
          origin_place_id = excluded.origin_place_id,
@@ -250,6 +252,7 @@ export class SqliteAttemptStore implements AttemptStore {
          started_timezone_id = excluded.started_timezone_id,
          started_local_time_source = excluded.started_local_time_source,
          result_acknowledged = excluded.result_acknowledged,
+         hidden_incomplete = excluded.hidden_incomplete,
          reconciliation_status = excluded.reconciliation_status,
          reconciliation_version = excluded.reconciliation_version`,
       [
@@ -268,6 +271,7 @@ export class SqliteAttemptStore implements AttemptStore {
         attempt.startedTimezoneId,
         attempt.startedLocalTimeSource,
         attempt.resultAcknowledged ? 1 : 0,
+        attempt.hiddenIncomplete === true ? 1 : 0,
         parseAttemptReconciliationStatus(attempt.reconciliationStatus),
         attempt.reconciliationVersion ?? 0,
       ],

@@ -723,6 +723,55 @@ describe('SQLite migrations', { concurrency: 1 }, () => {
       await assertCanonicalRouteColumnsPresent(sql);
     }
   });
+
+  it('adds hidden_incomplete on existing attempts without wiping telemetry or identity', async () => {
+    const sql = createMemorySqlExecutor();
+    await migrateThrough(sql, 10, 9_000);
+    const beforeColumns = await tableColumnNames(sql, 'attempt');
+    assert.equal(beforeColumns.has('hidden_incomplete'), false);
+    await insertPlace(sql, placeRow('home-keep', 'Home', { latitude: 32.08, longitude: 34.78 }, 30, 'active', 100));
+    await insertSession(sql, 'sess-dnf', 1_000);
+    await sql.run(
+      `INSERT INTO attempt (
+         id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms, result_acknowledged,
+         reconciliation_status, reconciliation_version
+       ) VALUES (?, NULL, ?, NULL, 'scooter', ?, 'ended', 'unranked', ?, NULL, NULL, 0, 'reconciled', 1)`,
+      ['dnf-keep', 'home-keep', 'sess-dnf', 1_500],
+    );
+    await sql.run(
+      `INSERT INTO location_sample (
+         id, session_id, recorded_at_ms, latitude, longitude,
+         horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['p-dnf', 'sess-dnf', 1_600, 32.08, 34.78, 5, 1, 0],
+    );
+
+    await applyMigrations(sql, 20_000);
+
+    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
+    assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
+    const afterColumns = await tableColumnNames(sql, 'attempt');
+    assert.equal(afterColumns.has('hidden_incomplete'), true);
+    const row = await sql.getFirst<{
+      id: string;
+      lifecycle: string;
+      origin_place_id: string;
+      hidden_incomplete: number;
+      result_acknowledged: number;
+    }>('SELECT id, lifecycle, origin_place_id, hidden_incomplete, result_acknowledged FROM attempt WHERE id = ?', [
+      'dnf-keep',
+    ]);
+    assert.equal(row?.id, 'dnf-keep');
+    assert.equal(row?.lifecycle, 'ended');
+    assert.equal(row?.origin_place_id, 'home-keep');
+    assert.equal(row?.hidden_incomplete, 0);
+    assert.equal(row?.result_acknowledged, 0);
+    const sample = await sql.getFirst<{ id: string }>('SELECT id FROM location_sample WHERE id = ?', ['p-dnf']);
+    assert.equal(sample?.id, 'p-dnf');
+    const place = await sql.getFirst<{ id: string }>('SELECT id FROM place WHERE id = ?', ['home-keep']);
+    assert.equal(place?.id, 'home-keep');
+  });
 });
 
 async function tableColumnNames(sql: SqlExecutor, table: string): Promise<Set<string>> {

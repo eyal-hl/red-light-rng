@@ -19,6 +19,7 @@ const HOME: HomeSnapshot = {
   places: [],
   journeys: [],
   incompleteAttempts: [],
+  hiddenIncompleteAttempts: [],
   activeTransportationMode: 'scooter',
   activeRecording: null,
   pendingRecording: null,
