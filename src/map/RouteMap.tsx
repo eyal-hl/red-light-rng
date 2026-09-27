@@ -6,6 +6,12 @@ import type { GeoZone, LatLng } from '../domain/geo';
 import { COURSE_CAMERA_PADDING, courseCameraBounds } from './course-camera-bounds';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
 import { OPENFREEMAP_LIBERTY_STYLE_URL, OPENFREEMAP_LIBERTY_TEXT_FONT } from './openfreemap-style';
+import {
+  isRenderableReferencePath,
+  pathVariantCameraPoints,
+  type PathVariantDashKind,
+  type PathVariantMapLine,
+} from './path-variant-display';
 
 export type RouteMapCheckpoint = {
   id: string;
@@ -28,8 +34,11 @@ export type RouteMapDebugSample = {
   accepted: boolean;
 };
 
+export type RouteMapPathVariant = PathVariantMapLine;
+
 export type RouteMapProps = {
   path: LatLng[];
+  pathVariants?: RouteMapPathVariant[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
   checkpoints?: RouteMapCheckpoint[];
@@ -59,6 +68,9 @@ type FeatureCollection = {
       tone: string;
       sampleId: string;
       accepted: string;
+      color: string;
+      dashKind: string;
+      routeId: string;
     };
     geometry:
       | { type: 'LineString'; coordinates: number[][] }
@@ -90,8 +102,18 @@ function emptyProperties(kind: string, selected = false): FeatureCollection['fea
     tone: 'wait',
     sampleId: '',
     accepted: 'no',
+    color: '#4fc3f7',
+    dashKind: 'solid',
+    routeId: '',
   };
 }
+
+const PATH_VARIANT_LINE_LAYERS: { dashKind: PathVariantDashKind; dasharray?: [number, number] }[] = [
+  { dashKind: 'solid' },
+  { dashKind: 'short', dasharray: [2, 2] },
+  { dashKind: 'long', dasharray: [4, 2] },
+  { dashKind: 'dot', dasharray: [0.75, 1.5] },
+];
 
 const WAIT_MARKER_RADIUS = 8;
 const WAIT_MARKER_SELECTED_RADIUS = 11;
@@ -103,6 +125,7 @@ function toGeoJson(
   finishZone?: GeoZone | null,
   checkpoints: RouteMapCheckpoint[] = [],
   selectedMarkerId?: string | null,
+  pathVariants: PathVariantMapLine[] = [],
 ): FeatureCollection {
   const features: FeatureCollection['features'] = [];
   if (path.length >= 2) {
@@ -112,6 +135,24 @@ function toGeoJson(
       geometry: {
         type: 'LineString',
         coordinates: path.map((point) => [point.longitude, point.latitude]),
+      },
+    });
+  }
+  for (const variant of pathVariants) {
+    if (!isRenderableReferencePath(variant.path)) {
+      continue;
+    }
+    features.push({
+      type: 'Feature',
+      properties: {
+        ...emptyProperties('path-variant'),
+        color: variant.color,
+        dashKind: variant.dashKind,
+        routeId: variant.id,
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: variant.path.map((point) => [point.longitude, point.latitude]),
       },
     });
   }
@@ -181,6 +222,9 @@ function toWaitGeoJson(
         tone: marker.tone ?? 'wait',
         sampleId: '',
         accepted: 'no',
+        color: '#4fc3f7',
+        dashKind: 'solid',
+        routeId: '',
       },
       geometry: {
         type: 'Point' as const,
@@ -225,6 +269,9 @@ function toDebugSampleGeoJson(
         tone: 'wait',
         sampleId: sample.id,
         accepted: sample.accepted ? 'yes' : 'no',
+        color: '#4fc3f7',
+        dashKind: 'solid',
+        routeId: '',
       },
       geometry: {
         type: 'Point' as const,
@@ -283,6 +330,7 @@ class MapErrorBoundary extends Component<{ fallback: ReactNode; children: ReactN
 
 function MapLibreRouteMap({
   path,
+  pathVariants = [],
   startZone,
   finishZone,
   checkpoints = [],
@@ -300,8 +348,8 @@ function MapLibreRouteMap({
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
   const data = useMemo(
-    () => toGeoJson(path, startZone, finishZone, checkpoints, selectedMarkerId),
-    [checkpoints, finishZone, path, selectedMarkerId, startZone],
+    () => toGeoJson(path, startZone, finishZone, checkpoints, selectedMarkerId, pathVariants),
+    [checkpoints, finishZone, path, pathVariants, selectedMarkerId, startZone],
   );
   const waitData = useMemo(
     () => toWaitGeoJson(waitMarkers, selectedMarkerId),
@@ -320,13 +368,14 @@ function MapLibreRouteMap({
   const cameraPoints = useMemo(
     () => [
       ...checkpoints,
+      ...pathVariantCameraPoints(pathVariants),
       ...waitMarkers.map((marker) => ({ point: marker.point })),
       ...recordedPath.map((point) => ({ point })),
       ...debugSamples.map((sample) => ({ point: sample.point })),
       ...(officialStartPoint ? [{ point: officialStartPoint }] : []),
       ...(officialFinishPoint ? [{ point: officialFinishPoint }] : []),
     ],
-    [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, recordedPath, waitMarkers],
+    [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, pathVariants, recordedPath, waitMarkers],
   );
   const initialBounds = useMemo(
     () => courseCameraBounds(path, startZone, finishZone, cameraPoints),
@@ -406,6 +455,24 @@ function MapLibreRouteMap({
           filter={['==', ['get', 'kind'], 'path']}
           paint={{ 'line-color': '#4fc3f7', 'line-width': 4, 'line-opacity': 0.95 }}
         />
+        {PATH_VARIANT_LINE_LAYERS.map((layer) => (
+          <Layer
+            key={layer.dashKind}
+            id={`path-variant-${layer.dashKind}`}
+            type="line"
+            filter={[
+              'all',
+              ['==', ['get', 'kind'], 'path-variant'],
+              ['==', ['get', 'dashKind'], layer.dashKind],
+            ]}
+            paint={{
+              'line-color': ['get', 'color'],
+              'line-width': 4,
+              'line-opacity': 0.92,
+              ...(layer.dasharray ? { 'line-dasharray': layer.dasharray } : {}),
+            }}
+          />
+        ))}
         <Layer
           id="start-point"
           type="circle"
@@ -569,6 +636,7 @@ function MapLibreRouteMap({
 
 export function RouteMap({
   path,
+  pathVariants = [],
   startZone,
   finishZone,
   checkpoints = [],
@@ -590,6 +658,7 @@ export function RouteMap({
     <View style={styles.fallbackWrap}>
       <FallbackRoutePreview
         path={path}
+        pathVariants={pathVariants}
         startZone={startZone}
         finishZone={finishZone}
         checkpoints={checkpoints}
@@ -618,6 +687,7 @@ export function RouteMap({
         <MapErrorBoundary fallback={fallback}>
           <MapLibreRouteMap
             path={path}
+            pathVariants={pathVariants}
             startZone={startZone}
             finishZone={finishZone}
             checkpoints={checkpoints}

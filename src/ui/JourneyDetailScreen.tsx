@@ -9,6 +9,7 @@ import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery
 import { placeZone, type Place } from '../domain/place';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
+import { pathVariantDisplayStyle, pathVariantsToMapLines } from '../map/path-variant-display';
 import { DeferredMapSlot } from './DeferredMapSlot';
 import {
   durationOrDash,
@@ -50,11 +51,11 @@ export function JourneyDetailScreen({
   onOpenPathVariant,
 }: JourneyDetailScreenProps) {
   const [statsView, setStatsView] = useState<JourneyStatsView>('overall');
-  const mapPath = pathVariants.length === 1 ? (pathVariants[0]?.route.referencePath ?? []) : [];
+  const variantMapLines = pathVariantsToMapLines(pathVariants);
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView nestedScrollEnabled contentContainerStyle={styles.content}>
         <Pressable accessibilityRole="button" onPress={onBack}>
           <Text style={styles.kicker}>← JOURNEYS</Text>
         </Pressable>
@@ -66,7 +67,8 @@ export function JourneyDetailScreen({
         <View style={styles.mapSlot}>
           <DeferredMapSlot style={styles.editorMap}>
             <RouteMap
-              path={mapPath}
+              path={[]}
+              pathVariants={variantMapLines}
               startZone={placeZone(origin)}
               finishZone={placeZone(destination)}
               checkpoints={[]}
@@ -94,22 +96,42 @@ export function JourneyDetailScreen({
         {pathVariants.length > 0 ? (
           <View>
             <Text style={styles.sectionLabel}>PATH VARIANTS</Text>
-            {pathVariants.map((item) => (
-              <Pressable
-                key={item.route.id}
-                accessibilityRole="button"
-                disabled={busy}
-                onPress={() => onOpenPathVariant(item.route.id)}
-                style={styles.card}
-              >
-                <Text style={styles.cardTitle}>{item.route.name}</Text>
-                <Text style={styles.cardMeta}>
-                  {item.attemptCount} attempt{item.attemptCount === 1 ? '' : 's'}
-                  {item.pbTimeMs == null ? '' : ` · variant PB ${formatElapsed(item.pbTimeMs)}`}
-                  {item.typicalTimeMs == null ? '' : ` · typical ${formatElapsed(item.typicalTimeMs)}`}
-                </Text>
-              </Pressable>
-            ))}
+            {pathVariants.map((item) => {
+              const variantStyle = pathVariantDisplayStyle(item.route.id);
+              return (
+                <Pressable
+                  key={item.route.id}
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => onOpenPathVariant(item.route.id)}
+                  style={styles.card}
+                >
+                  <View style={styles.cardTitleRow}>
+                    <View
+                      accessibilityLabel={`${item.route.name} path color`}
+                      style={[
+                        styles.variantSwatch,
+                        {
+                          backgroundColor: variantStyle.color,
+                          borderStyle:
+                            variantStyle.dashKind === 'solid'
+                              ? 'solid'
+                              : variantStyle.dashKind === 'dot'
+                                ? 'dotted'
+                                : 'dashed',
+                        },
+                      ]}
+                    />
+                    <Text style={[styles.cardTitle, styles.variantCardTitle]}>{item.route.name}</Text>
+                  </View>
+                  <Text style={styles.cardMeta}>
+                    {item.attemptCount} attempt{item.attemptCount === 1 ? '' : 's'}
+                    {item.pbTimeMs == null ? '' : ` · variant PB ${formatElapsed(item.pbTimeMs)}`}
+                    {item.typicalTimeMs == null ? '' : ` · typical ${formatElapsed(item.typicalTimeMs)}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
         ) : null}
         {history.slice(0, 3).map((row) => (
