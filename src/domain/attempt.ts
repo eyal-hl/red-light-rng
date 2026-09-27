@@ -44,6 +44,7 @@ export type Attempt = {
   startedTimezoneId: string | null;
   startedLocalTimeSource: AttemptLocalTimeSource | null;
   resultAcknowledged: boolean;
+  hiddenIncomplete?: boolean;
   crossings: AttemptCheckpointCrossing[];
   reconciliationStatus?: AttemptReconciliationStatus;
   reconciliationVersion?: number;
@@ -83,6 +84,43 @@ export function incompleteAttemptLabel(attempt: Pick<Attempt, 'lifecycle' | 'sta
   }
   return attempt.startedAtMs == null ? 'DID NOT START' : 'DID NOT FINISH';
 }
+
+export function isHiddenIncomplete(attempt: Pick<Attempt, 'lifecycle' | 'hiddenIncomplete'>): boolean {
+  return attempt.lifecycle === 'ended' && attempt.hiddenIncomplete === true;
+}
+
+export function canHideIncompleteAttempt(attempt: Pick<Attempt, 'lifecycle' | 'hiddenIncomplete'>): boolean {
+  return attempt.lifecycle === 'ended' && attempt.hiddenIncomplete !== true;
+}
+
+export function canRestoreIncompleteAttempt(attempt: Pick<Attempt, 'lifecycle' | 'hiddenIncomplete'>): boolean {
+  return isHiddenIncomplete(attempt);
+}
+
+export function hideIncompleteAttemptRecord(attempt: Attempt): Attempt | null {
+  if (!canHideIncompleteAttempt(attempt)) {
+    return null;
+  }
+  return {
+    ...attempt,
+    hiddenIncomplete: true,
+    resultAcknowledged: true,
+  };
+}
+
+export function restoreIncompleteAttemptRecord(attempt: Attempt): Attempt | null {
+  if (!canRestoreIncompleteAttempt(attempt)) {
+    return null;
+  }
+  return {
+    ...attempt,
+    hiddenIncomplete: false,
+  };
+}
+
+export const HIDE_INCOMPLETE_TITLE = 'Hide this incomplete attempt?';
+export const HIDE_INCOMPLETE_MESSAGE =
+  'It will leave INCOMPLETE but stay on this device. You can restore it later from SHOW HIDDEN INCOMPLETE.';
 
 export function parseAttemptLocalTimeSource(value: string | null | undefined): AttemptLocalTimeSource | null {
   if (value === 'captured' || value === 'reconstructed') {

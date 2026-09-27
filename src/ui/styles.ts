@@ -175,6 +175,12 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.6,
   },
+  cardRestoreText: {
+    color: '#4fc3f7',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
   disabledButton: {
     opacity: 0.45,
   },

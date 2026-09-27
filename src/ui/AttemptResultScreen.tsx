@@ -2,7 +2,14 @@ import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { segmentEndpointLabel } from '../domain/attempt-analysis';
-import { incompleteAttemptLabel, isJourneyCompetitive, officialTimeMs, type Attempt } from '../domain/attempt';
+import {
+  canHideIncompleteAttempt,
+  canRestoreIncompleteAttempt,
+  incompleteAttemptLabel,
+  isJourneyCompetitive,
+  officialTimeMs,
+  type Attempt,
+} from '../domain/attempt';
 import { PATH_ANALYTICS_UNAVAILABLE_MESSAGE, type JourneyFocusAnalysis } from '../domain/journey-analysis';
 import {
   formatExplanationDelta,
@@ -60,6 +67,8 @@ type AttemptResultScreenProps = {
   error: string | null;
   doneLabel?: string;
   onDone: () => void;
+  onHideIncomplete?: () => void;
+  onRestoreIncomplete?: () => void;
   onChangeMode?: (mode: TransportationMode) => void;
 };
 
@@ -713,9 +722,13 @@ export function AttemptResultScreen({
   error,
   doneLabel = 'DONE',
   onDone,
+  onHideIncomplete,
+  onRestoreIncomplete,
   onChangeMode,
 }: AttemptResultScreenProps) {
   const completed = attempt.lifecycle === 'completed';
+  const canHide = onHideIncomplete != null && canHideIncompleteAttempt(attempt);
+  const canRestore = onRestoreIncomplete != null && canRestoreIncompleteAttempt(attempt);
   const analysis = journey?.pathAnalytics ?? null;
   const focus = analysis?.focus;
   const competitive = isJourneyCompetitive(attempt);
@@ -1081,6 +1094,28 @@ export function AttemptResultScreen({
         ) : null}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.actions}>
+          {canHide ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Hide this incomplete attempt"
+              disabled={busy}
+              onPress={() => onHideIncomplete?.()}
+              style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>HIDE INCOMPLETE</Text>
+            </Pressable>
+          ) : null}
+          {canRestore ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Restore this incomplete attempt"
+              disabled={busy}
+              onPress={() => onRestoreIncomplete?.()}
+              style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>RESTORE INCOMPLETE</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             disabled={busy}

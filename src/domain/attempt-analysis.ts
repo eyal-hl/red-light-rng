@@ -1,4 +1,9 @@
-import { incompleteAttemptLabel, type Attempt, type IncompleteAttemptLabel } from './attempt';
+import {
+  incompleteAttemptLabel,
+  isHiddenIncomplete,
+  type Attempt,
+  type IncompleteAttemptLabel,
+} from './attempt';
 import {
   checkpointCrossingsForWindow,
   finishTriggerProgressMeters,
@@ -717,7 +722,7 @@ function shouldShowInHistory(derived: CurrentLayoutAttempt, attempt: Attempt | u
     return true;
   }
   if (attempt.lifecycle === 'ended') {
-    return true;
+    return !isHiddenIncomplete(attempt);
   }
   if (attempt.lifecycle === 'cancelled' || attempt.lifecycle === 'abandoned' || attempt.lifecycle === 'armed') {
     return false;
