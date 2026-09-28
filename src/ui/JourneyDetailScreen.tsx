@@ -9,7 +9,7 @@ import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery
 import { placeZone, type Place } from '../domain/place';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { RouteMap } from '../map/RouteMap';
-import { pathVariantDisplayStyle, pathVariantsToMapLines } from '../map/path-variant-display';
+import { pathVariantDisplayStyle, pathVariantDisplayStyles, pathVariantsToMapLines } from '../map/path-variant-display';
 import { DeferredMapSlot } from './DeferredMapSlot';
 import {
   durationOrDash,
@@ -51,6 +51,7 @@ export function JourneyDetailScreen({
   onOpenPathVariant,
 }: JourneyDetailScreenProps) {
   const [statsView, setStatsView] = useState<JourneyStatsView>('overall');
+  const variantStyles = pathVariantDisplayStyles(pathVariants.map((item) => item.route.id));
   const variantMapLines = pathVariantsToMapLines(pathVariants);
 
   return (
@@ -97,7 +98,7 @@ export function JourneyDetailScreen({
           <View>
             <Text style={styles.sectionLabel}>PATH VARIANTS</Text>
             {pathVariants.map((item) => {
-              const variantStyle = pathVariantDisplayStyle(item.route.id);
+              const variantStyle = variantStyles.get(item.route.id) ?? pathVariantDisplayStyle(item.route.id);
               return (
                 <Pressable
                   key={item.route.id}

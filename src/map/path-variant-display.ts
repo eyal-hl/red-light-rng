@@ -56,23 +56,81 @@ function hashString(value: string): number {
   return hash >>> 0;
 }
 
-export function pathVariantDisplayStyle(routeId: string): PathVariantDisplayStyle {
-  const hash = hashString(routeId);
-  return {
-    color: PATH_VARIANT_COLORS[hash % PATH_VARIANT_COLORS.length]!,
-  };
+function preferredColorIndex(routeId: string): number {
+  return hashString(routeId) % PATH_VARIANT_COLORS.length;
+}
+
+function compareRouteIds(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+
+export function pathVariantDisplayStyles(
+  routeIds: readonly string[],
+): ReadonlyMap<string, PathVariantDisplayStyle> {
+  const unique = [...new Set(routeIds)].sort(compareRouteIds);
+  const assignedIndex = new Map<string, number>();
+  const used = new Set<number>();
+
+  for (const routeId of unique) {
+    const preferred = preferredColorIndex(routeId);
+    if (!used.has(preferred)) {
+      used.add(preferred);
+      assignedIndex.set(routeId, preferred);
+    }
+  }
+
+  for (const routeId of unique) {
+    if (assignedIndex.has(routeId)) {
+      continue;
+    }
+    if (used.size >= PATH_VARIANT_COLORS.length) {
+      assignedIndex.set(routeId, preferredColorIndex(routeId));
+      continue;
+    }
+    let index = preferredColorIndex(routeId);
+    for (let step = 0; step < PATH_VARIANT_COLORS.length; step += 1) {
+      const candidate = (index + step) % PATH_VARIANT_COLORS.length;
+      if (!used.has(candidate)) {
+        index = candidate;
+        break;
+      }
+    }
+    used.add(index);
+    assignedIndex.set(routeId, index);
+  }
+
+  const styles = new Map<string, PathVariantDisplayStyle>();
+  for (const routeId of unique) {
+    styles.set(routeId, { color: PATH_VARIANT_COLORS[assignedIndex.get(routeId)!]! });
+  }
+  return styles;
+}
+
+export function pathVariantDisplayStyle(
+  routeId: string,
+  siblingRouteIds: readonly string[] = [routeId],
+): PathVariantDisplayStyle {
+  const ids = siblingRouteIds.includes(routeId) ? siblingRouteIds : [routeId, ...siblingRouteIds];
+  return pathVariantDisplayStyles(ids).get(routeId)!;
 }
 
 export function pathVariantsToMapLines(
   variants: readonly { route: Pick<Route, 'id' | 'name' | 'referencePath'> }[],
 ): PathVariantMapLine[] {
+  const styles = pathVariantDisplayStyles(variants.map((item) => item.route.id));
   const lines: PathVariantMapLine[] = [];
   for (const item of variants) {
     const path = sanitizeReferencePath(item.route.referencePath);
     if (path.length < 2) {
       continue;
     }
-    const style = pathVariantDisplayStyle(item.route.id);
+    const style = styles.get(item.route.id) ?? pathVariantDisplayStyle(item.route.id);
     lines.push({
       id: item.route.id,
       name: item.route.name,

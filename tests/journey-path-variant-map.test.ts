@@ -10,6 +10,7 @@ import {
   FALLBACK_MAX_PATH_VERTICES,
   pathVariantCameraPoints,
   pathVariantDisplayStyle,
+  pathVariantDisplayStyles,
   pathVariantsToMapLines,
   PATH_VARIANT_COLORS,
   sanitizeReferencePath,
@@ -59,6 +60,20 @@ function discoveryScalePair(splitMeters: number) {
 
 function overviewPixelSeparation(splitMeters: number, journeyMeters: number, slotPx = SLOT_PX) {
   return (splitMeters / journeyMeters) * slotPx;
+}
+
+function moduloCollidingRouteIds(): [string, string] {
+  const firstByColor = new Map<string, string>();
+  for (let index = 0; index < 10_000; index += 1) {
+    const routeId = `route-collision-${index}`;
+    const color = pathVariantDisplayStyle(routeId).color;
+    const previous = firstByColor.get(color);
+    if (previous) {
+      return [previous, routeId];
+    }
+    firstByColor.set(color, routeId);
+  }
+  throw new Error('expected two route ids to share a modulo-palette color');
 }
 
 function completedAttempt(id: string, overrides: Partial<Attempt> = {}): Attempt {
@@ -139,9 +154,50 @@ describe('journey path variant map', () => {
     assert.notEqual(original[0]?.color, original[1]?.color);
   });
 
+  it('gives distinct colors to route ids that collide under modulo-palette hashing', () => {
+    const [leftId, rightId] = moduloCollidingRouteIds();
+    assert.notEqual(leftId, rightId);
+    assert.equal(
+      pathVariantDisplayStyle(leftId).color,
+      pathVariantDisplayStyle(rightId).color,
+      'fixture must collide when each id is hashed independently',
+    );
+
+    const styles = pathVariantDisplayStyles([leftId, rightId]);
+    assert.notEqual(styles.get(leftId)?.color, styles.get(rightId)?.color);
+    assert.deepEqual(styles, pathVariantDisplayStyles([rightId, leftId]));
+
+    const under = northPath({ points: 8, stepMeters: 25 });
+    const above = parallelPath(under, 45);
+    const original = pathVariantsToMapLines([
+      summaryFor(makeRoute({ id: leftId, name: 'Left', referencePath: under })),
+      summaryFor(makeRoute({ id: rightId, name: 'Right', referencePath: above })),
+    ]);
+    const reordered = pathVariantsToMapLines([
+      summaryFor(makeRoute({ id: rightId, name: 'Right', referencePath: above })),
+      summaryFor(makeRoute({ id: leftId, name: 'Left', referencePath: under })),
+    ]);
+    assert.notEqual(original[0]?.color, original[1]?.color);
+    assert.equal(original.find((line) => line.id === leftId)?.color, styles.get(leftId)?.color);
+    assert.equal(original.find((line) => line.id === leftId)?.color, reordered.find((line) => line.id === leftId)?.color);
+    assert.equal(original.find((line) => line.id === rightId)?.color, reordered.find((line) => line.id === rightId)?.color);
+
+    const withMissingGeometry = pathVariantsToMapLines([
+      summaryFor(makeRoute({ id: leftId, name: 'Left', referencePath: under })),
+      summaryFor(makeRoute({ id: rightId, name: 'Right', referencePath: [] })),
+    ]);
+    assert.equal(withMissingGeometry.length, 1);
+    assert.equal(withMissingGeometry[0]?.color, styles.get(leftId)?.color);
+
+    const paletteIds = Array.from({ length: PATH_VARIANT_COLORS.length }, (_, index) => `palette-fill-${index}`);
+    const filled = [...pathVariantDisplayStyles(paletteIds).values()].map((style) => style.color);
+    assert.equal(new Set(filled).size, PATH_VARIANT_COLORS.length);
+  });
+
   it('keeps Path Variant card indicators matched to the rendered route identity', () => {
     const detail = readFileSync('src/ui/JourneyDetailScreen.tsx', 'utf8');
-    assert.match(detail, /pathVariantDisplayStyle\(item\.route\.id\)/);
+    assert.match(detail, /pathVariantDisplayStyles\(pathVariants\.map\(\(item\) => item\.route\.id\)\)/);
+    assert.match(detail, /variantStyles\.get\(item\.route\.id\)/);
     assert.match(detail, /pathVariantsToMapLines\(pathVariants\)/);
     assert.match(detail, /variantSwatch/);
     assert.match(detail, /path color/);
