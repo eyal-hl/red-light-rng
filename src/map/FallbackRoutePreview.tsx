@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { geoZoneExtentPoints, type GeoZone, type LatLng } from '../domain/geo';
+import { boundFallbackPathVertices, type PathVariantMapLine } from './path-variant-display';
 
 type FallbackCheckpoint = {
   id: string;
@@ -23,6 +24,7 @@ type FallbackDebugSample = {
 
 type FallbackRoutePreviewProps = {
   path: LatLng[];
+  pathVariants?: PathVariantMapLine[];
   startZone?: GeoZone | null;
   finishZone?: GeoZone | null;
   checkpoints?: FallbackCheckpoint[];
@@ -49,6 +51,7 @@ function project(
   debugSamples: FallbackDebugSample[] = [],
   officialStartPoint?: LatLng | null,
   officialFinishPoint?: LatLng | null,
+  pathVariants: PathVariantMapLine[] = [],
 ): {
   points: Point[];
   start: Point | null;
@@ -62,8 +65,17 @@ function project(
   debugPoints: { id: string; point: Point; accepted: boolean }[];
   officialStart: Point | null;
   officialFinish: Point | null;
+  variantStrokes: {
+    id: string;
+    name: string;
+    color: string;
+    points: Point[];
+  }[];
 } {
   const coords = [...path, ...recordedPath];
+  for (const variant of pathVariants) {
+    coords.push(...variant.path);
+  }
   if (startZone) {
     coords.push(startZone.center, ...geoZoneExtentPoints(startZone));
   }
@@ -102,6 +114,7 @@ function project(
       debugPoints: [],
       officialStart: null,
       officialFinish: null,
+      variantStrokes: [],
     };
   }
 
@@ -144,11 +157,18 @@ function project(
     })),
     officialStart: officialStartPoint ? toPoint(officialStartPoint) : null,
     officialFinish: officialFinishPoint ? toPoint(officialFinishPoint) : null,
+    variantStrokes: pathVariants.map((variant) => ({
+      id: variant.id,
+      name: variant.name,
+      color: variant.color,
+      points: variant.path.map(toPoint),
+    })),
   };
 }
 
 export function FallbackRoutePreview({
   path,
+  pathVariants = [],
   startZone,
   finishZone,
   checkpoints = [],
@@ -161,6 +181,13 @@ export function FallbackRoutePreview({
   officialStartPoint = null,
   officialFinishPoint = null,
 }: FallbackRoutePreviewProps) {
+  const boundedVariants = useMemo(() => {
+    const boundedPaths = boundFallbackPathVertices(pathVariants.map((variant) => variant.path));
+    return pathVariants.map((variant, index) => ({
+      ...variant,
+      path: boundedPaths[index] ?? [],
+    }));
+  }, [pathVariants]);
   const projected = useMemo(
     () =>
       project(
@@ -174,8 +201,10 @@ export function FallbackRoutePreview({
         debugSamples,
         officialStartPoint,
         officialFinishPoint,
+        boundedVariants,
       ),
     [
+      boundedVariants,
       checkpoints,
       debugSamples,
       finishZone,
@@ -197,6 +226,22 @@ export function FallbackRoutePreview({
           style={[styles.dot, { left: `${point.x}%`, top: `${point.y}%` }]}
         />
       ))}
+      {projected.variantStrokes.map((stroke) =>
+        stroke.points.map((point, index) => (
+          <View
+            key={`variant-${stroke.id}-${index}`}
+            accessibilityLabel={`${stroke.name} path`}
+            style={[
+              styles.dot,
+              {
+                left: `${point.x}%`,
+                top: `${point.y}%`,
+                backgroundColor: stroke.color,
+              },
+            ]}
+          />
+        )),
+      )}
       {projected.recordedPoints.map((point, index) => (
         <View
           key={`recorded-${point.x}-${point.y}-${index}`}
@@ -337,6 +382,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#2e7d4f',
     borderWidth: 2,
     borderColor: '#ffffff',
+    zIndex: 5,
   },
   checkpoint: {
     position: 'absolute',
@@ -409,6 +455,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderWidth: 3,
     borderColor: '#8a2f2f',
+    zIndex: 5,
   },
   recordedDot: {
     position: 'absolute',

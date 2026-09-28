@@ -116,6 +116,23 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 4,
   },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  variantCardTitle: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  variantSwatch: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#f5f5f5',
+  },
   cardMeta: {
     color: '#9aa0a6',
     fontSize: 14,
