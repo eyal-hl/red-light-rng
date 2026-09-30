@@ -96,7 +96,7 @@ From `tests/map-presentation.test.ts` / `formatMapIntegrityReport`, report these
 - fallback recorded-trace point/View count
 - centralized budgets (`REJECTED_DEBUG_MARKER_BUDGET`, `FALLBACK_RECORDED_TRACE_POINT_BUDGET`)
 
-Verify the deterministic presentation contract for a realistic fixture with hundreds of location samples. After the dense-overlay repair, hundreds of accepted raw samples must not imply hundreds of accepted debug circles, and fallback recorded-trace Views must stay bounded. Until that repair, quote the current marker counts as the reproduction.
+Verify the deterministic presentation contract for a realistic fixture with hundreds of location samples. Hundreds of accepted raw samples must not imply hundreds of accepted debug circles, an unselected map must show zero accepted debug markers, and fallback recorded-trace Views must stay within the centralized budget.
 
 When a PR changes map UI, result analysis, telemetry/debug data, or shapes passed to `RouteMap`, also inspect committed map layer/source ordering (route line, recorded path, waits, ghost preview, debug samples).
 

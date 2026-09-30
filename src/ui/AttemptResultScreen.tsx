@@ -813,8 +813,10 @@ export function AttemptResultScreen({
       ];
     }),
   ];
-  const selectedDebugSample =
-    debug?.place.samples.find((entry) => entry.sample.id === selectedSampleId) ?? debug?.place.samples[0] ?? null;
+  const inspectedPlaceDebugSample =
+    debug?.place.samples.find((entry) => entry.sample.id === selectedSampleId) ??
+    debug?.place.samples[0] ??
+    null;
   const debugSamples = (debug?.place.samples ?? []).map((entry) => ({
     id: entry.sample.id,
     point: { latitude: entry.sample.latitude, longitude: entry.sample.longitude },
@@ -879,7 +881,7 @@ export function AttemptResultScreen({
             previewPoint={ghostMapPoint}
             recordedPath={debug?.place.recordedPath ?? []}
             debugSamples={debugSamples}
-            selectedSampleId={selectedDebugSample?.sample.id ?? null}
+            selectedSampleId={selectedSampleId}
             officialStartPoint={debug?.place.officialStartPoint ?? null}
             officialFinishPoint={debug?.place.officialFinishPoint ?? null}
             onWaitMarkerPress={(markerId) => {
@@ -964,7 +966,7 @@ export function AttemptResultScreen({
         {debug ? (
           <PlaceDebugPanel
             debug={debug.place}
-            selectedSample={selectedDebugSample}
+            selectedSample={inspectedPlaceDebugSample}
             onSelectSample={setSelectedSampleId}
           />
         ) : debugPending ? (

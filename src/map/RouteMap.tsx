@@ -559,7 +559,7 @@ function MapLibreRouteMap({
             type="circle"
             filter={['==', ['get', 'kind'], 'debug-sample']}
             paint={{
-              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 7, 4],
+              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 10, 4],
               'circle-color': [
                 'case',
                 ['==', ['get', 'accepted'], 'yes'],
@@ -567,7 +567,7 @@ function MapLibreRouteMap({
                 '#f07178',
               ],
               'circle-stroke-width': ['case', ['==', ['get', 'selected'], 'yes'], 3, 1],
-              'circle-stroke-color': '#ffffff',
+              'circle-stroke-color': ['case', ['==', ['get', 'selected'], 'yes'], '#111111', '#5c2a2e'],
             }}
           />
         </GeoJSONSource>
