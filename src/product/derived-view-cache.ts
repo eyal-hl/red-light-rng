@@ -206,6 +206,22 @@ export function journeyDerivationKey(input: {
   ].join('::');
 }
 
+export function delayHotspotDerivationKey(input: {
+  pool: JourneyPoolId;
+  attempts: readonly Attempt[];
+  origin: Place;
+  destination: Place;
+  routes: readonly Route[];
+  sampleIdentities: readonly SampleIdentity[];
+  asOfMs: number;
+}): string {
+  return [
+    'delay-hotspots',
+    journeyDerivationKey(input),
+    fingerprintSampleIdentities(input.sampleIdentities),
+  ].join('::');
+}
+
 export function focusDerivationKey(input: {
   pool: JourneyPoolId;
   attemptId: string;
