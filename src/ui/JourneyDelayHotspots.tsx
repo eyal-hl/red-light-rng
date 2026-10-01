@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 
 import {
+  formatHotspotAttemptShare,
   formatHotspotFrequency,
   formatHotspotListSummary,
   formatHotspotSpread,
@@ -141,19 +142,19 @@ function HotspotDetail({
       <Text style={styles.cardMeta}>Worst {formatWaitEventDuration(hotspot.worstWaitMs)}</Text>
       <Text style={styles.cardMeta}>{formatHotspotSpread(hotspot)}</Text>
       {hotspot.recent ? <Text style={styles.cardMeta}>{formatRecentWaitSignal(hotspot.recent)}</Text> : null}
-      {hotspot.attempts.map((share) => (
-        <Pressable
-          key={share.attemptId}
-          accessibilityRole="button"
-          accessibilityLabel={`Open attempt ${share.attemptId}, ${formatWaitEventDuration(share.confirmedWaitMs)} confirmed waiting`}
-          onPress={() => onOpenAttempt(share.attemptId)}
-        >
-          <Text style={styles.cardMeta}>
-            {formatWaitEventDuration(share.confirmedWaitMs)} confirmed waiting
-            {share.eventIds.length > 1 ? ` across ${share.eventIds.length} waits` : ''}
-          </Text>
-        </Pressable>
-      ))}
+      {hotspot.attempts.map((share) => {
+        const label = formatHotspotAttemptShare(share);
+        return (
+          <Pressable
+            key={share.attemptId}
+            accessibilityRole="button"
+            accessibilityLabel={`Open attempt ${share.attemptId}, ${label}`}
+            onPress={() => onOpenAttempt(share.attemptId)}
+          >
+            <Text style={styles.cardMeta}>{label}</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }

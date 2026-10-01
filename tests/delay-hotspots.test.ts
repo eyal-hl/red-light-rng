@@ -8,12 +8,15 @@ import {
   aggregateDelayHotspots,
   DELAY_HOTSPOT_DIAMETER_METERS,
   DELAY_HOTSPOT_TIGHT_SPREAD_METERS,
+  formatHotspotAttemptShare,
+  formatHotspotListSummary,
   MAX_VISIBLE_DELAY_HOTSPOTS,
   rankDelayHotspots,
   type DelayHotspotAnalysis,
   type DelayHotspotAttemptInput,
   type DelayHotspotRouteInput,
 } from '../src/domain/delay-hotspots';
+import { formatAttemptStamp } from '../src/domain/duration';
 import { haversineMeters, pathDistanceMeters, type LatLng } from '../src/domain/geo';
 import type { JourneyPoolId } from '../src/domain/journey';
 import { MILLISECONDS_PER_DAY } from '../src/domain/journey-statistics';
@@ -256,7 +259,51 @@ describe('delay hotspots', () => {
     assert.equal(repeated?.confirmedWaitMs, 30_000);
     assert.equal(hotspot.averageWaitMs, 17_500);
     assert.equal(hotspot.medianWaitMs, (30_000 + 5_000) / 2);
-    assert.equal(hotspot.worstWaitMs, 20_000);
+    assert.equal(hotspot.worstWaitMs, 30_000);
+    assert.ok(hotspot.attempts.every((share) => hotspot.worstWaitMs >= share.confirmedWaitMs));
+    assert.match(formatHotspotListSummary(hotspot), /worst 30s/);
+  });
+
+  it('keeps worst, typical, and average on the same per-attempt confirmed waiting', () => {
+    const reference = path();
+    const point = pointAtProgress(reference, 200);
+    const nearby = pointAtProgress(reference, 205);
+    const analysis = analyze(
+      [
+        attempt('only', 'main', [
+          locatedWait('ten', point, 10_000, 200),
+          locatedWait('twenty', nearby, 20_000, 205),
+        ]),
+      ],
+      [route('main', reference)],
+    );
+    const hotspot = analysis.hotspots[0]!;
+    assert.equal(hotspot.totalConfirmedWaitMs, 30_000);
+    assert.equal(hotspot.averageWaitMs, 30_000);
+    assert.equal(hotspot.medianWaitMs, 30_000);
+    assert.equal(hotspot.worstWaitMs, 30_000);
+    assert.match(formatHotspotListSummary(hotspot), /typical 30s · total 30s · worst 30s/);
+  });
+
+  it('ranks a repeated visit above a shorter single wait', () => {
+    const reference = path();
+    const repeatedPoint = pointAtProgress(reference, 100);
+    const nearby = pointAtProgress(reference, 105);
+    const singlePoint = pointAtProgress(reference, 400);
+    const analysis = analyze(
+      [
+        attempt('double', 'main', [
+          locatedWait('twenty-a', repeatedPoint, 20_000, 100),
+          locatedWait('twenty-b', nearby, 20_000, 105),
+        ]),
+        attempt('single', 'main', [locatedWait('twenty-five', singlePoint, 25_000, 400)]),
+      ],
+      [route('main', reference)],
+    );
+    const worst = rankDelayHotspots(analysis.hotspots, 'worst');
+    assert.equal(worst[0]!.worstWaitMs, 40_000);
+    assert.equal(worst[0]!.attempts[0]!.attemptId, 'double');
+    assert.equal(worst[1]!.worstWaitMs, 25_000);
   });
 
   it('counts frequency over encountered compatible paths, not the whole pool or waiters only', () => {
@@ -433,7 +480,182 @@ describe('delay hotspots', () => {
     assert.doesNotMatch(ui, /time lost|vs PB/i);
     assert.doesNotMatch(ui, /listSamples/);
   });
+
+  it('labels contributing attempts with the history finish stamp', () => {
+    const reference = path();
+    const point = pointAtProgress(reference, 200);
+    const earlier = AS_OF_MS - 2 * MILLISECONDS_PER_DAY;
+    const later = AS_OF_MS - MILLISECONDS_PER_DAY;
+    const analysis = analyze(
+      [
+        attempt('early', 'main', [locatedWait('early-wait', point, 12_000)], { finishedAtMs: earlier }),
+        attempt('late', 'main', [locatedWait('late-wait', point, 12_000)], { finishedAtMs: later }),
+      ],
+      [route('main', reference)],
+    );
+    const labels = analysis.hotspots[0]!.attempts.map((share) => formatHotspotAttemptShare(share));
+    assert.equal(new Set(labels).size, 2);
+    assert.ok(labels.some((label) => label.startsWith(formatAttemptStamp(earlier))));
+    assert.ok(labels.some((label) => label.startsWith(formatAttemptStamp(later))));
+    assert.match(labels[0]!, /12s confirmed waiting/);
+    const ui = readFileSync('src/ui/JourneyDelayHotspots.tsx', 'utf8');
+    assert.match(ui, /formatHotspotAttemptShare/);
+  });
+
+  it('matches brute-force complete-linkage when distance ties change the partition', () => {
+    const origin = { latitude: 32.08, longitude: 34.78 };
+    const square = [
+      { id: 'a', coordinate: origin },
+      { id: 'b', coordinate: offsetLatLng(origin.latitude, origin.longitude, 0, 28) },
+      { id: 'd', coordinate: offsetLatLng(origin.latitude, origin.longitude, 28, 0) },
+      {
+        id: 'c',
+        coordinate: offsetLatLng(
+          offsetLatLng(origin.latitude, origin.longitude, 28, 0).latitude,
+          offsetLatLng(origin.latitude, origin.longitude, 28, 0).longitude,
+          0,
+          28,
+        ),
+      },
+    ];
+    assert.ok(haversineMeters(square[0]!.coordinate, square[1]!.coordinate) <= DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.ok(haversineMeters(square[0]!.coordinate, square[2]!.coordinate) <= DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.ok(haversineMeters(square[0]!.coordinate, square[3]!.coordinate) > DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.ok(haversineMeters(square[1]!.coordinate, square[2]!.coordinate) > DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.deepEqual(clusteredEventIds(square), legacyCompleteLinkageIds(square));
+
+    const chain = Array.from({ length: 6 }, (_, index) => ({
+      id: `c${index}`,
+      coordinate: offsetLatLng(origin.latitude, origin.longitude, index * 30, 0),
+    }));
+    assert.ok(haversineMeters(chain[0]!.coordinate, chain[1]!.coordinate) <= DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.ok(haversineMeters(chain[0]!.coordinate, chain[chain.length - 1]!.coordinate) > DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.deepEqual(clusteredEventIds(chain), legacyCompleteLinkageIds(chain));
+
+    const acrossCell = [
+      { id: 'near', coordinate: offsetLatLng(origin.latitude, origin.longitude, 20, 0) },
+      { id: 'next-cell', coordinate: offsetLatLng(origin.latitude, origin.longitude, 50, 0) },
+    ];
+    assert.ok(haversineMeters(acrossCell[0]!.coordinate, acrossCell[1]!.coordinate) <= DELAY_HOTSPOT_DIAMETER_METERS);
+    assert.deepEqual(clusteredEventIds(acrossCell), [['near', 'next-cell']]);
+  });
+
+  it('aggregates a year of repeated intersections without collapsing separate stops', { timeout: 20_000 }, () => {
+    const origin = { latitude: 32.08, longitude: 34.78 };
+    const intersections = Array.from({ length: 49 }, (_, index) =>
+      offsetLatLng(origin.latitude, origin.longitude, index * 80, 0),
+    );
+    const reference = [intersections[0]!, intersections[intersections.length - 1]!];
+    const attempts = Array.from({ length: 200 }, (_, attemptIndex) =>
+      attempt(
+        `attempt-${attemptIndex}`,
+        'main',
+        Array.from({ length: 5 }, (_, waitIndex) => {
+          const intersection = (attemptIndex * 5 + waitIndex) % intersections.length;
+          return locatedWait(
+            `a${attemptIndex}-w${waitIndex}`,
+            intersections[intersection]!,
+            10_000,
+            intersection * 80,
+          );
+        }),
+        { finishedAtMs: AS_OF_MS - attemptIndex * 60_000 },
+      ),
+    );
+    const started = performance.now();
+    const analysis = analyze(attempts, [route('main', reference)]);
+    const elapsedMs = performance.now() - started;
+    assert.equal(analysis.hotspots.length, 49);
+    assert.ok(
+      analysis.hotspots.every((hotspot) => hotspot.spreadMeters <= DELAY_HOTSPOT_DIAMETER_METERS),
+    );
+    assert.ok(elapsedMs < 1_500, `hotspot aggregation took ${elapsedMs.toFixed(0)} ms`);
+
+    const chain = Array.from({ length: 400 }, (_, index) =>
+      offsetLatLng(origin.latitude, origin.longitude, index * 30, 400),
+    );
+    const chainStarted = performance.now();
+    const chained = analyze(
+      chain.map((coordinate, index) =>
+        attempt(`chain-${index}`, 'main', [locatedWait(`chain-${index}`, coordinate, 5_000, index * 30)]),
+      ),
+      [route('main', [chain[0]!, chain[chain.length - 1]!])],
+    );
+    const chainElapsedMs = performance.now() - chainStarted;
+    assert.ok(chained.hotspots.length >= chain.length / 2);
+    assert.ok(chained.hotspots.length < chain.length);
+    assert.ok(chained.hotspots.every((hotspot) => hotspot.spreadMeters <= DELAY_HOTSPOT_DIAMETER_METERS + 1e-6));
+    const endpointHotspots = chained.hotspots.filter((hotspot) =>
+      hotspot.memberEventIds.some((id) => id === 'chain-0' || id === 'chain-399'),
+    );
+    assert.equal(endpointHotspots.length, 2);
+    assert.ok(chainElapsedMs < 1_500, `chain aggregation took ${chainElapsedMs.toFixed(0)} ms`);
+  });
 });
+
+function clusteredEventIds(points: readonly { id: string; coordinate: LatLng }[]): string[][] {
+  const reference = [points[0]!.coordinate, points[points.length - 1]!.coordinate];
+  const analysis = analyze(
+    points.map((point) => attempt(point.id, 'main', [locatedWait(point.id, point.coordinate, 1_000)])),
+    [route('main', reference)],
+  );
+  return analysis.hotspots
+    .map((hotspot) => [...hotspot.memberEventIds])
+    .sort((left, right) => left.join(';').localeCompare(right.join(';')));
+}
+
+function legacyCompleteLinkageIds(points: readonly { id: string; coordinate: LatLng }[]): string[][] {
+  let groups = points.map((point) => [point]);
+  const keyOf = (group: readonly { id: string }[]): string =>
+    [...group]
+      .map((point) => `${point.id}|${point.id}`)
+      .sort((left, right) => left.localeCompare(right))
+      .join(';');
+  while (groups.length > 1) {
+    let best: { left: number; right: number; distance: number; unionKey: string } | null = null;
+    for (let left = 0; left < groups.length; left += 1) {
+      for (let right = left + 1; right < groups.length; right += 1) {
+        const leftGroup = groups[left]!;
+        const rightGroup = groups[right]!;
+        let distance = 0;
+        let tooFar = false;
+        for (const first of leftGroup) {
+          for (const second of rightGroup) {
+            distance = Math.max(distance, haversineMeters(first.coordinate, second.coordinate));
+            if (distance > DELAY_HOTSPOT_DIAMETER_METERS) {
+              tooFar = true;
+              break;
+            }
+          }
+          if (tooFar) {
+            break;
+          }
+        }
+        if (tooFar) {
+          continue;
+        }
+        const unionKey = keyOf([...leftGroup, ...rightGroup]);
+        if (
+          !best ||
+          distance < best.distance ||
+          (distance === best.distance && unionKey < best.unionKey)
+        ) {
+          best = { left, right, distance, unionKey };
+        }
+      }
+    }
+    if (!best) {
+      break;
+    }
+    const chosen = best;
+    const merged = [...groups[chosen.left]!, ...groups[chosen.right]!];
+    groups = groups.filter((_, index) => index !== chosen.left && index !== chosen.right);
+    groups.push(merged);
+  }
+  return groups
+    .map((group) => group.map((point) => point.id).sort((left, right) => left.localeCompare(right)))
+    .sort((left, right) => left.join(';').localeCompare(right.join(';')));
+}
 
 describe('journey delay hotspot loading', () => {
   it('keeps journey first paint sample-free and derives hotspots from the assigned variant afterward', async () => {

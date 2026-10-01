@@ -1,3 +1,4 @@
+import { formatAttemptStamp } from './duration';
 import { formatDistance, haversineMeters, type LatLng } from './geo';
 import { journeyPoolKey, type JourneyPoolId } from './journey';
 import { isInRollingElapsedWindow, ROLLING_WINDOW_30_DAYS } from './journey-statistics';
@@ -234,6 +235,11 @@ export function formatHotspotListSummary(hotspot: DelayHotspot): string {
   return `${formatHotspotFrequency(hotspot.waitedAttempts, hotspot.encounteredAttempts)} · typical ${formatWaitEventDuration(hotspot.medianWaitMs)} · total ${formatWaitEventDuration(hotspot.totalConfirmedWaitMs)} · worst ${formatWaitEventDuration(hotspot.worstWaitMs)}`;
 }
 
+export function formatHotspotAttemptShare(share: DelayHotspotAttemptShare): string {
+  const repeated = share.eventIds.length > 1 ? ` across ${share.eventIds.length} waits` : '';
+  return `${formatAttemptStamp(share.finishedAtMs)} · ${formatWaitEventDuration(share.confirmedWaitMs)} confirmed waiting${repeated}`;
+}
+
 function attemptInRequestedPool(attempt: DelayHotspotAttemptInput, pool: JourneyPoolId): boolean {
   return (
     attempt.originPlaceId === pool.originPlaceId &&
@@ -251,64 +257,313 @@ function isLocatedWait(event: WaitEvent): event is WaitEvent & { coordinate: Lat
   );
 }
 
+type DiameterPair = {
+  left: number;
+  right: number;
+  distance: number;
+};
+
+type WorkingCluster = {
+  id: number;
+  members: LocatedMember[];
+  identities: string[];
+  active: boolean;
+};
+
+/**
+ * Agglomerative complete-linkage inside the hotspot diameter.
+ * Points farther apart than the diameter can never share a cluster, so each
+ * connected component of that threshold graph is clustered on its own. A
+ * component whose every pair is already inside the diameter is one cluster.
+ * Otherwise each merge joins the closest eligible pair, breaking distance ties
+ * with the lexicographic member-identity key, and the updated complete-linkage
+ * distance is the max of the two previous links.
+ */
 function clusterByCompleteLinkage(members: LocatedMember[]): Cluster[] {
-  let groups: Cluster[] = members.map((member) => ({ members: [member] }));
-  while (groups.length > 1) {
-    const merge = chooseNextMerge(groups);
-    if (!merge) {
+  if (members.length <= 1) {
+    return members.map((member) => ({ members: [member] }));
+  }
+  const pairs = pairsWithinDiameter(members);
+  const parent = members.map((_, index) => index);
+  const rank = members.map(() => 0);
+  const find = (index: number): number => {
+    const parentIndex = parent[index]!;
+    if (parentIndex === index) {
+      return index;
+    }
+    const root = find(parentIndex);
+    parent[index] = root;
+    return root;
+  };
+  const union = (left: number, right: number): void => {
+    let leftRoot = find(left);
+    let rightRoot = find(right);
+    if (leftRoot === rightRoot) {
+      return;
+    }
+    const leftRank = rank[leftRoot] ?? 0;
+    const rightRank = rank[rightRoot] ?? 0;
+    if (leftRank < rightRank) {
+      const swap = leftRoot;
+      leftRoot = rightRoot;
+      rightRoot = swap;
+    }
+    parent[rightRoot] = leftRoot;
+    if (leftRank === rightRank) {
+      rank[leftRoot] = leftRank + 1;
+    }
+  };
+  for (const pair of pairs) {
+    union(pair.left, pair.right);
+  }
+
+  const groups = new Map<number, number[]>();
+  const pairsByRoot = new Map<number, DiameterPair[]>();
+  for (let index = 0; index < members.length; index += 1) {
+    const root = find(index);
+    const group = groups.get(root);
+    if (group) {
+      group.push(index);
+    } else {
+      groups.set(root, [index]);
+    }
+  }
+  for (const pair of pairs) {
+    const root = find(pair.left);
+    const group = pairsByRoot.get(root);
+    if (group) {
+      group.push(pair);
+    } else {
+      pairsByRoot.set(root, [pair]);
+    }
+  }
+
+  const clusters: Cluster[] = [];
+  for (const [root, indices] of groups) {
+    const componentPairs = pairsByRoot.get(root) ?? [];
+    const cliqueEdges = (indices.length * (indices.length - 1)) / 2;
+    if (componentPairs.length === cliqueEdges) {
+      clusters.push({ members: indices.map((index) => members[index]!) });
+      continue;
+    }
+    for (const cluster of agglomerateComponent(members, indices, componentPairs)) {
+      clusters.push(cluster);
+    }
+  }
+  return clusters;
+}
+
+function pairsWithinDiameter(members: LocatedMember[]): DiameterPair[] {
+  const origin = members[0]?.coordinate;
+  if (!origin) {
+    return [];
+  }
+  const latMeters = 111_320;
+  const lngMeters = Math.max(1e-6, latMeters * Math.cos((origin.latitude * Math.PI) / 180));
+  const cellMeters = DELAY_HOTSPOT_DIAMETER_METERS;
+  const buckets = new Map<string, number[]>();
+  const cells = members.map((member) => {
+    const x = (member.coordinate.longitude - origin.longitude) * lngMeters;
+    const y = (member.coordinate.latitude - origin.latitude) * latMeters;
+    return {
+      cellX: Math.floor(x / cellMeters),
+      cellY: Math.floor(y / cellMeters),
+    };
+  });
+  for (let index = 0; index < cells.length; index += 1) {
+    const cell = cells[index]!;
+    const key = `${cell.cellX}:${cell.cellY}`;
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.push(index);
+    } else {
+      buckets.set(key, [index]);
+    }
+  }
+
+  const pairs: DiameterPair[] = [];
+  for (let left = 0; left < members.length; left += 1) {
+    const cell = cells[left]!;
+    for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+      for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
+        const bucket = buckets.get(`${cell.cellX + offsetX}:${cell.cellY + offsetY}`);
+        if (!bucket) {
+          continue;
+        }
+        for (const right of bucket) {
+          if (right <= left) {
+            continue;
+          }
+          const distance = haversineMeters(members[left]!.coordinate, members[right]!.coordinate);
+          if (distance <= DELAY_HOTSPOT_DIAMETER_METERS) {
+            pairs.push({ left, right, distance });
+          }
+        }
+      }
+    }
+  }
+  return pairs;
+}
+
+function agglomerateComponent(
+  members: LocatedMember[],
+  indices: readonly number[],
+  pairs: readonly DiameterPair[],
+): Cluster[] {
+  const byId = new Map<number, WorkingCluster>();
+  const neighbors = new Map<number, Map<number, number>>();
+  for (const index of indices) {
+    const member = members[index];
+    if (!member) {
+      continue;
+    }
+    byId.set(index, {
+      id: index,
+      members: [member],
+      identities: [`${member.attemptId}|${member.eventId}`],
+      active: true,
+    });
+  }
+  for (const pair of pairs) {
+    addClusterLink(neighbors, pair.left, pair.right, pair.distance);
+  }
+
+  let nextId = members.length;
+  while (true) {
+    const best = chooseNextClusterMerge(byId, neighbors);
+    if (!best) {
       break;
     }
-    const left = groups[merge.leftIndex];
-    const right = groups[merge.rightIndex];
+    const left = byId.get(best.leftId);
+    const right = byId.get(best.rightId);
     if (!left || !right) {
       break;
     }
-    const merged: Cluster = { members: [...left.members, ...right.members] };
-    const next = groups.filter((_, index) => index !== merge.leftIndex && index !== merge.rightIndex);
-    next.push(merged);
-    groups = next;
+    const mergedId = nextId;
+    nextId += 1;
+    const merged: WorkingCluster = {
+      id: mergedId,
+      members: [...left.members, ...right.members],
+      identities: mergeIdentities(left.identities, right.identities),
+      active: true,
+    };
+    byId.set(mergedId, merged);
+    const leftLinks = new Map(neighbors.get(left.id) ?? []);
+    const rightLinks = new Map(neighbors.get(right.id) ?? []);
+    deactivateCluster(neighbors, left);
+    deactivateCluster(neighbors, right);
+    const neighborIds = new Set<number>([...leftLinks.keys(), ...rightLinks.keys()]);
+    neighborIds.delete(left.id);
+    neighborIds.delete(right.id);
+    for (const otherId of neighborIds) {
+      const other = byId.get(otherId);
+      if (!other?.active) {
+        continue;
+      }
+      const leftDistance = leftLinks.get(otherId);
+      const rightDistance = rightLinks.get(otherId);
+      if (leftDistance === undefined || rightDistance === undefined) {
+        continue;
+      }
+      const distance = Math.max(leftDistance, rightDistance);
+      if (distance <= DELAY_HOTSPOT_DIAMETER_METERS) {
+        addClusterLink(neighbors, mergedId, otherId, distance);
+      }
+    }
   }
-  return groups;
+
+  const clusters: Cluster[] = [];
+  for (const cluster of byId.values()) {
+    if (cluster.active) {
+      clusters.push({ members: cluster.members });
+    }
+  }
+  return clusters;
 }
 
-function chooseNextMerge(groups: Cluster[]): { leftIndex: number; rightIndex: number } | null {
-  let best: { leftIndex: number; rightIndex: number; distance: number; unionKey: string } | null = null;
-  for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
-    const left = groups[leftIndex];
-    if (!left) {
+function chooseNextClusterMerge(
+  byId: ReadonlyMap<number, WorkingCluster>,
+  neighbors: ReadonlyMap<number, ReadonlyMap<number, number>>,
+): { leftId: number; rightId: number } | null {
+  let best: { leftId: number; rightId: number; distance: number; unionKey: string } | null = null;
+  for (const [leftId, links] of neighbors) {
+    const left = byId.get(leftId);
+    if (!left?.active) {
       continue;
     }
-    for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
-      const right = groups[rightIndex];
-      if (!right) {
+    for (const [rightId, distance] of links) {
+      if (rightId < leftId || distance > DELAY_HOTSPOT_DIAMETER_METERS) {
         continue;
       }
-      const distance = completeLinkageDistance(left.members, right.members);
-      if (distance > DELAY_HOTSPOT_DIAMETER_METERS) {
+      const right = byId.get(rightId);
+      if (!right?.active) {
         continue;
       }
-      const unionKey = memberKey([...left.members, ...right.members]);
-      const candidate = { leftIndex, rightIndex, distance, unionKey };
-      if (
-        !best ||
-        candidate.distance < best.distance ||
-        (candidate.distance === best.distance && candidate.unionKey < best.unionKey)
-      ) {
-        best = candidate;
+      if (best && distance > best.distance) {
+        continue;
+      }
+      const unionKey = mergeIdentities(left.identities, right.identities).join(';');
+      if (!best || distance < best.distance || unionKey < best.unionKey) {
+        best = { leftId, rightId, distance, unionKey };
       }
     }
   }
-  return best ? { leftIndex: best.leftIndex, rightIndex: best.rightIndex } : null;
+  return best ? { leftId: best.leftId, rightId: best.rightId } : null;
 }
 
-function completeLinkageDistance(left: LocatedMember[], right: LocatedMember[]): number {
-  let maxDistance = 0;
-  for (const leftMember of left) {
-    for (const rightMember of right) {
-      maxDistance = Math.max(maxDistance, haversineMeters(leftMember.coordinate, rightMember.coordinate));
+function addClusterLink(
+  neighbors: Map<number, Map<number, number>>,
+  leftId: number,
+  rightId: number,
+  distance: number,
+): void {
+  const link = (fromId: number, toId: number): void => {
+    let links = neighbors.get(fromId);
+    if (!links) {
+      links = new Map();
+      neighbors.set(fromId, links);
+    }
+    links.set(toId, distance);
+  };
+  link(leftId, rightId);
+  link(rightId, leftId);
+}
+
+function deactivateCluster(neighbors: Map<number, Map<number, number>>, cluster: WorkingCluster): void {
+  const links = neighbors.get(cluster.id);
+  if (links) {
+    for (const otherId of links.keys()) {
+      neighbors.get(otherId)?.delete(cluster.id);
     }
   }
-  return maxDistance;
+  neighbors.delete(cluster.id);
+  cluster.active = false;
+}
+
+function mergeIdentities(left: readonly string[], right: readonly string[]): string[] {
+  const merged: string[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftId = left[leftIndex]!;
+    const rightId = right[rightIndex]!;
+    if (leftId.localeCompare(rightId) <= 0) {
+      merged.push(leftId);
+      leftIndex += 1;
+    } else {
+      merged.push(rightId);
+      rightIndex += 1;
+    }
+  }
+  while (leftIndex < left.length) {
+    merged.push(left[leftIndex]!);
+    leftIndex += 1;
+  }
+  while (rightIndex < right.length) {
+    merged.push(right[rightIndex]!);
+    rightIndex += 1;
+  }
+  return merged;
 }
 
 function finalizeHotspot(
@@ -342,7 +597,7 @@ function finalizeHotspot(
   const waitedAttempts = shares.length;
   const perAttemptWaits = shares.map((share) => share.confirmedWaitMs);
   const totalConfirmedWaitMs = perAttemptWaits.reduce((sum, value) => sum + value, 0);
-  const worstWaitMs = members.reduce((max, member) => Math.max(max, member.durationMs), 0);
+  const worstWaitMs = perAttemptWaits.reduce((max, value) => Math.max(max, value), 0);
   const frequency = encounteredAttempts > 0 ? waitedAttempts / encounteredAttempts : 0;
   return {
     id: `hotspot:${memberKey(members)}`,
