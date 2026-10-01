@@ -52,29 +52,29 @@ export class SqliteAttemptStore implements AttemptStore {
 
   async createAttempt(attempt: Attempt): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      const open = await sql.getFirst<{ id: string }>(
+    await sql.withTransaction(async (tx) => {
+      const open = await tx.getFirst<{ id: string }>(
         `SELECT id FROM attempt WHERE lifecycle IN ('armed', 'active') LIMIT 1`,
       );
       if (open) {
         throw new OpenAttemptExistsError(open.id);
       }
-      await this.writeAttempt(sql, attempt);
+      await this.writeAttempt(tx, attempt);
     });
   }
 
   async saveAttempt(attempt: Attempt): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      await this.writeAttempt(sql, attempt);
+    await sql.withTransaction(async (tx) => {
+      await this.writeAttempt(tx, attempt);
     });
   }
 
   async finalizeAttempt(attempt: Attempt, session: CompleteSessionInput): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      await this.writeAttempt(sql, attempt);
-      await sql.run(
+    await sql.withTransaction(async (tx) => {
+      await this.writeAttempt(tx, attempt);
+      await tx.run(
         `UPDATE tracking_session
          SET is_active = 0,
              stopped_at_ms = ?,
@@ -220,9 +220,9 @@ export class SqliteAttemptStore implements AttemptStore {
 
   async deleteAttempt(attemptId: string): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attemptId]);
-      await sql.run('DELETE FROM attempt WHERE id = ?', [attemptId]);
+    await sql.withTransaction(async (tx) => {
+      await tx.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attemptId]);
+      await tx.run('DELETE FROM attempt WHERE id = ?', [attemptId]);
     });
   }
 

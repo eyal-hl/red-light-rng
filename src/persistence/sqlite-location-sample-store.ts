@@ -32,14 +32,14 @@ export class SqliteLocationSampleStore implements LocationSampleStore {
     purpose: SessionPurpose = 'route_creation',
   ): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      const active = await sql.getFirst<{ id: string }>(
+    await sql.withTransaction(async (tx) => {
+      const active = await tx.getFirst<{ id: string }>(
         'SELECT id FROM tracking_session WHERE is_active = 1 LIMIT 1',
       );
       if (active) {
         throw new ActiveSessionExistsError(active.id);
       }
-      await sql.run(
+      await tx.run(
         `INSERT INTO tracking_session (
            id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
            background_permission_confirmed
@@ -123,15 +123,15 @@ export class SqliteLocationSampleStore implements LocationSampleStore {
       return;
     }
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      const active = await sql.getFirst<{ id: string }>(
+    await sql.withTransaction(async (tx) => {
+      const active = await tx.getFirst<{ id: string }>(
         'SELECT id FROM tracking_session WHERE is_active = 1 LIMIT 1',
       );
       for (const sample of samples) {
         if (!active || sample.sessionId !== active.id) {
           continue;
         }
-        await sql.run(
+        await tx.run(
           `INSERT OR REPLACE INTO location_sample (
             id, session_id, recorded_at_ms, latitude, longitude,
             horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
@@ -175,9 +175,9 @@ export class SqliteLocationSampleStore implements LocationSampleStore {
 
   async deleteSession(sessionId: string): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      await sql.run('DELETE FROM location_sample WHERE session_id = ?', [sessionId]);
-      await sql.run('DELETE FROM tracking_session WHERE id = ?', [sessionId]);
+    await sql.withTransaction(async (tx) => {
+      await tx.run('DELETE FROM location_sample WHERE session_id = ?', [sessionId]);
+      await tx.run('DELETE FROM tracking_session WHERE id = ?', [sessionId]);
     });
   }
 }

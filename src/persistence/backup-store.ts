@@ -40,14 +40,14 @@ export async function readDurableSnapshot(
   sql: SqlExecutor,
   meta: Pick<BackupSnapshot, 'createdAtMs' | 'sourceSchemaVersion' | 'sourceAppVersion'>,
 ): Promise<BackupSnapshot> {
-  return sql.withTransaction(async () => {
-    const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
-    const places = await readPlaces(sql);
-    const sessions = await readSessions(sql);
-    const samples = await readSamples(sql);
-    const routes = await readRoutes(sql);
-    const attempts = await readAttempts(sql);
-    const settings = await readSettings(sql);
+  return sql.withTransaction(async (tx) => {
+    const version = await tx.getFirst<{ user_version: number }>('PRAGMA user_version');
+    const places = await readPlaces(tx);
+    const sessions = await readSessions(tx);
+    const samples = await readSamples(tx);
+    const routes = await readRoutes(tx);
+    const attempts = await readAttempts(tx);
+    const settings = await readSettings(tx);
     return {
       createdAtMs: meta.createdAtMs,
       sourceSchemaVersion: version?.user_version ?? meta.sourceSchemaVersion,
@@ -67,8 +67,8 @@ export async function replaceDurableSnapshot(
   snapshot: BackupSnapshot,
   options?: { beforeCommit?: () => Promise<void> | void },
 ): Promise<void> {
-  await sql.withTransaction(async () => {
-    if (await deviceHasLiveTracking(sql)) {
+  await sql.withTransaction(async (tx) => {
+    if (await deviceHasLiveTracking(tx)) {
       throw new BackupRestoreRefusedError();
     }
     if (snapshot.attempts.some((attempt) => attempt.lifecycle === 'armed' || attempt.lifecycle === 'active')) {
@@ -78,18 +78,18 @@ export async function replaceDurableSnapshot(
       throw new Error('Refusing to write an active tracking session during backup restore.');
     }
 
-    await sql.run('DELETE FROM attempt_checkpoint_crossing');
-    await sql.run('DELETE FROM attempt');
-    await sql.run('DELETE FROM route_checkpoint');
-    await sql.run('DELETE FROM route_reference_point');
-    await sql.run('DELETE FROM route');
-    await sql.run('DELETE FROM location_sample');
-    await sql.run('DELETE FROM tracking_session');
-    await sql.run('DELETE FROM place');
-    await sql.run('DELETE FROM app_setting');
+    await tx.run('DELETE FROM attempt_checkpoint_crossing');
+    await tx.run('DELETE FROM attempt');
+    await tx.run('DELETE FROM route_checkpoint');
+    await tx.run('DELETE FROM route_reference_point');
+    await tx.run('DELETE FROM route');
+    await tx.run('DELETE FROM location_sample');
+    await tx.run('DELETE FROM tracking_session');
+    await tx.run('DELETE FROM place');
+    await tx.run('DELETE FROM app_setting');
 
     for (const place of snapshot.places) {
-      await sql.run(
+      await tx.run(
         `INSERT INTO place (id, name, latitude, longitude, radius_meters, status, created_at_ms)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -105,7 +105,7 @@ export async function replaceDurableSnapshot(
     }
 
     for (const session of snapshot.sessions) {
-      await sql.run(
+      await tx.run(
         `INSERT INTO tracking_session (
            id, started_at_ms, stopped_at_ms, is_active, purpose, capture_outcome, review_disposition,
            background_permission_confirmed
@@ -122,7 +122,7 @@ export async function replaceDurableSnapshot(
     }
 
     for (const sample of snapshot.samples) {
-      await sql.run(
+      await tx.run(
         `INSERT INTO location_sample (
            id, session_id, recorded_at_ms, latitude, longitude,
            horizontal_accuracy_meters, speed_meters_per_second, heading_degrees
@@ -141,7 +141,7 @@ export async function replaceDurableSnapshot(
     }
 
     for (const route of snapshot.routes) {
-      await sql.run(
+      await tx.run(
         `INSERT INTO route (
            id, name, transportation_mode, created_at_ms, source_recording_id,
            start_latitude, start_longitude, start_radius_meters,
@@ -169,13 +169,13 @@ export async function replaceDurableSnapshot(
         ],
       );
       for (const [index, point] of route.referencePath.entries()) {
-        await sql.run(
+        await tx.run(
           'INSERT INTO route_reference_point (route_id, seq, latitude, longitude) VALUES (?, ?, ?, ?)',
           [route.id, index, point.latitude, point.longitude],
         );
       }
       for (const checkpoint of route.checkpoints) {
-        await sql.run(
+        await tx.run(
           'INSERT INTO route_checkpoint (id, route_id, name, progress_m) VALUES (?, ?, ?, ?)',
           [checkpoint.id, route.id, checkpoint.name, checkpoint.progressMeters],
         );
@@ -183,7 +183,7 @@ export async function replaceDurableSnapshot(
     }
 
     for (const attempt of snapshot.attempts) {
-      await sql.run(
+      await tx.run(
         `INSERT INTO attempt (
            id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
            lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
@@ -212,7 +212,7 @@ export async function replaceDurableSnapshot(
         ],
       );
       for (const crossing of attempt.crossings) {
-        await sql.run(
+        await tx.run(
           `INSERT INTO attempt_checkpoint_crossing (
              id, attempt_id, checkpoint_id, checkpoint_name, checkpoint_progress_m, crossed_at_ms
            ) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -232,7 +232,7 @@ export async function replaceDurableSnapshot(
     const mode =
       settings.find((setting) => setting.key === ACTIVE_TRANSPORTATION_MODE_KEY)?.value ??
       DEFAULT_ACTIVE_TRANSPORTATION_MODE;
-    await sql.run('INSERT INTO app_setting (key, value) VALUES (?, ?)', [ACTIVE_TRANSPORTATION_MODE_KEY, mode]);
+    await tx.run('INSERT INTO app_setting (key, value) VALUES (?, ?)', [ACTIVE_TRANSPORTATION_MODE_KEY, mode]);
 
     if (options?.beforeCommit) {
       await options.beforeCommit();

@@ -52,6 +52,12 @@ Excluded:
 
 Unknown object fields are ignored when they cannot change the meaning of known fields. Unknown setting keys are not imported.
 
+## Export
+
+Export reads one coherent database state. Other local writes wait until that read finishes, so a place or GPS batch saved during export is kept and is not mixed into the file. A failed export does not roll those writes back.
+
+Sharing writes a temporary cache file for the system share sheet, then deletes it when sharing finishes, fails, or is cancelled. Restore reads the picked file and deletes the cache copy the picker made. The file the user saves stays where they put it.
+
 ## Restore
 
 V1 restore is replace, not merge. The file is parsed and validated with no writes. The preview shows creation time, format version, and counts for places, routes, attempts, and GPS samples. The user must confirm `Replace local data with this backup`.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 
 import { EMPTY_ATTEMPT_LOCAL_START, isHiddenIncomplete, officialTimeMs, type Attempt } from '../src/domain/attempt';
@@ -12,6 +13,7 @@ import {
   type JourneyAttemptTrace,
 } from '../src/domain/path-variant-discovery';
 import { applyMigrations } from '../src/persistence/migrations';
+import { createSerializedSqlExecutor } from '../src/persistence/serialized-sql-executor';
 import {
   ACTIVE_TRANSPORTATION_MODE_KEY,
   PATH_VARIANT_RECOMPUTE_FINGERPRINT_KEY,
@@ -47,7 +49,7 @@ import { RECONCILED_ATTEMPT, capturedLocalStart } from './helpers/attempts';
 import { makePlace, completeJourneySamples } from './helpers/places';
 import { makeRoute, northPath } from './helpers/routes';
 import { offsetLatLng, traceAlongPath } from './helpers/samples';
-import { createMemorySqlExecutor } from './helpers/node-sql-executor';
+import { createMemorySqlExecutor, createNodeStatementOps } from './helpers/node-sql-executor';
 import { createSqliteWorkspace } from './helpers/workspace';
 
 const NOW = 1_800_000_000_000;
@@ -338,6 +340,76 @@ describe('local backup', () => {
     assert.equal(route?.name, 'River route');
     assert.equal(route?.checkpoints[0]?.name, 'Bridge');
     assert.equal(route?.referencePath.length, 4);
+  });
+
+  it('keeps a coherent snapshot when a place and GPS batch are saved during export', async () => {
+    const database = new DatabaseSync(':memory:');
+    const ops = createNodeStatementOps(database);
+    const sql = createSerializedSqlExecutor(ops);
+    await applyMigrations(sql, 1_700_000_000_000);
+    const seeded = await seedHistory(sql);
+    const places = new SqlitePlaceStore(async () => sql);
+    const sessions = new SqliteLocationSampleStore(async () => sql);
+    await sessions.createSession('session-live', NOW, 'attempt');
+    const extraPlace = makePlace({
+      id: 'place-during-export',
+      name: 'During export',
+      createdAtMs: NOW,
+    });
+    const readAll = ops.getAll.bind(ops);
+    let writerStarted = false;
+    let writer: Promise<void> = Promise.resolve();
+    ops.getAll = async (statement, params) => {
+      const rows = await readAll(statement, params);
+      if (statement.includes('FROM place') && statement.includes('radius_meters')) {
+        ops.getAll = readAll;
+        writer = (async () => {
+          writerStarted = true;
+          await places.createPlace(extraPlace);
+          await sessions.appendSamples([
+            {
+              id: 'live-sample',
+              sessionId: 'session-live',
+              recordedAtMs: NOW + 1_000,
+              latitude: seeded.home.center.latitude,
+              longitude: seeded.home.center.longitude,
+              horizontalAccuracyMeters: 5,
+              speedMetersPerSecond: 0,
+              headingDegrees: 0,
+            },
+          ]);
+        })();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        const during = await ops.getFirst<{ id: string }>('SELECT id FROM place WHERE id = ?', [extraPlace.id]);
+        assert.equal(writerStarted, true);
+        assert.equal(during, null);
+      }
+      return rows;
+    };
+
+    const exported = await service(sql).exportBackup();
+    await writer;
+
+    assert.equal((await places.getPlace(extraPlace.id))?.name, 'During export');
+    assert.equal(await sessions.countSamples('session-live'), 1);
+    assert.equal((await new SqliteAttemptStore(async () => sql).getAttempt('attempt-pb'))?.id, seeded.pb.id);
+
+    const parsed = parseBackup(exported.text, NOW);
+    assert.equal(
+      parsed.snapshot.places.some((place) => place.id === extraPlace.id),
+      false,
+    );
+    assert.equal(
+      parsed.snapshot.samples.some((sample) => sample.id === 'live-sample'),
+      false,
+    );
+    assert.equal(
+      parsed.snapshot.places.some((place) => place.id === seeded.home.id),
+      true,
+    );
+    assert.equal(parsed.snapshot.sessions.some((session) => session.id === 'session-live'), true);
   });
 
   it('rejects a malformed, truncated, newer, or inconsistent file before changing data', async () => {

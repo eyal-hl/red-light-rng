@@ -102,17 +102,31 @@ describe('course layout persistence', () => {
     await store.createRoute(route);
     const original = await store.getRoute(route.id);
 
+    const failCheckpointInsert = async (
+      run: SqlExecutor['run'],
+      statement: string,
+      params?: Parameters<SqlExecutor['run']>[1],
+    ) => {
+      if (statement.includes('INSERT INTO route_checkpoint')) {
+        throw new Error('injected failure');
+      }
+      return run(statement, params);
+    };
     const wrapped: SqlExecutor = {
       exec: (statement) => sql.exec(statement),
-      run: async (statement, params) => {
-        if (statement.includes('INSERT INTO route_checkpoint')) {
-          throw new Error('injected failure');
-        }
-        return sql.run(statement, params);
-      },
+      run: (statement, params) => failCheckpointInsert(sql.run.bind(sql), statement, params),
       getFirst: (statement, params) => sql.getFirst(statement, params),
       getAll: (statement, params) => sql.getAll(statement, params),
-      withTransaction: (fn) => sql.withTransaction(fn),
+      withTransaction: (fn) =>
+        sql.withTransaction((tx) =>
+          fn({
+            exec: (statement) => tx.exec(statement),
+            run: (statement, params) => failCheckpointInsert(tx.run.bind(tx), statement, params),
+            getFirst: (statement, params) => tx.getFirst(statement, params),
+            getAll: (statement, params) => tx.getAll(statement, params),
+            withTransaction: (inner) => tx.withTransaction(inner),
+          }),
+        ),
     };
     const failingStore = new SqliteRouteStore(async () => wrapped);
     let draft = createCourseEditorDraft(route);

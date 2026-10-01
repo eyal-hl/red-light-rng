@@ -1,28 +1,18 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
+import { createSerializedSqlExecutor } from './serialized-sql-executor';
 import type { SqlExecutor, SqlValue } from './sql-executor';
 
 export function createExpoSqlExecutor(database: SQLiteDatabase): SqlExecutor {
-  return {
-    async exec(sql: string) {
-      await database.execAsync(sql);
-    },
-    async run(sql: string, params: SqlValue[] = []) {
+  return createSerializedSqlExecutor({
+    exec: (sql) => database.execAsync(sql),
+    run: async (sql, params: SqlValue[] = []) => {
       await database.runAsync(sql, ...params);
     },
-    async getFirst<T>(sql: string, params: SqlValue[] = []) {
+    getFirst: async <T>(sql: string, params: SqlValue[] = []) => {
       const row = await database.getFirstAsync<T>(sql, ...params);
       return row ?? null;
     },
-    async getAll<T>(sql: string, params: SqlValue[] = []) {
-      return database.getAllAsync<T>(sql, ...params);
-    },
-    async withTransaction<T>(fn: () => Promise<T>) {
-      let result: T | undefined;
-      await database.withTransactionAsync(async () => {
-        result = await fn();
-      });
-      return result as T;
-    },
-  };
+    getAll: <T>(sql: string, params: SqlValue[] = []) => database.getAllAsync<T>(sql, ...params),
+  });
 }
