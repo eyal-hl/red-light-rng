@@ -1,8 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
 
+import {
+  createSerializedSqlExecutor,
+  type SqlStatementOps,
+} from '../../src/persistence/serialized-sql-executor';
 import type { SqlExecutor, SqlValue } from '../../src/persistence/sql-executor';
 
-export function createNodeSqlExecutor(database: DatabaseSync): SqlExecutor {
+export function createNodeStatementOps(database: DatabaseSync): SqlStatementOps {
   return {
     async exec(sql: string) {
       database.exec(sql);
@@ -17,18 +21,11 @@ export function createNodeSqlExecutor(database: DatabaseSync): SqlExecutor {
     async getAll<T>(sql: string, params: SqlValue[] = []) {
       return database.prepare(sql).all(...params) as T[];
     },
-    async withTransaction<T>(fn: () => Promise<T>) {
-      database.exec('BEGIN');
-      try {
-        const result = await fn();
-        database.exec('COMMIT');
-        return result;
-      } catch (error) {
-        database.exec('ROLLBACK');
-        throw error;
-      }
-    },
   };
+}
+
+export function createNodeSqlExecutor(database: DatabaseSync): SqlExecutor {
+  return createSerializedSqlExecutor(createNodeStatementOps(database));
 }
 
 export function createMemorySqlExecutor(): SqlExecutor {

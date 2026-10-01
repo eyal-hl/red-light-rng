@@ -171,6 +171,14 @@ export class RouteWorkspace {
     this.navigationLoad.timings = [];
   }
 
+  invalidateDerivedViews(): void {
+    this.homeCache.clear();
+    this.journeyCache.clear();
+    this.focusCache.clear();
+    this.debugCache.clear();
+    this.routeAnalysisCache.clear();
+  }
+
   async preparePersistence(): Promise<void> {
     await this.settings.getActiveTransportationMode();
   }

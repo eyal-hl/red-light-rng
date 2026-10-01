@@ -23,6 +23,11 @@ export class SingleKeyedCache<T> {
     this.key = key;
     this.value = value;
   }
+
+  clear(): void {
+    this.key = null;
+    this.value = null;
+  }
 }
 
 export class MapKeyedCache<T> {
@@ -34,6 +39,10 @@ export class MapKeyedCache<T> {
 
   set(key: string, value: T): void {
     this.values.set(key, value);
+  }
+
+  clear(): void {
+    this.values.clear();
   }
 }
 
