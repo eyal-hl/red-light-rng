@@ -23,7 +23,7 @@ import {
 } from '../domain/path-variant-discovery';
 import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-derivation';
 import type { TrackingState } from '../domain/tracking-state';
-import { isOpenAttempt, type Attempt } from '../domain/attempt';
+import { isJourneyCompetitive, isOpenAttempt, type Attempt } from '../domain/attempt';
 import {
   emptyAttemptReconciliationReport,
   type AttemptReconciliationReport,
@@ -55,6 +55,13 @@ import {
 } from '../domain/journey-analysis';
 import { computeJourneyPoolDepartureGrouping, type JourneyDepartureGrouping } from '../domain/journey-departure';
 import { computeJourneyPoolStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
+import {
+  aggregateDelayHotspots,
+  type DelayHotspotAnalysis,
+  type DelayHotspotAttemptInput,
+} from '../domain/delay-hotspots';
+import { isMovementDisplayable } from '../domain/movement-analysis';
+import { isCompatiblePathVariant } from '../domain/path-variant';
 import type { JourneyPoolId } from '../domain/journey';
 import type { LocationSampleStore, TrackingSessionRecord } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
@@ -71,6 +78,7 @@ import {
 } from './attempt-runtime';
 import {
   debugDerivationKey,
+  delayHotspotDerivationKey,
   focusDerivationKey,
   homeDerivationKey,
   journeyDerivationKey,
@@ -146,6 +154,7 @@ export class RouteWorkspace {
   lastAttemptReconciliation: AttemptReconciliationReport = emptyAttemptReconciliationReport();
   private readonly homeCache = new SingleKeyedCache<HomeSnapshot>();
   private readonly journeyCache = new MapKeyedCache<LoadedJourney>();
+  private readonly delayHotspotCache = new MapKeyedCache<DelayHotspotAnalysis>();
   private readonly focusCache = new MapKeyedCache<AnalyzeJourneyResult>();
   private readonly debugCache = new MapKeyedCache<CombinedAttemptDebug | null>();
   private readonly routeAnalysisCache = new MapKeyedCache<{
@@ -846,6 +855,99 @@ export class RouteWorkspace {
       this.journeyCache.set(key, loaded);
       return { value: loaded, cacheHit: false };
     });
+  }
+
+  /**
+   * Confirmed-wait hotspots for a journey pool. This is intentionally separate
+   * from `loadJourney`: deriving waits reads raw samples, and journey-detail
+   * first paint must stay sample-free.
+   */
+  async loadJourneyDelayHotspots(pool: JourneyPoolId): Promise<DelayHotspotAnalysis | null> {
+    return timeNavigationLoad(this.navigationLoad, 'loadJourneyDelayHotspots', async () => {
+      const origin = await this.places.getPlace(pool.originPlaceId);
+      const destination = await this.places.getPlace(pool.destinationPlaceId);
+      if (!origin || !destination) {
+        return { value: null, cacheHit: false };
+      }
+      const [allAttempts, routes] = await Promise.all([
+        this.attempts.listAttempts(),
+        this.routes.listRoutes(),
+      ]);
+      const asOfMs = this.now();
+      const poolAttempts = allAttempts.filter(
+        (attempt) => attemptInPool(attempt, pool) && isJourneyCompetitive(attempt),
+      );
+      const sampleIdentities = await this.sampleIdentitiesFor(poolAttempts);
+      const key = delayHotspotDerivationKey({
+        pool,
+        attempts: poolAttempts,
+        origin,
+        destination,
+        routes,
+        sampleIdentities,
+        asOfMs,
+      });
+      const cached = this.delayHotspotCache.get(key);
+      if (cached) {
+        return { value: cached, cacheHit: true };
+      }
+      const inputs: DelayHotspotAttemptInput[] = [];
+      for (const attempt of poolAttempts) {
+        const derived = await this.delayHotspotAttemptInput(attempt, routes);
+        if (derived) {
+          inputs.push(derived);
+        }
+      }
+      const analysis = aggregateDelayHotspots({
+        pool,
+        attempts: inputs,
+        routes: routes.map((item) => ({
+          routeId: item.id,
+          referencePath: item.referencePath,
+        })),
+        asOfMs,
+      });
+      this.delayHotspotCache.set(key, analysis);
+      return { value: analysis, cacheHit: false };
+    });
+  }
+
+  private async delayHotspotAttemptInput(
+    attempt: Attempt,
+    routes: Route[],
+  ): Promise<DelayHotspotAttemptInput | null> {
+    if (
+      !attempt.routeId ||
+      attempt.startedAtMs == null ||
+      attempt.finishedAtMs == null ||
+      !attempt.originPlaceId ||
+      !attempt.destinationPlaceId
+    ) {
+      return null;
+    }
+    const route = routes.find((item) => item.id === attempt.routeId);
+    if (!route) {
+      return null;
+    }
+    const samples = await this.listAttemptSamples(attempt.sessionId);
+    const window = { startedAtMs: attempt.startedAtMs, finishedAtMs: attempt.finishedAtMs };
+    if (!isCompatiblePathVariant(route, samples, window)) {
+      return null;
+    }
+    const derived = deriveAnchoredLayoutAttempt(timingCourseFromRoute(route), attempt, samples);
+    if (!derived.eligible || derived.movement == null || !isMovementDisplayable(derived.movement)) {
+      return null;
+    }
+    return {
+      attemptId: attempt.id,
+      finishedAtMs: attempt.finishedAtMs,
+      originPlaceId: attempt.originPlaceId,
+      destinationPlaceId: attempt.destinationPlaceId,
+      transportationMode: attempt.transportationMode,
+      routeId: route.id,
+      analysisTrustworthy: true,
+      waitEvents: derived.waitEvents,
+    };
   }
 
   private async listAttemptSamples(sessionId: string): Promise<LocationSample[]> {

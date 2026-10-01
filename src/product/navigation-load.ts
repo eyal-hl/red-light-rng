@@ -1,6 +1,7 @@
 export type NavigationLoadOperation =
   | 'loadHome'
   | 'loadJourney'
+  | 'loadJourneyDelayHotspots'
   | 'analyzeJourneyHeadline'
   | 'analyzeJourney'
   | 'inspectAttempt'

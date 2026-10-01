@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
+import type { DelayHotspotAnalysis, DelayHotspotRank } from '../domain/delay-hotspots';
 import { formatElapsed } from '../domain/duration';
 import type { JourneyDepartureGroup, JourneyDepartureGrouping } from '../domain/journey-departure';
 import type { JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
@@ -11,6 +12,7 @@ import { transportationModeIcon, transportationModeLabel } from '../domain/route
 import { RouteMap } from '../map/RouteMap';
 import { pathVariantDisplayStyle, pathVariantDisplayStyles, pathVariantsToMapLines } from '../map/path-variant-display';
 import { DeferredMapSlot } from './DeferredMapSlot';
+import { delayHotspotWaitMarkers, JourneyDelayHotspots } from './JourneyDelayHotspots';
 import {
   durationOrDash,
   JourneyStatRow,
@@ -27,12 +29,16 @@ type JourneyDetailScreenProps = {
   grouping: JourneyDepartureGrouping;
   history: JourneyHistoryRow[];
   pathVariants: JourneyPathVariantSummary[];
+  delayHotspots: DelayHotspotAnalysis | null;
+  delayHotspotsPending: boolean;
+  delayHotspotError: string | null;
   busy: boolean;
   error: string | null;
   onBack: () => void;
   onHistory: () => void;
   onOpenGroupAttempts: (group: JourneyDepartureGroup) => void;
   onOpenPathVariant: (routeId: string) => void;
+  onOpenHotspotAttempt: (attemptId: string) => void;
 };
 
 export function JourneyDetailScreen({
@@ -43,16 +49,28 @@ export function JourneyDetailScreen({
   grouping,
   history,
   pathVariants,
+  delayHotspots,
+  delayHotspotsPending,
+  delayHotspotError,
   busy,
   error,
   onBack,
   onHistory,
   onOpenGroupAttempts,
   onOpenPathVariant,
+  onOpenHotspotAttempt,
 }: JourneyDetailScreenProps) {
   const [statsView, setStatsView] = useState<JourneyStatsView>('overall');
+  const [hotspotRank, setHotspotRank] = useState<DelayHotspotRank>('frequency');
+  const [hotspotsExpanded, setHotspotsExpanded] = useState(false);
+  const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
   const variantStyles = pathVariantDisplayStyles(pathVariants.map((item) => item.route.id));
   const variantMapLines = pathVariantsToMapLines(pathVariants);
+  const waitMarkers = delayHotspotWaitMarkers(delayHotspots, {
+    rank: hotspotRank,
+    expanded: hotspotsExpanded,
+    selectedId: selectedHotspotId,
+  });
 
   return (
     <View style={styles.screen}>
@@ -73,6 +91,9 @@ export function JourneyDetailScreen({
               startZone={placeZone(origin)}
               finishZone={placeZone(destination)}
               checkpoints={[]}
+              waitMarkers={waitMarkers}
+              selectedMarkerId={selectedHotspotId}
+              onWaitMarkerPress={setSelectedHotspotId}
             />
           </DeferredMapSlot>
         </View>
@@ -94,6 +115,18 @@ export function JourneyDetailScreen({
           Any path between these places counts. Journey PB is the headline. Path variants are optional
           secondary analytics.
         </Text>
+        <JourneyDelayHotspots
+          analysis={delayHotspots}
+          pending={delayHotspotsPending}
+          error={delayHotspotError}
+          selectedId={selectedHotspotId}
+          rank={hotspotRank}
+          expanded={hotspotsExpanded}
+          onChangeRank={setHotspotRank}
+          onToggleExpanded={() => setHotspotsExpanded((current) => !current)}
+          onSelect={setSelectedHotspotId}
+          onOpenAttempt={onOpenHotspotAttempt}
+        />
         {pathVariants.length > 0 ? (
           <View>
             <Text style={styles.sectionLabel}>PATH VARIANTS</Text>

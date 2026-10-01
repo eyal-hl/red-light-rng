@@ -9,6 +9,7 @@ import {
   toCourseLayout,
   type CourseEditorDraft,
 } from '../domain/course-editor';
+import type { DelayHotspotAnalysis } from '../domain/delay-hotspots';
 import type { JourneyPoolId } from '../domain/journey';
 import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
 import {
@@ -77,7 +78,7 @@ type AppScreen =
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
   | { kind: 'history'; pool: JourneyPoolId }
-  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string }
+  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string; origin: 'history' | 'journey' }
   | { kind: 'place-editor'; placeId: string | null };
 
 type AppRootProps = {
@@ -146,9 +147,13 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [debugError, setDebugError] = useState<string | null>(null);
   const [pathAnalyticsError, setPathAnalyticsError] = useState<string | null>(null);
   const [journeySnapshotReady, setJourneySnapshotReady] = useState(false);
+  const [delayHotspots, setDelayHotspots] = useState<DelayHotspotAnalysis | null>(null);
+  const [delayHotspotsPending, setDelayHotspotsPending] = useState(false);
+  const [delayHotspotError, setDelayHotspotError] = useState<string | null>(null);
   const startupTokenRef = useRef(0);
   const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
   const journeyLoadTokenRef = useRef(0);
+  const hotspotLoadTokenRef = useRef(0);
   const secondaryLoadTokenRef = useRef(0);
   const routeDetailTokenRef = useRef(0);
 
@@ -186,6 +191,11 @@ export function AppRoot({ workspace }: AppRootProps) {
       journeyLoadTokenRef.current = began.token;
       activeJourneyPoolRef.current = pool;
       setJourneySnapshotReady(began.snapshotReady);
+      const hotspotToken = hotspotLoadTokenRef.current + 1;
+      hotspotLoadTokenRef.current = hotspotToken;
+      setDelayHotspots(null);
+      setDelayHotspotsPending(false);
+      setDelayHotspotError(null);
       const loaded = await workspace.loadJourney(pool);
       const outcome = finishJourneySnapshotLoad(
         began.token,
@@ -199,6 +209,30 @@ export function AppRoot({ workspace }: AppRootProps) {
       }
       applyLoadedJourney(pool, outcome.loaded);
       setJourneySnapshotReady(true);
+      if (hotspotLoadTokenRef.current !== hotspotToken) {
+        return outcome;
+      }
+      setDelayHotspotsPending(true);
+      void workspace.loadJourneyDelayHotspots(pool).then(
+        (analysis) => {
+          if (hotspotLoadTokenRef.current !== hotspotToken) {
+            return;
+          }
+          if (!activeJourneyPoolRef.current || !sameJourneyPool(activeJourneyPoolRef.current, pool)) {
+            return;
+          }
+          setDelayHotspots(analysis);
+          setDelayHotspotsPending(false);
+        },
+        () => {
+          if (hotspotLoadTokenRef.current !== hotspotToken) {
+            return;
+          }
+          setDelayHotspots(null);
+          setDelayHotspotsPending(false);
+          setDelayHotspotError('Recurring delays could not be loaded.');
+        },
+      );
       return outcome;
     },
     [applyLoadedJourney, workspace],
@@ -752,6 +786,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         return;
       }
       const stayOnDetail = screen.kind === 'attempt-detail';
+      const detailOrigin = screen.kind === 'attempt-detail' ? screen.origin : 'history';
       setBusy(true);
       setError(null);
       try {
@@ -769,6 +804,7 @@ export function AppRoot({ workspace }: AppRootProps) {
                     transportationMode: updated.transportationMode,
                   },
                   attemptId: updated.id,
+                  origin: detailOrigin,
                 }
               : { kind: 'attempt-result' },
           );
@@ -779,7 +815,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setBusy(false);
       }
     },
-    [attemptResult, screen.kind, showAttemptResult, workspace],
+    [attemptResult, screen, showAttemptResult, workspace],
   );
 
   const leaveToHome = useCallback(() => {
@@ -878,6 +914,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           kind: 'attempt-detail',
           pool: screen.pool,
           attemptId,
+          origin: 'history',
         });
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
@@ -901,9 +938,38 @@ export function AppRoot({ workspace }: AppRootProps) {
     setDebugError(null);
     setPathAnalyticsError(null);
     const pool = screen.pool;
-    setScreen({ kind: 'history', pool });
+    const origin = screen.origin;
+    setScreen(origin === 'journey' ? { kind: 'journey', pool } : { kind: 'history', pool });
     void loadJourney(pool);
   }, [loadJourney, screen]);
+
+  const onOpenHotspotAttempt = useCallback(
+    async (attemptId: string) => {
+      if (screen.kind !== 'journey') {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const attempt = await workspace.getAttempt(attemptId);
+        if (!attempt) {
+          setError('This attempt is no longer available.');
+          return;
+        }
+        await showAttemptResult(attempt, undefined, {
+          kind: 'attempt-detail',
+          pool: screen.pool,
+          attemptId,
+          origin: 'journey',
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [screen, showAttemptResult, workspace],
+  );
 
   const onBackFromHistory = useCallback(() => {
     if (screen.kind !== 'history') {
@@ -1529,6 +1595,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           grouping={journeyGrouping}
           history={journeyHistory}
           pathVariants={journeyPathVariants}
+          delayHotspots={delayHotspots}
+          delayHotspotsPending={delayHotspotsPending}
+          delayHotspotError={delayHotspotError}
           busy={busy}
           error={error}
           onBack={leaveToHome}
@@ -1538,6 +1607,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           onOpenGroupAttempts={onOpenGroupAttempts}
           onOpenPathVariant={(routeId) => {
             void onOpenPathVariant(routeId);
+          }}
+          onOpenHotspotAttempt={(attemptId) => {
+            void onOpenHotspotAttempt(attemptId);
           }}
         />
         ) : (
