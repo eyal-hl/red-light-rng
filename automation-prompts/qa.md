@@ -68,6 +68,8 @@ If an acceptance criterion cannot be tested in the available environment, say:
 
 `QA BLOCKED: <criterion and reason>`
 
+Map visual readability and marker distinguishability are an exception: when the cloud environment did not render native MapLibre, report those as **AWAITING HUMAN VALIDATION**, never as a standing `QA BLOCKED` on unrelated PRs. Still run the Map integrity smoke below.
+
 If every criterion that can genuinely be tested passes, say:
 
 `QA PASS`
@@ -75,3 +77,27 @@ If every criterion that can genuinely be tested passes, say:
 Then list exactly what was exercised and separately list remaining human/device validation.
 
 Do not fix defects yourself. Never merge the PR.
+
+## Map integrity smoke
+
+On every autonomous PR, Product QA must run these tests explicitly and quote their results — do not hide them inside generic `npm test` output:
+
+- `tests/attempt-result-map.test.ts`
+- `tests/course-editor-map.test.ts`
+- `tests/course-camera-bounds.test.ts`
+- `tests/map-presentation.test.ts` (dense-overlay / map-integrity regression)
+
+From `tests/map-presentation.test.ts` / `formatMapIntegrityReport`, report these dense-fixture numbers in the QA comment:
+
+- accepted debug marker count
+- non-selected accepted debug marker count
+- rejected debug marker count
+- selected debug marker count
+- fallback recorded-trace point/View count
+- centralized budgets (`REJECTED_DEBUG_MARKER_BUDGET`, `FALLBACK_RECORDED_TRACE_POINT_BUDGET`)
+
+Verify the deterministic presentation contract for a realistic fixture with hundreds of location samples. Hundreds of accepted raw samples must not imply hundreds of accepted debug circles, an unselected map must show zero accepted debug markers, and fallback recorded-trace Views must stay within the centralized budget.
+
+When a PR changes map UI, result analysis, telemetry/debug data, or shapes passed to `RouteMap`, also inspect committed map layer/source ordering (route line, recorded path, waits, ghost preview, debug samples).
+
+Never claim native visual readability or distinguishability was exercised unless a native map was actually rendered. Cloud QA does not render MapLibre. Visual readability remains physical Android / human validation. The permanent automated gate is the deterministic marker-count, budget, and layer-order contract.

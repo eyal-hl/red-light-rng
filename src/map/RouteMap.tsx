@@ -5,6 +5,10 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 import type { GeoZone, LatLng } from '../domain/geo';
 import { COURSE_CAMERA_PADDING, courseCameraBounds } from './course-camera-bounds';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
+import {
+  prepareMapPresentation,
+  type MapPresentationDebugSample,
+} from './map-presentation';
 import { OPENFREEMAP_LIBERTY_STYLE_URL, OPENFREEMAP_LIBERTY_TEXT_FONT } from './openfreemap-style';
 import {
   isRenderableReferencePath,
@@ -27,11 +31,7 @@ export type RouteMapWaitMarker = {
   tone?: RouteMapWaitMarkerTone;
 };
 
-export type RouteMapDebugSample = {
-  id: string;
-  point: LatLng;
-  accepted: boolean;
-};
+export type RouteMapDebugSample = MapPresentationDebugSample;
 
 export type RouteMapPathVariant = PathVariantMapLine;
 
@@ -344,9 +344,13 @@ function MapLibreRouteMap({
   );
   const previewData = useMemo(() => toPreviewGeoJson(previewPoint), [previewPoint]);
   const recordedData = useMemo(() => toRecordedPathGeoJson(recordedPath), [recordedPath]);
+  const presentation = useMemo(
+    () => prepareMapPresentation({ debugSamples, recordedPath, selectedSampleId }),
+    [debugSamples, recordedPath, selectedSampleId],
+  );
   const debugData = useMemo(
-    () => toDebugSampleGeoJson(debugSamples, selectedSampleId),
-    [debugSamples, selectedSampleId],
+    () => toDebugSampleGeoJson(presentation.debugMarkers, selectedSampleId),
+    [presentation.debugMarkers, selectedSampleId],
   );
   const officialData = useMemo(
     () => toOfficialPointGeoJson(officialStartPoint, officialFinishPoint),
@@ -548,14 +552,14 @@ function MapLibreRouteMap({
           />
         </GeoJSONSource>
       ) : null}
-      {debugSamples.length > 0 ? (
+      {presentation.debugMarkers.length > 0 ? (
         <GeoJSONSource id="debug-samples" data={debugData}>
           <Layer
             id="debug-sample-point"
             type="circle"
             filter={['==', ['get', 'kind'], 'debug-sample']}
             paint={{
-              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 7, 4],
+              'circle-radius': ['case', ['==', ['get', 'selected'], 'yes'], 10, 4],
               'circle-color': [
                 'case',
                 ['==', ['get', 'accepted'], 'yes'],
@@ -563,7 +567,7 @@ function MapLibreRouteMap({
                 '#f07178',
               ],
               'circle-stroke-width': ['case', ['==', ['get', 'selected'], 'yes'], 3, 1],
-              'circle-stroke-color': '#ffffff',
+              'circle-stroke-color': ['case', ['==', ['get', 'selected'], 'yes'], '#111111', '#5c2a2e'],
             }}
           />
         </GeoJSONSource>

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { geoZoneExtentPoints, type GeoZone, type LatLng } from '../domain/geo';
+import { prepareMapPresentation, type MapPresentationDebugSample } from './map-presentation';
 import { boundFallbackPathVertices, type PathVariantMapLine } from './path-variant-display';
 
 type FallbackCheckpoint = {
@@ -16,11 +17,7 @@ type FallbackWaitMarker = {
   tone?: 'wait' | 'more' | 'less';
 };
 
-type FallbackDebugSample = {
-  id: string;
-  point: LatLng;
-  accepted: boolean;
-};
+type FallbackDebugSample = MapPresentationDebugSample;
 
 type FallbackRoutePreviewProps = {
   path: LatLng[];
@@ -52,6 +49,8 @@ function project(
   officialStartPoint?: LatLng | null,
   officialFinishPoint?: LatLng | null,
   pathVariants: PathVariantMapLine[] = [],
+  recordedTraceDisplayPoints?: LatLng[],
+  debugDisplaySamples?: FallbackDebugSample[],
 ): {
   points: Point[];
   start: Point | null;
@@ -149,8 +148,8 @@ function project(
     checkpointPoints: checkpoints.map((checkpoint) => toPoint(checkpoint.point)),
     waitPoints: waitMarkers.map((wait) => ({ id: wait.id, point: toPoint(wait.point), tone: wait.tone })),
     preview: previewPoint ? toPoint(previewPoint) : null,
-    recordedPoints: recordedPath.map(toPoint),
-    debugPoints: debugSamples.map((sample) => ({
+    recordedPoints: (recordedTraceDisplayPoints ?? recordedPath).map(toPoint),
+    debugPoints: (debugDisplaySamples ?? debugSamples).map((sample) => ({
       id: sample.id,
       point: toPoint(sample.point),
       accepted: sample.accepted,
@@ -188,6 +187,10 @@ export function FallbackRoutePreview({
       path: boundedPaths[index] ?? [],
     }));
   }, [pathVariants]);
+  const presentation = useMemo(
+    () => prepareMapPresentation({ debugSamples, recordedPath, selectedSampleId }),
+    [debugSamples, recordedPath, selectedSampleId],
+  );
   const projected = useMemo(
     () =>
       project(
@@ -202,6 +205,8 @@ export function FallbackRoutePreview({
         officialStartPoint,
         officialFinishPoint,
         boundedVariants,
+        presentation.fallbackRecordedTracePoints,
+        presentation.debugMarkers,
       ),
     [
       boundedVariants,
@@ -211,6 +216,8 @@ export function FallbackRoutePreview({
       officialFinishPoint,
       officialStartPoint,
       path,
+      presentation.debugMarkers,
+      presentation.fallbackRecordedTracePoints,
       previewPoint,
       recordedPath,
       startZone,
@@ -474,7 +481,7 @@ const styles = StyleSheet.create({
     marginTop: -4,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: '#ffffff',
+    borderColor: '#5c2a2e',
     zIndex: 2,
   },
   debugAccepted: {
@@ -484,12 +491,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f07178',
   },
   debugSelected: {
-    width: 14,
-    height: 14,
-    marginLeft: -7,
-    marginTop: -7,
-    borderRadius: 7,
-    borderWidth: 2,
+    width: 18,
+    height: 18,
+    marginLeft: -9,
+    marginTop: -9,
+    borderRadius: 9,
+    borderWidth: 3,
+    borderColor: '#111111',
+    zIndex: 4,
   },
   officialStart: {
     position: 'absolute',
