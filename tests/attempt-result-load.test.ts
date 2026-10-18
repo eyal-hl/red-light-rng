@@ -6,10 +6,14 @@ import { EMPTY_ATTEMPT_LOCAL_START } from '../src/domain/attempt';
 import { PLACE_ACTIVE_MAX_DURATION_MS, PLACE_ARMED_MAX_DURATION_MS } from '../src/domain/place-timing';
 import { JourneyFocusStoppedError } from '../src/domain/journey-analysis';
 import {
+  ATTEMPT_ACK_FAILURE_MESSAGE,
   PATH_ANALYTICS_BUDGET_MESSAGE,
   PATH_ANALYTICS_INTERRUPTED_MESSAGE,
+  acknowledgementFailureStillVisible,
   beginResultOpen,
+  claimAcknowledgement,
   createAttemptResultShell,
+  forwardAbortSignal,
   invalidateResultPresentation,
   isCurrentResultRequest,
   isCurrentSecondaryLoad,
@@ -18,6 +22,9 @@ import {
   loadAttemptResultSecondary,
   nextResultRequest,
   nextSecondaryLoad,
+  releaseAcknowledgement,
+  resultExitDestination,
+  settledPathAnalyticsView,
   successorResultOpen,
   type AttemptResultSecondaryUpdate,
 } from '../src/product/attempt-result-load';
@@ -308,35 +315,45 @@ describe('attempt result secondary load', () => {
     assert.match(showAttemptResult, /createAttemptResultShell\(attempt\)/);
     assert.match(showAttemptResult, /setScreen\(nextScreen\);\s*void loadAttemptResultSecondary/s);
     assert.match(showAttemptResult, /workspace\.inspectAttempt|loadAttemptResultSecondary/);
-    assert.doesNotMatch(showAttemptResult, /if \(!pool\) \{/);
+    assert.ok(showAttemptResult.indexOf('void loadAttemptResultSecondary') < showAttemptResult.indexOf('if (!pool)'));
     assert.match(appRoot, /debugPending=\{debugPending\}/);
     assert.match(appRoot, /pathAnalyticsPending=\{pathAnalyticsPending\}/);
     assert.match(appRoot, /yieldToIdle: yieldToEventLoop/);
     assert.match(appRoot, /onRetryPathAnalytics=\{retryPathAnalytics\}/);
-    assert.match(showAttemptResult, /setJourneyFocus\(update\.pathAnalytics\?\.focus \?\? focus\)/);
+    assert.match(showAttemptResult, /applyPathAnalyticsUpdate\(token, update\)/);
     const acknowledge = appRoot.slice(
       appRoot.indexOf('const onAcknowledgeAttempt'),
       appRoot.indexOf('const leaveResultAfterHide'),
     );
-    const invalidateAt = acknowledge.indexOf('invalidateResultPresentation');
+    const screenAt = acknowledge.indexOf('setScreen(next)');
     const acknowledgeAt = acknowledge.indexOf('await workspace.acknowledgeAttemptResult');
-    assert.ok(invalidateAt >= 0 && acknowledgeAt > invalidateAt);
+    assert.ok(acknowledge.indexOf("kind: 'journey'") >= 0);
+    assert.ok(screenAt >= 0 && acknowledgeAt > screenAt);
+    assert.doesNotMatch(acknowledge, /setBusy\(true\)/);
+    assert.match(acknowledge, /claimAcknowledgement/);
+    assert.match(acknowledge, /releaseAcknowledgement/);
     assert.match(acknowledge, /pathAnalyticsAbortRef\.current\?\.abort\(\)/);
-    const beforeHeadline = showAttemptResult.slice(0, showAttemptResult.indexOf('analyzeJourneyHeadline'));
-    assert.match(beforeHeadline, /nextResultRequest/);
-    assert.doesNotMatch(beforeHeadline, /nextSecondaryLoad/);
-    assert.ok(showAttemptResult.indexOf('nextSecondaryLoad') > showAttemptResult.indexOf('analyzeJourneyHeadline'));
+    assert.match(acknowledge, /setDebugPending\(false\)/);
+    assert.match(acknowledge, /ATTEMPT_ACK_FAILURE_MESSAGE/);
+    const shellPaint = showAttemptResult.slice(0, showAttemptResult.indexOf('analyzeJourneyHeadline'));
+    assert.match(shellPaint, /setScreen\(nextScreen\)/);
+    assert.match(shellPaint, /open\.finish\(\)/);
+    assert.match(shellPaint, /nextSecondaryLoad/);
     assert.doesNotMatch(appRoot, /secondaryLoadTokenRef/);
     assert.match(showAttemptResult, /adoptSuccessor/);
-    assert.match(showAttemptResult, /kind: 'init-error'/);
-    assert.match(showAttemptResult, /throw caught/);
+    assert.match(showAttemptResult, /pathViewRef\.current === 'ready'/);
+    assert.doesNotMatch(showAttemptResult, /kind: 'init-error'/);
     assert.match(resultScreen, /Loading debug trace…/);
     assert.match(resultScreen, /debugPending \?/);
     assert.match(resultScreen, /pathAnalyticsPending \?/);
     assert.match(resultScreen, /PATH_ANALYTICS_UNAVAILABLE_MESSAGE/);
+    assert.match(resultScreen, /pathAnalyticsUnavailable \|\| journey\?\.pathUnavailable/);
     assert.match(resultScreen, /Retry path analytics/);
     assert.match(resultScreen, /disabled=\{busy\}/);
     assert.doesNotMatch(resultScreen, /disabled=\{[^}]*pathAnalyticsPending/);
+    const doneButton = resultScreen.slice(resultScreen.indexOf('accessibilityLabel={doneLabel}'));
+    assert.doesNotMatch(doneButton.slice(0, doneButton.indexOf('</Pressable>')), /disabled=/);
+    assert.match(appRoot, /forwardAbortSignal/);
     assert.equal(PATH_ANALYTICS_INTERRUPTED_MESSAGE.includes('interrupted'), true);
   });
 
@@ -427,6 +444,161 @@ describe('attempt result secondary load', () => {
     assert.equal(secondary.pathAnalytics, null);
     assert.equal(secondary.cancelled, false);
     assert.equal(updates.length, 1);
+  });
+
+  it('lets a slow yielding cohort finish when each step stays inside the stall budget', async () => {
+    let steps = 0;
+    const started = Date.now();
+    const secondary = await loadAttemptPathAnalytics(
+      {
+        inspectAttempt: async () => null,
+        analyzeJourney: async (_pool, _attemptId, options) => {
+          for (let index = 0; index < 4; index += 1) {
+            await options?.yieldToIdle?.();
+            if (options?.shouldContinue && !options.shouldContinue()) {
+              throw new JourneyFocusStoppedError();
+            }
+            steps += 1;
+          }
+          return null;
+        },
+      },
+      {
+        id: 'hw-slow',
+        sessionId: 'session-slow',
+        lifecycle: 'completed',
+        validity: 'valid',
+        armedAtMs: 1_700_000_000_000 - 5_000,
+        startedAtMs: 1_700_000_000_000,
+        finishedAtMs: 1_700_000_000_000 + 99_000,
+        ...EMPTY_ATTEMPT_LOCAL_START,
+        resultAcknowledged: true,
+        crossings: [],
+        routeId: null,
+        originPlaceId: 'place-home',
+        destinationPlaceId: 'place-work',
+        transportationMode: 'scooter',
+      },
+      undefined,
+      {
+        pathAnalyticsBudgetMs: 40,
+        yieldToIdle: () => new Promise((resolve) => setTimeout(resolve, 25)),
+      },
+    );
+
+    assert.ok(Date.now() - started >= 80);
+    assert.equal(steps, 4);
+    assert.equal(secondary.pathAnalyticsError, null);
+    assert.equal(secondary.cancelled, false);
+    assert.equal(settledPathAnalyticsView(secondary), 'unavailable');
+  });
+
+  it('treats a null journey analysis as unavailable and a matching focus as ready', () => {
+    assert.equal(
+      settledPathAnalyticsView({
+        pathAnalytics: null,
+        pathAnalyticsError: null,
+        skipped: false,
+        cancelled: false,
+      }),
+      'unavailable',
+    );
+    assert.equal(
+      settledPathAnalyticsView({
+        pathAnalytics: { focus: null },
+        pathAnalyticsError: null,
+        skipped: false,
+        cancelled: false,
+      }),
+      'unavailable',
+    );
+    assert.equal(
+      settledPathAnalyticsView({
+        pathAnalytics: { focus: { pathUnavailable: true } },
+        pathAnalyticsError: null,
+        skipped: false,
+        cancelled: false,
+      }),
+      'unavailable',
+    );
+    assert.equal(
+      settledPathAnalyticsView({
+        pathAnalytics: { focus: { pathUnavailable: false } },
+        pathAnalyticsError: null,
+        skipped: false,
+        cancelled: false,
+      }),
+      'ready',
+    );
+    assert.equal(
+      settledPathAnalyticsView({
+        pathAnalytics: null,
+        pathAnalyticsError: null,
+        skipped: true,
+        cancelled: false,
+      }),
+      'skipped',
+    );
+  });
+
+  it('leaves the result before acknowledgement and ignores a repeated close', () => {
+    const attempt = {
+      id: 'hw-ack',
+      sessionId: 'session-ack',
+      lifecycle: 'completed' as const,
+      validity: 'valid' as const,
+      armedAtMs: 1,
+      startedAtMs: 2,
+      finishedAtMs: 12,
+      ...EMPTY_ATTEMPT_LOCAL_START,
+      resultAcknowledged: false,
+      crossings: [],
+      routeId: null,
+      originPlaceId: 'place-home',
+      destinationPlaceId: 'place-work',
+      transportationMode: 'scooter' as const,
+    };
+    const first = claimAcknowledgement(null, attempt.id);
+    const destination = resultExitDestination(attempt);
+    assert.equal(first.claimed, true);
+    assert.equal(destination.kind, 'journey');
+    const repeated = claimAcknowledgement(first.lease, attempt.id);
+    assert.equal(repeated.claimed, false);
+    assert.equal(resultExitDestination({ ...attempt, originPlaceId: null }).kind, 'home');
+    const released = releaseAcknowledgement(first.lease, attempt.id);
+    assert.equal(released, null);
+    assert.equal(claimAcknowledgement(released, attempt.id).claimed, true);
+    assert.equal(
+      acknowledgementFailureStillVisible(
+        { kind: 'journey', pool: destination.kind === 'journey' ? destination.pool : undefined },
+        destination,
+      ),
+      true,
+    );
+    assert.equal(acknowledgementFailureStillVisible({ kind: 'home' }, destination), false);
+    assert.equal(acknowledgementFailureStillVisible({ kind: 'home' }, { kind: 'home' }), true);
+    assert.match(ATTEMPT_ACK_FAILURE_MESSAGE, /next time the app opens/);
+  });
+
+  it('drops the parent abort listener when the child path-analytics signal ends', () => {
+    const external = new AbortController();
+    let removes = 0;
+    const original = external.signal.removeEventListener.bind(external.signal);
+    external.signal.removeEventListener = ((...args: Parameters<AbortSignal['removeEventListener']>) => {
+      removes += 1;
+      return original(...args);
+    }) as AbortSignal['removeEventListener'];
+    const child = forwardAbortSignal(external.signal);
+    assert.equal(child.signal.aborted, false);
+    child.abort();
+    assert.equal(removes, 1);
+    external.abort();
+    assert.equal(removes, 1);
+
+    const parent = new AbortController();
+    const linked = forwardAbortSignal(parent.signal);
+    parent.abort();
+    assert.equal(linked.signal.aborted, true);
   });
 
   it('does not reuse a cancelled journey analysis', async () => {

@@ -63,6 +63,7 @@ type AttemptResultScreenProps = {
   pathAnalyticsPending?: boolean;
   debugError?: string | null;
   pathAnalyticsError?: string | null;
+  pathAnalyticsUnavailable?: boolean;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
@@ -719,6 +720,7 @@ export function AttemptResultScreen({
   pathAnalyticsPending = false,
   debugError = null,
   pathAnalyticsError = null,
+  pathAnalyticsUnavailable = false,
   busy,
   error,
   doneLabel = 'DONE',
@@ -877,7 +879,7 @@ export function AttemptResultScreen({
                 </Pressable>
               ) : null}
             </View>
-          ) : journey?.pathUnavailable ? (
+          ) : pathAnalyticsUnavailable || journey?.pathUnavailable ? (
             <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
           ) : null}
         </View>
@@ -1132,9 +1134,9 @@ export function AttemptResultScreen({
           ) : null}
           <Pressable
             accessibilityRole="button"
-            disabled={busy}
+            accessibilityLabel={doneLabel}
             onPress={onDone}
-            style={[styles.button, styles.primaryButton, busy ? styles.disabledButton : null]}
+            style={[styles.button, styles.primaryButton]}
           >
             <Text style={styles.buttonText}>{doneLabel}</Text>
           </Pressable>

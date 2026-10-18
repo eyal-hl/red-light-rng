@@ -1,13 +1,22 @@
 import type { Attempt } from '../domain/attempt';
+import { sameJourneyPool, type JourneyPoolId } from '../domain/journey';
 import { JourneyFocusStoppedError } from '../domain/journey-analysis';
-import type { JourneyPoolId } from '../domain/journey';
 import type { AnalyzeJourneyResult, CombinedAttemptDebug } from './route-workspace';
 
 export const ATTEMPT_DEBUG_LOAD_ERROR = 'Could not load debug trace.';
 export const ATTEMPT_PATH_ANALYTICS_LOAD_ERROR = 'Could not load path analytics.';
+/**
+ * Deadline for one non-yielding async step (a SQLite read or a promise that
+ * never returns). Cooperative yields reset it. It is not a deadline for the
+ * whole cohort: synchronous projection cannot be cancelled by a timer, and a
+ * single deadline around every sample read made Retry throw that work away
+ * and miss the same limit again.
+ */
 export const PATH_ANALYTICS_BUDGET_MS = 8_000;
 export const PATH_ANALYTICS_BUDGET_MESSAGE = 'Path analytics took too long.';
 export const PATH_ANALYTICS_INTERRUPTED_MESSAGE = 'Path analytics was interrupted.';
+export const ATTEMPT_ACK_FAILURE_MESSAGE =
+  'Could not save that this result was closed. It will show again the next time the app opens.';
 
 export type AttemptResultLoadWorkspace = {
   inspectAttempt(attemptId: string): Promise<CombinedAttemptDebug | null>;
@@ -90,6 +99,99 @@ export function isCurrentSecondaryLoad(gate: ResultPresentationGate, loadToken: 
 
 export function invalidateResultPresentation(gate: ResultPresentationGate): ResultPresentationGate {
   return { requestId: gate.requestId + 1, loadToken: gate.loadToken + 1 };
+}
+
+export type ResultExitDestination =
+  | { kind: 'journey'; pool: JourneyPoolId }
+  | { kind: 'home' };
+
+export function resultExitDestination(attempt: Attempt): ResultExitDestination {
+  const pool = journeyPoolForAttempt(attempt);
+  if (!pool) {
+    return { kind: 'home' };
+  }
+  return { kind: 'journey', pool };
+}
+
+export type AcknowledgementLease = {
+  attemptId: string;
+};
+
+/** One in-flight close per attempt. A repeated Done or system Back is a no-op. */
+export function claimAcknowledgement(
+  lease: AcknowledgementLease | null,
+  attemptId: string,
+): { lease: AcknowledgementLease; claimed: boolean } {
+  if (lease?.attemptId === attemptId) {
+    return { lease, claimed: false };
+  }
+  return { lease: { attemptId }, claimed: true };
+}
+
+export function releaseAcknowledgement(
+  lease: AcknowledgementLease | null,
+  attemptId: string,
+): AcknowledgementLease | null {
+  if (lease?.attemptId !== attemptId) {
+    return lease;
+  }
+  return null;
+}
+
+export function acknowledgementFailureStillVisible(
+  screen: { kind: string; pool?: JourneyPoolId },
+  destination: ResultExitDestination,
+): boolean {
+  if (destination.kind === 'home') {
+    return screen.kind === 'home';
+  }
+  if (screen.kind !== 'journey' || !screen.pool) {
+    return false;
+  }
+  return sameJourneyPool(screen.pool, destination.pool);
+}
+
+export type SettledPathAnalyticsView = 'cancelled' | 'error' | 'skipped' | 'unavailable' | 'ready';
+
+export function settledPathAnalyticsView(update: {
+  pathAnalytics: { focus: { pathUnavailable: boolean } | null } | null;
+  pathAnalyticsError: string | null;
+  skipped: boolean;
+  cancelled: boolean;
+}): SettledPathAnalyticsView {
+  if (update.cancelled) {
+    return 'cancelled';
+  }
+  if (update.pathAnalyticsError) {
+    return 'error';
+  }
+  if (update.skipped) {
+    return 'skipped';
+  }
+  if (update.pathAnalytics == null || update.pathAnalytics.focus == null || update.pathAnalytics.focus.pathUnavailable) {
+    return 'unavailable';
+  }
+  return 'ready';
+}
+
+/** Abort `external` into a child controller, and drop the parent listener when the child ends. */
+export function forwardAbortSignal(external?: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (!external) {
+    return controller;
+  }
+  if (external.aborted) {
+    controller.abort();
+    return controller;
+  }
+  const onExternalAbort = () => {
+    controller.abort();
+  };
+  external.addEventListener('abort', onExternalAbort);
+  controller.signal.addEventListener('abort', () => {
+    external.removeEventListener('abort', onExternalAbort);
+  });
+  return controller;
 }
 
 export type ResultOpen = {
@@ -237,16 +339,27 @@ export async function loadAttemptPathAnalytics(
   }
 
   const budgetMs = options?.pathAnalyticsBudgetMs ?? PATH_ANALYTICS_BUDGET_MS;
-  const timer = setTimeout(() => {
-    finish(
-      pathUpdate({
-        pathAnalytics: null,
-        pathAnalyticsError: PATH_ANALYTICS_BUDGET_MESSAGE,
-        skipped: false,
-        cancelled: false,
-      }),
-    );
-  }, budgetMs);
+  let budgetTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearBudget = () => {
+    if (budgetTimer != null) {
+      clearTimeout(budgetTimer);
+      budgetTimer = null;
+    }
+  };
+  const armBudget = () => {
+    clearBudget();
+    budgetTimer = setTimeout(() => {
+      finish(
+        pathUpdate({
+          pathAnalytics: null,
+          pathAnalyticsError: PATH_ANALYTICS_BUDGET_MESSAGE,
+          skipped: false,
+          cancelled: false,
+        }),
+      );
+    }, budgetMs);
+  };
+  armBudget();
 
   const onAbort = () => {
     finish(
@@ -260,9 +373,18 @@ export async function loadAttemptPathAnalytics(
   };
   signal?.addEventListener('abort', onAbort);
 
+  const yieldToIdle = options?.yieldToIdle
+    ? async () => {
+        await options.yieldToIdle?.();
+        if (delivered == null && !signal?.aborted) {
+          armBudget();
+        }
+      }
+    : undefined;
+
   void workspace
     .analyzeJourney(pool, attempt.id, {
-      yieldToIdle: options?.yieldToIdle,
+      yieldToIdle,
       shouldContinue: () => delivered == null && !signal?.aborted,
     })
     .then(
@@ -302,7 +424,7 @@ export async function loadAttemptPathAnalytics(
   try {
     return await settled;
   } finally {
-    clearTimeout(timer);
+    clearBudget();
     signal?.removeEventListener('abort', onAbort);
   }
 }
