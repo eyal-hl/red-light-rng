@@ -362,13 +362,12 @@ export type LayoutAttemptDerive = (
   samples: LocationSample[],
 ) => CurrentLayoutAttempt;
 
-export function analyzeRouteAttempts(
+export function analyzeRouteAttemptsFromDerived(
   course: TimingCourse,
   traces: AttemptTrace[],
-  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
+  derived: CurrentLayoutAttempt[],
 ): RouteAttemptAnalysis {
   const layoutIdentity = courseLayoutIdentity(course);
-  const derived = traces.map((trace) => derive(course, trace.attempt, trace.samples));
   const competitive = derived.filter((item) => item.eligible && item.officialTimeMs != null);
   const ranked = [...competitive].sort(compareCompetitive);
   const chronological = [...competitive].sort(compareChronological);
@@ -429,13 +428,22 @@ export function analyzeRouteAttempts(
   };
 }
 
-export function analyzeFocusAttempt(
+export function analyzeRouteAttempts(
+  course: TimingCourse,
+  traces: AttemptTrace[],
+  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
+): RouteAttemptAnalysis {
+  const derived = traces.map((trace) => derive(course, trace.attempt, trace.samples));
+  return analyzeRouteAttemptsFromDerived(course, traces, derived);
+}
+
+export function analyzeFocusAttemptFromDerived(
   course: TimingCourse,
   traces: AttemptTrace[],
   focusAttemptId: string,
-  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
+  derived: CurrentLayoutAttempt[],
 ): FocusAttemptAnalysis | null {
-  const routeAnalysis = analyzeRouteAttempts(course, traces, derive);
+  const routeAnalysis = analyzeRouteAttemptsFromDerived(course, traces, derived);
   const focus = routeAnalysis.derived.find((item) => item.attemptId === focusAttemptId);
   if (!focus) {
     return null;
@@ -509,6 +517,16 @@ export function analyzeFocusAttempt(
     segments,
     sumOfBestMs: routeAnalysis.summary.sumOfBestMs,
   };
+}
+
+export function analyzeFocusAttempt(
+  course: TimingCourse,
+  traces: AttemptTrace[],
+  focusAttemptId: string,
+  derive: LayoutAttemptDerive = deriveCurrentLayoutAttempt,
+): FocusAttemptAnalysis | null {
+  const derived = traces.map((trace) => derive(course, trace.attempt, trace.samples));
+  return analyzeFocusAttemptFromDerived(course, traces, focusAttemptId, derived);
 }
 
 function headlineDeltaVsPb(

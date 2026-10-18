@@ -8,12 +8,14 @@ import {
 } from './attempt';
 import {
   analyzeFocusAttempt,
+  analyzeFocusAttemptFromDerived,
   deriveAnchoredLayoutAttempt,
   timingCourseFromRoute,
   type CurrentLayoutAttempt,
   type FocusAttemptAnalysis,
   type HistoryRow,
 } from './attempt-analysis';
+import type { TimingCourse } from './attempt-timing';
 import type { LocationSample } from './location-sample';
 import { isMovementDisplayable, type MovementBreakdown } from './movement-analysis';
 import type { Place } from './place';
@@ -356,18 +358,160 @@ export function analyzeJourneyHeadline(
   return parts ? journeyHeadlineAnalysis(parts) : null;
 }
 
-export function analyzeJourneyFocus(
-  pool: JourneyPoolId,
-  origin: Place,
-  destination: Place,
-  traces: JourneyAttemptTrace[],
-  focusAttemptId: string,
-  routes: Route[],
-): JourneyFocusAnalysis | null {
-  const parts = journeyHeadlineParts(pool, origin, destination, traces, focusAttemptId);
-  if (!parts) {
+export class JourneyFocusStoppedError extends Error {
+  readonly reason: 'cancelled';
+
+  constructor() {
+    super('Path analytics was cancelled.');
+    this.name = 'JourneyFocusStoppedError';
+    this.reason = 'cancelled';
+  }
+}
+
+export type JourneyFocusProgress = {
+  yieldToIdle?: () => Promise<void>;
+  shouldContinue?: () => boolean;
+};
+
+type SameVariantSelection = {
+  focusRoute: Route | null;
+  focusCompatible: boolean;
+  sameVariantTraces: JourneyAttemptTrace[];
+};
+
+function routeForAttempt(attempt: Attempt, routes: Route[]): Route | null {
+  if (!attempt.routeId) {
     return null;
   }
+  return routes.find((route) => route.id === attempt.routeId) ?? null;
+}
+
+function matchesSameVariant(trace: JourneyAttemptTrace, route: Route): boolean {
+  const attempt = trace.attempt;
+  if (!isJourneyCompetitive(attempt) || attempt.routeId !== route.id) {
+    return false;
+  }
+  if (attempt.startedAtMs == null || attempt.finishedAtMs == null) {
+    return false;
+  }
+  return isCompatiblePathVariant(route, trace.samples, {
+    startedAtMs: attempt.startedAtMs,
+    finishedAtMs: attempt.finishedAtMs,
+  });
+}
+
+function selectSameVariantTraces(parts: JourneyHeadlineParts, routes: Route[]): SameVariantSelection {
+  const focusRoute = routeForAttempt(parts.focus, routes);
+  const focusCompatible =
+    focusRoute != null &&
+    parts.focus.startedAtMs != null &&
+    parts.focus.finishedAtMs != null &&
+    isCompatiblePathVariant(focusRoute, parts.focusTrace.samples, {
+      startedAtMs: parts.focus.startedAtMs,
+      finishedAtMs: parts.focus.finishedAtMs,
+    });
+  if (!focusCompatible || !focusRoute || !isJourneyCompetitive(parts.focus)) {
+    return { focusRoute, focusCompatible, sameVariantTraces: [] };
+  }
+  return {
+    focusRoute,
+    focusCompatible,
+    sameVariantTraces: parts.inPool.filter((trace) =>
+      trace.attempt.id === parts.focus.id ? true : matchesSameVariant(trace, focusRoute),
+    ),
+  };
+}
+
+async function selectSameVariantTracesResponsive(
+  parts: JourneyHeadlineParts,
+  routes: Route[],
+  options: JourneyFocusProgress,
+): Promise<SameVariantSelection> {
+  const focusRoute = routeForAttempt(parts.focus, routes);
+  const focusCompatible =
+    focusRoute != null &&
+    parts.focus.startedAtMs != null &&
+    parts.focus.finishedAtMs != null &&
+    isCompatiblePathVariant(focusRoute, parts.focusTrace.samples, {
+      startedAtMs: parts.focus.startedAtMs,
+      finishedAtMs: parts.focus.finishedAtMs,
+    });
+  if (!focusCompatible || !focusRoute || !isJourneyCompetitive(parts.focus)) {
+    return { focusRoute, focusCompatible, sameVariantTraces: [] };
+  }
+  const sameVariantTraces: JourneyAttemptTrace[] = [];
+  for (const trace of parts.inPool) {
+    if (options.shouldContinue && !options.shouldContinue()) {
+      throw new JourneyFocusStoppedError();
+    }
+    const sameAttempt = trace.attempt.id === parts.focus.id;
+    if (!sameAttempt && trace.attempt.routeId !== focusRoute.id) {
+      continue;
+    }
+    if (options.yieldToIdle) {
+      await options.yieldToIdle();
+    }
+    if (options.shouldContinue && !options.shouldContinue()) {
+      throw new JourneyFocusStoppedError();
+    }
+    if (sameAttempt || matchesSameVariant(trace, focusRoute)) {
+      sameVariantTraces.push(trace);
+    }
+  }
+  return { focusRoute, focusCompatible, sameVariantTraces };
+}
+
+function timingCourseForRoute(route: Route): TimingCourse {
+  return {
+    referencePath: route.referencePath,
+    startProgressMeters: route.startProgressMeters,
+    finishProgressMeters: route.finishProgressMeters,
+    startZone: route.startZone,
+    finishZone: route.finishZone,
+    checkpoints: route.checkpoints,
+  };
+}
+
+async function continueJourneyFocus(options: JourneyFocusProgress): Promise<void> {
+  if (options.shouldContinue && !options.shouldContinue()) {
+    throw new JourneyFocusStoppedError();
+  }
+  if (options.yieldToIdle) {
+    await options.yieldToIdle();
+  }
+  if (options.shouldContinue && !options.shouldContinue()) {
+    throw new JourneyFocusStoppedError();
+  }
+}
+
+async function pathAnalyticsForSelection(
+  focusId: string,
+  selection: SameVariantSelection,
+  options: JourneyFocusProgress,
+): Promise<FocusAttemptAnalysis | null> {
+  if (!selection.focusCompatible || !selection.focusRoute) {
+    return null;
+  }
+  const course = timingCourseForRoute(selection.focusRoute);
+  const derived: CurrentLayoutAttempt[] = [];
+  for (const trace of selection.sameVariantTraces) {
+    await continueJourneyFocus(options);
+    derived.push(deriveAnchoredLayoutAttempt(course, trace.attempt, trace.samples));
+  }
+  await continueJourneyFocus(options);
+  return analyzeFocusAttemptFromDerived(course, selection.sameVariantTraces, focusId, derived);
+}
+
+function composeJourneyFocus(
+  parts: JourneyHeadlineParts,
+  routes: Route[],
+  selection: SameVariantSelection,
+  prepared?: {
+    pathAnalytics: FocusAttemptAnalysis | null;
+    currentLayout: { route: Route; derived: CurrentLayoutAttempt } | null;
+    comparisonLayout: { route: Route; derived: CurrentLayoutAttempt } | null;
+  },
+): JourneyFocusAnalysis {
   const {
     inPool,
     focusTrace,
@@ -381,42 +525,12 @@ export function analyzeJourneyFocus(
     comparisonAttempt,
     deltaVsPbMs,
   } = parts;
-  const variantTraces = inPool.filter((trace) => {
-    if (!isJourneyCompetitive(trace.attempt) || !trace.attempt.routeId) {
-      return false;
-    }
-    const route = routes.find((item) => item.id === trace.attempt.routeId);
-    if (!route || !trace.attempt.startedAtMs || !trace.attempt.finishedAtMs) {
-      return false;
-    }
-    return isCompatiblePathVariant(route, trace.samples, {
-      startedAtMs: trace.attempt.startedAtMs,
-      finishedAtMs: trace.attempt.finishedAtMs,
-    });
-  });
-  const focusRoute = focus.routeId ? routes.find((route) => route.id === focus.routeId) ?? null : null;
-  const focusCompatible =
-    focusRoute != null &&
-    focus.startedAtMs != null &&
-    focus.finishedAtMs != null &&
-    isCompatiblePathVariant(focusRoute, focusTrace.samples, {
-      startedAtMs: focus.startedAtMs,
-      finishedAtMs: focus.finishedAtMs,
-    });
-  const sameVariantTraces = focusRoute
-    ? variantTraces.filter((trace) => trace.attempt.routeId === focusRoute.id)
-    : [];
-  const pathAnalytics =
-    focusCompatible && focusRoute
+  const { focusRoute, focusCompatible, sameVariantTraces } = selection;
+  const pathAnalytics = prepared
+    ? prepared.pathAnalytics
+    : focusCompatible && focusRoute
       ? analyzeFocusAttempt(
-          {
-            referencePath: focusRoute.referencePath,
-            startProgressMeters: focusRoute.startProgressMeters,
-            finishProgressMeters: focusRoute.finishProgressMeters,
-            startZone: focusRoute.startZone,
-            finishZone: focusRoute.finishZone,
-            checkpoints: focusRoute.checkpoints,
-          },
+          timingCourseForRoute(focusRoute),
           sameVariantTraces,
           focus.id,
           deriveAnchoredLayoutAttempt,
@@ -426,8 +540,12 @@ export function analyzeJourneyFocus(
   const comparisonTrace = comparisonAttempt
     ? (inPool.find((trace) => trace.attempt.id === comparisonAttempt.id) ?? null)
     : null;
-  const currentLayout = compatibleLayoutForTrace(focusTrace, routes);
-  const comparisonLayout = comparisonTrace ? compatibleLayoutForTrace(comparisonTrace, routes) : null;
+  const currentLayout = prepared ? prepared.currentLayout : compatibleLayoutForTrace(focusTrace, routes);
+  const comparisonLayout = prepared
+    ? prepared.comparisonLayout
+    : comparisonTrace
+      ? compatibleLayoutForTrace(comparisonTrace, routes)
+      : null;
   const currentMovement = displayableMovementOf(currentLayout?.derived ?? pathAnalytics?.focus ?? null);
   const referenceMovement = displayableMovementOf(comparisonLayout?.derived ?? null);
   const waitComparison = waitComparisonForHeadlineTarget({
@@ -463,6 +581,53 @@ export function analyzeJourneyFocus(
     pathAnalytics,
     pathUnavailable: isJourneyCompetitive(focus) && pathAnalytics == null,
   };
+}
+
+export function analyzeJourneyFocus(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+  focusAttemptId: string,
+  routes: Route[],
+): JourneyFocusAnalysis | null {
+  const parts = journeyHeadlineParts(pool, origin, destination, traces, focusAttemptId);
+  if (!parts) {
+    return null;
+  }
+  return composeJourneyFocus(parts, routes, selectSameVariantTraces(parts, routes));
+}
+
+export async function analyzeJourneyFocusResponsive(
+  pool: JourneyPoolId,
+  origin: Place,
+  destination: Place,
+  traces: JourneyAttemptTrace[],
+  focusAttemptId: string,
+  routes: Route[],
+  options: JourneyFocusProgress = {},
+): Promise<JourneyFocusAnalysis | null> {
+  if (options.shouldContinue && !options.shouldContinue()) {
+    throw new JourneyFocusStoppedError();
+  }
+  const parts = journeyHeadlineParts(pool, origin, destination, traces, focusAttemptId);
+  if (!parts) {
+    return null;
+  }
+  const selection = await selectSameVariantTracesResponsive(parts, routes, options);
+  const pathAnalytics = await pathAnalyticsForSelection(parts.focus.id, selection, options);
+  await continueJourneyFocus(options);
+  const comparisonTrace = parts.comparisonAttempt
+    ? (parts.inPool.find((trace) => trace.attempt.id === parts.comparisonAttempt?.id) ?? null)
+    : null;
+  const currentLayout = compatibleLayoutForTrace(parts.focusTrace, routes);
+  await continueJourneyFocus(options);
+  const comparisonLayout = comparisonTrace ? compatibleLayoutForTrace(comparisonTrace, routes) : null;
+  return composeJourneyFocus(parts, routes, selection, {
+    pathAnalytics,
+    currentLayout,
+    comparisonLayout,
+  });
 }
 
 function headlineComparisonAttempt(input: {

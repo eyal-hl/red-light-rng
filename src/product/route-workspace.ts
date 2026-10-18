@@ -40,8 +40,10 @@ import {
 import { inspectAttemptRecord, type AttemptDebugReport } from '../domain/attempt-debug';
 import {
   analyzeJourneyFocus,
+  analyzeJourneyFocusResponsive,
   analyzeJourneyHeadline,
   attemptInPool,
+  JourneyFocusStoppedError,
   hiddenIncompleteAttempts,
   incompleteAttempts,
   journeyHistoryRows,
@@ -750,7 +752,14 @@ export class RouteWorkspace {
     });
   }
 
-  async analyzeJourney(pool: JourneyPoolId, attemptId: string): Promise<AnalyzeJourneyResult | null> {
+  async analyzeJourney(
+    pool: JourneyPoolId,
+    attemptId: string,
+    options?: {
+      yieldToIdle?: () => Promise<void>;
+      shouldContinue?: () => boolean;
+    },
+  ): Promise<AnalyzeJourneyResult | null> {
     return timeNavigationLoad(this.navigationLoad, 'analyzeJourney', async () => {
       this.navigationLoad.counters.analyzeJourneyReads += 1;
       const origin = await this.places.getPlace(pool.originPlaceId);
@@ -780,11 +789,30 @@ export class RouteWorkspace {
         return { value: cached, cacheHit: true };
       }
       this.navigationLoad.counters.analyzeJourneyMisses += 1;
-      const traces = await this.tracesWithSamples(poolAttempts);
+      const traces: JourneyAttemptTrace[] = [];
+      for (const attempt of poolAttempts) {
+        if (options?.shouldContinue && !options.shouldContinue()) {
+          throw new JourneyFocusStoppedError();
+        }
+        if (options?.yieldToIdle) {
+          await options.yieldToIdle();
+        }
+        if (options?.shouldContinue && !options.shouldContinue()) {
+          throw new JourneyFocusStoppedError();
+        }
+        traces.push({
+          attempt,
+          samples: await this.listAttemptSamples(attempt.sessionId),
+        });
+      }
+      const responsive = options?.yieldToIdle != null || options?.shouldContinue != null;
+      const focus = responsive
+        ? await analyzeJourneyFocusResponsive(pool, origin, destination, traces, attemptId, routes, options)
+        : analyzeJourneyFocus(pool, origin, destination, traces, attemptId, routes);
       const result: AnalyzeJourneyResult = {
         summary: summarizeJourneyPool(pool, origin, destination, traces),
         history: journeyHistoryRows(pool, traces),
-        focus: analyzeJourneyFocus(pool, origin, destination, traces, attemptId, routes),
+        focus,
       };
       this.focusCache.set(key, result);
       return { value: result, cacheHit: false };

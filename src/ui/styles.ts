@@ -96,6 +96,13 @@ export const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 8,
   },
+  pathAnalyticsRetry: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    marginTop: 8,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+  },
   errorText: {
     color: '#f07178',
     fontSize: 14,

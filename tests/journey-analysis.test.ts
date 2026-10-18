@@ -3,11 +3,14 @@ import { describe, it } from 'node:test';
 
 import { EMPTY_ATTEMPT_LOCAL_START, isJourneyCompetitive, officialTimeMs, type Attempt } from '../src/domain/attempt';
 import {
+  JourneyFocusStoppedError,
   PATH_ANALYTICS_UNAVAILABLE_MESSAGE,
   analyzeJourneyFocus,
+  analyzeJourneyFocusResponsive,
   listJourneyPools,
   type JourneyAttemptTrace,
 } from '../src/domain/journey-analysis';
+import type { LocationSample } from '../src/domain/location-sample';
 import { deriveAnchoredLayoutAttempt } from '../src/domain/attempt-analysis';
 import { timingCourseFromRoute } from '../src/domain/attempt-analysis';
 import { makePlace, completeJourneySamples } from './helpers/places';
@@ -115,7 +118,7 @@ describe('journey identity and analysis', () => {
     assert.equal(isJourneyCompetitive(traces[1]!.attempt), true);
   });
 
-  it('re-anchors compatible path analytics to journey start/finish and marks unmatched paths unavailable', () => {
+  it('re-anchors compatible path analytics to journey start/finish and marks unmatched paths unavailable', async () => {
     const path = northPath({
       startLat: HOME.center.latitude,
       startLng: HOME.center.longitude,
@@ -208,5 +211,125 @@ describe('journey identity and analysis', () => {
     assert.equal(focusCompat.comparisonAttemptId, null);
     assert.equal(focusCompat.resultExplanation.availability, 'no_comparison_target');
     assert.equal(PATH_ANALYTICS_UNAVAILABLE_MESSAGE.includes('unavailable'), true);
+
+    const responsive = await analyzeJourneyFocusResponsive(
+      { originPlaceId: HOME.id, destinationPlaceId: WORK.id, transportationMode: 'scooter' },
+      HOME,
+      WORK,
+      traces,
+      compatible.id,
+      [route],
+      { yieldToIdle: async () => {} },
+    );
+    assert.deepEqual(responsive, focusCompat);
+  });
+
+  it('marks an unmatched focus unavailable without reading other routes', () => {
+    const route = makeRoute({
+      id: 'route-1',
+      referencePath: northPath({
+        startLat: HOME.center.latitude,
+        startLng: HOME.center.longitude,
+        points: 13,
+        stepMeters: 20,
+      }),
+    });
+    const focus = completedAttempt('focus', {
+      routeId: route.id,
+      startedAtMs: 2_000,
+      finishedAtMs: 12_000,
+    });
+    const traces: JourneyAttemptTrace[] = [
+      {
+        attempt: completedAttempt('other', {
+          routeId: 'route-other',
+          validity: 'unranked',
+          startedAtMs: 20_000,
+          finishedAtMs: 30_000,
+        }),
+        get samples(): LocationSample[] {
+          throw new Error('scanned other route');
+        },
+      },
+      { attempt: focus, samples: [] },
+    ];
+    const analysis = analyzeJourneyFocus(
+      { originPlaceId: HOME.id, destinationPlaceId: WORK.id, transportationMode: 'scooter' },
+      HOME,
+      WORK,
+      traces,
+      focus.id,
+      [route],
+    );
+    assert.ok(analysis);
+    assert.equal(analysis.pathUnavailable, true);
+    assert.equal(analysis.pathAnalytics, null);
+    assert.equal(analysis.officialTimeMs, officialTimeMs(focus));
+    assert.equal(analysis.rank, 1);
+  });
+
+  it('stops responsive path analytics after a yielded layout and before ghost assembly', async () => {
+    const path = northPath({
+      startLat: HOME.center.latitude,
+      startLng: HOME.center.longitude,
+      points: 13,
+      stepMeters: 20,
+    });
+    const route = makeRoute({
+      id: 'route-1',
+      referencePath: path,
+      startZone: { center: HOME.center, radiusMeters: 30 },
+      finishZone: { center: WORK.center, radiusMeters: 30 },
+    });
+    const samples = completeJourneySamples({
+      origin: HOME,
+      destination: WORK,
+      sessionId: 'compat',
+      speedMps: 4,
+    });
+    const focus = completedAttempt('focus', {
+      routeId: route.id,
+      startedAtMs: samples[0]!.recordedAtMs + 2_000,
+      finishedAtMs: samples[samples.length - 1]!.recordedAtMs,
+    });
+    let checks = 0;
+    await assert.rejects(
+      () =>
+        analyzeJourneyFocusResponsive(
+          { originPlaceId: HOME.id, destinationPlaceId: WORK.id, transportationMode: 'scooter' },
+          HOME,
+          WORK,
+          [{ attempt: focus, samples }],
+          focus.id,
+          [route],
+          {
+            yieldToIdle: async () => {},
+            shouldContinue: () => {
+              checks += 1;
+              return checks < 6;
+            },
+          },
+        ),
+      (error: unknown) => error instanceof JourneyFocusStoppedError && error.reason === 'cancelled',
+    );
+    assert.equal(checks, 6);
+  });
+
+  it('stops responsive path analytics when the caller cancels', async () => {
+    const route = makeRoute({ id: 'route-1' });
+    const focus = completedAttempt('focus', { routeId: route.id });
+    await assert.rejects(
+      () =>
+        analyzeJourneyFocusResponsive(
+          { originPlaceId: HOME.id, destinationPlaceId: WORK.id, transportationMode: 'scooter' },
+          HOME,
+          WORK,
+          [{ attempt: focus, samples: [] }],
+          focus.id,
+          [route],
+          { shouldContinue: () => false },
+        ),
+      (error: unknown) => error instanceof JourneyFocusStoppedError && error.reason === 'cancelled',
+    );
   });
 });
