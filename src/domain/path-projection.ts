@@ -129,6 +129,56 @@ function firstSegmentReaching(segments: IndexedSegment[], windowStart: number): 
   return lo;
 }
 
+function progressWindowBounds(options: {
+  centerProgressMeters: number;
+  forwardWindowMeters: number;
+  backwardWindowMeters: number;
+}): { windowStart: number; windowEnd: number } {
+  return {
+    windowStart: options.centerProgressMeters - options.backwardWindowMeters,
+    windowEnd: options.centerProgressMeters + options.forwardWindowMeters,
+  };
+}
+
+function segmentsInProgressWindow(
+  segments: IndexedSegment[],
+  windowStart: number,
+  windowEnd: number,
+): IndexedSegment[] {
+  const inWindow: IndexedSegment[] = [];
+  for (let index = firstSegmentReaching(segments, windowStart); index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment || segment.segmentStartProgressMeters > windowEnd) {
+      break;
+    }
+    inWindow.push(segment);
+  }
+  return inWindow;
+}
+
+export function referencePathSegmentCount(path: LatLng[]): number {
+  if (path.length <= 1) {
+    return 0;
+  }
+  return pathProgressIndex(path).segments.length;
+}
+
+/** Segments the near-progress projection actually scores, not the whole reference path. */
+export function progressWindowSegmentCount(
+  path: LatLng[],
+  options: {
+    centerProgressMeters: number;
+    forwardWindowMeters: number;
+    backwardWindowMeters: number;
+  },
+): number {
+  if (path.length <= 1) {
+    return 0;
+  }
+  const bounds = progressWindowBounds(options);
+  return segmentsInProgressWindow(pathProgressIndex(path).segments, bounds.windowStart, bounds.windowEnd).length;
+}
+
 function collectSegmentProjections(path: LatLng[], point: LatLng): SegmentProjection[] {
   return pathProgressIndex(path).segments.map((segment) => projectIndexedSegment(segment, point));
 }
@@ -217,17 +267,12 @@ export function projectOntoReferencePathNearProgress(
     return projectOntoReferencePath(path, point);
   }
 
-  const windowStart = options.centerProgressMeters - options.backwardWindowMeters;
-  const windowEnd = options.centerProgressMeters + options.forwardWindowMeters;
-  const segments = pathProgressIndex(path).segments;
-  const inWindow: SegmentProjection[] = [];
-  for (let index = firstSegmentReaching(segments, windowStart); index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!segment || segment.segmentStartProgressMeters > windowEnd) {
-      break;
-    }
-    inWindow.push(projectIndexedSegment(segment, point));
-  }
+  const bounds = progressWindowBounds(options);
+  const inWindow = segmentsInProgressWindow(
+    pathProgressIndex(path).segments,
+    bounds.windowStart,
+    bounds.windowEnd,
+  ).map((segment) => projectIndexedSegment(segment, point));
 
   return pickNearestProjection(inWindow, (candidate) => {
     const delta = candidate.progressMeters - options.centerProgressMeters;

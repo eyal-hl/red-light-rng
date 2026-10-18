@@ -78,11 +78,14 @@ export function journeyPoolForAttempt(attempt: Attempt): JourneyPoolId | null {
 
 export type ResultPresentationGate = {
   requestId: number;
+  /** Debug inspection and the deferred headline. Retry does not advance this. */
   loadToken: number;
+  /** Path analytics only. Retry advances this and leaves debug and headline current. */
+  pathToken: number;
 };
 
 export function nextResultRequest(gate: ResultPresentationGate): ResultPresentationGate {
-  return { requestId: gate.requestId + 1, loadToken: gate.loadToken };
+  return { requestId: gate.requestId + 1, loadToken: gate.loadToken, pathToken: gate.pathToken };
 }
 
 export function isCurrentResultRequest(gate: ResultPresentationGate, requestId: number): boolean {
@@ -90,15 +93,27 @@ export function isCurrentResultRequest(gate: ResultPresentationGate, requestId: 
 }
 
 export function nextSecondaryLoad(gate: ResultPresentationGate): ResultPresentationGate {
-  return { requestId: gate.requestId, loadToken: gate.loadToken + 1 };
+  return { requestId: gate.requestId, loadToken: gate.loadToken + 1, pathToken: gate.pathToken };
 }
 
 export function isCurrentSecondaryLoad(gate: ResultPresentationGate, loadToken: number): boolean {
   return gate.loadToken === loadToken;
 }
 
+export function nextPathAnalyticsLoad(gate: ResultPresentationGate): ResultPresentationGate {
+  return { requestId: gate.requestId, loadToken: gate.loadToken, pathToken: gate.pathToken + 1 };
+}
+
+export function isCurrentPathAnalyticsLoad(gate: ResultPresentationGate, pathToken: number): boolean {
+  return gate.pathToken === pathToken;
+}
+
 export function invalidateResultPresentation(gate: ResultPresentationGate): ResultPresentationGate {
-  return { requestId: gate.requestId + 1, loadToken: gate.loadToken + 1 };
+  return {
+    requestId: gate.requestId + 1,
+    loadToken: gate.loadToken + 1,
+    pathToken: gate.pathToken + 1,
+  };
 }
 
 export type ResultExitDestination =
@@ -149,6 +164,230 @@ export function acknowledgementFailureStillVisible(
     return false;
   }
   return sameJourneyPool(screen.pool, destination.pool);
+}
+
+export type ResultDismissal = {
+  generation: number;
+  attemptId: string | null;
+  /** Generation at which each attempt was closed. Later closes do not forget earlier ones. */
+  closedAt: Readonly<Record<string, number>>;
+};
+
+export type ResultSession = {
+  gate: ResultPresentationGate;
+  acknowledgement: AcknowledgementLease | null;
+  dismissal: ResultDismissal;
+};
+
+export function createResultSession(): ResultSession {
+  return {
+    gate: { requestId: 0, loadToken: 0, pathToken: 0 },
+    acknowledgement: null,
+    dismissal: { generation: 0, attemptId: null, closedAt: {} },
+  };
+}
+
+export type BegunResultPresentation = {
+  session: ResultSession;
+  requestId: number;
+};
+
+/** A new result request. In-flight debug, headline, and path loads stay current until their replacements start. */
+export function beginResultPresentation(session: ResultSession): BegunResultPresentation {
+  const gate = nextResultRequest(session.gate);
+  return { session: { ...session, gate }, requestId: gate.requestId };
+}
+
+export type StartedResultLoads = {
+  session: ResultSession;
+  loadToken: number;
+  pathToken: number;
+};
+
+export function startResultLoads(session: ResultSession): StartedResultLoads {
+  const gate = nextPathAnalyticsLoad(nextSecondaryLoad(session.gate));
+  return {
+    session: { ...session, gate },
+    loadToken: gate.loadToken,
+    pathToken: gate.pathToken,
+  };
+}
+
+export type OpenedResultSession = BegunResultPresentation & StartedResultLoads;
+
+/** Paint a result that was not aborted before its secondary loads started. */
+export function openResultSession(session: ResultSession): OpenedResultSession {
+  const begun = beginResultPresentation(session);
+  const started = startResultLoads(begun.session);
+  return {
+    session: started.session,
+    requestId: begun.requestId,
+    loadToken: started.loadToken,
+    pathToken: started.pathToken,
+  };
+}
+
+export type RetriedPathAnalytics = {
+  session: ResultSession;
+  pathToken: number;
+};
+
+/** Retry path analytics without dropping an in-flight debug read or headline. */
+export function retryPathAnalyticsSession(session: ResultSession): RetriedPathAnalytics {
+  const gate = nextPathAnalyticsLoad(session.gate);
+  return { session: { ...session, gate }, pathToken: gate.pathToken };
+}
+
+export type AttemptClose = {
+  session: ResultSession;
+  claimed: boolean;
+  generation: number;
+};
+
+/**
+ * One in-flight close. Leaving invalidates result presentation immediately.
+ * The dismissal generation stays after the write settles so a home refresh that
+ * started earlier cannot put the result back.
+ */
+export function beginAttemptClose(session: ResultSession, attemptId: string): AttemptClose {
+  const claim = claimAcknowledgement(session.acknowledgement, attemptId);
+  if (!claim.claimed) {
+    return {
+      session: { ...session, acknowledgement: claim.lease },
+      claimed: false,
+      generation: session.dismissal.generation,
+    };
+  }
+  const generation = session.dismissal.generation + 1;
+  const dismissal: ResultDismissal = {
+    generation,
+    attemptId,
+    closedAt: { ...session.dismissal.closedAt, [attemptId]: generation },
+  };
+  return {
+    claimed: true,
+    generation,
+    session: {
+      ...session,
+      acknowledgement: claim.lease,
+      dismissal,
+      gate: invalidateResultPresentation(session.gate),
+    },
+  };
+}
+
+/** Release the in-flight lease after the acknowledgement write succeeds or fails. */
+export function finishAttemptClose(session: ResultSession, attemptId: string, generation: number): ResultSession {
+  if (session.dismissal.generation !== generation || session.dismissal.attemptId !== attemptId) {
+    return session;
+  }
+  return {
+    ...session,
+    acknowledgement: releaseAcknowledgement(session.acknowledgement, attemptId),
+  };
+}
+
+export type ResultWorkCapture = {
+  requestId: number;
+  dismissalGeneration: number;
+};
+
+export function captureResultWork(session: ResultSession): ResultWorkCapture {
+  return {
+    requestId: session.gate.requestId,
+    dismissalGeneration: session.dismissal.generation,
+  };
+}
+
+function closedDuring(session: ResultSession, attemptId: string, seenGeneration: number): boolean {
+  const closedAt = session.dismissal.closedAt[attemptId];
+  return closedAt != null && closedAt > seenGeneration;
+}
+
+export function modeUpdateMayReopen(session: ResultSession, captured: ResultWorkCapture, attemptId: string): boolean {
+  if (session.gate.requestId !== captured.requestId) {
+    return false;
+  }
+  if (session.acknowledgement?.attemptId === attemptId) {
+    return false;
+  }
+  if (closedDuring(session, attemptId, captured.dismissalGeneration)) {
+    return false;
+  }
+  return true;
+}
+
+export type ResumeWatch = {
+  dismissalGeneration: number;
+  closingAttemptId: string | null;
+};
+
+export function captureResumeWatch(session: ResultSession): ResumeWatch {
+  return {
+    dismissalGeneration: session.dismissal.generation,
+    closingAttemptId: session.acknowledgement?.attemptId ?? null,
+  };
+}
+
+export function resumeMayReopenAttempt(session: ResultSession, seen: ResumeWatch, attemptId: string): boolean {
+  if (session.acknowledgement?.attemptId === attemptId) {
+    return false;
+  }
+  if (seen.closingAttemptId === attemptId) {
+    return false;
+  }
+  if (closedDuring(session, attemptId, seen.dismissalGeneration)) {
+    return false;
+  }
+  return true;
+}
+
+export type ResultSurfaceKind = 'attempt-result' | 'attempt-detail' | 'other';
+
+export function resultSurfaceKind(kind: string): ResultSurfaceKind {
+  if (kind === 'attempt-result' || kind === 'attempt-detail') {
+    return kind;
+  }
+  return 'other';
+}
+
+export function hideNavigationAfterDismiss(
+  session: ResultSession,
+  attemptId: string,
+  captured: ResultWorkCapture,
+  capturedSurface: ResultSurfaceKind,
+  currentSurface: ResultSurfaceKind,
+): 'home' | 'history' | 'stay' {
+  if (session.acknowledgement?.attemptId === attemptId) {
+    return 'stay';
+  }
+  if (closedDuring(session, attemptId, captured.dismissalGeneration)) {
+    return 'stay';
+  }
+  if (capturedSurface !== currentSurface) {
+    return 'stay';
+  }
+  if (currentSurface === 'attempt-detail') {
+    return 'history';
+  }
+  if (currentSurface === 'attempt-result') {
+    return 'home';
+  }
+  return 'stay';
+}
+
+export function restoreMayTouchAttempt(
+  session: ResultSession,
+  attemptId: string,
+  captured: ResultWorkCapture,
+): boolean {
+  if (session.acknowledgement?.attemptId === attemptId) {
+    return false;
+  }
+  if (closedDuring(session, attemptId, captured.dismissalGeneration)) {
+    return false;
+  }
+  return true;
 }
 
 export type SettledPathAnalyticsView = 'cancelled' | 'error' | 'skipped' | 'unavailable' | 'ready';

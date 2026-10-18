@@ -14,10 +14,24 @@ import {
   claimAcknowledgement,
   createAttemptResultShell,
   forwardAbortSignal,
+  beginAttemptClose,
+  beginResultPresentation,
+  captureResultWork,
+  captureResumeWatch,
+  createResultSession,
+  finishAttemptClose,
+  hideNavigationAfterDismiss,
   invalidateResultPresentation,
+  isCurrentPathAnalyticsLoad,
   isCurrentResultRequest,
   isCurrentSecondaryLoad,
   journeyPoolForAttempt,
+  modeUpdateMayReopen,
+  openResultSession,
+  restoreMayTouchAttempt,
+  resumeMayReopenAttempt,
+  retryPathAnalyticsSession,
+  startResultLoads,
   loadAttemptPathAnalytics,
   loadAttemptResultSecondary,
   nextResultRequest,
@@ -320,7 +334,7 @@ describe('attempt result secondary load', () => {
     assert.match(appRoot, /pathAnalyticsPending=\{pathAnalyticsPending\}/);
     assert.match(appRoot, /yieldToIdle: yieldToEventLoop/);
     assert.match(appRoot, /onRetryPathAnalytics=\{retryPathAnalytics\}/);
-    assert.match(showAttemptResult, /applyPathAnalyticsUpdate\(token, update\)/);
+    assert.match(showAttemptResult, /applyPathAnalyticsUpdate\(pathToken, update\)/);
     const acknowledge = appRoot.slice(
       appRoot.indexOf('const onAcknowledgeAttempt'),
       appRoot.indexOf('const leaveResultAfterHide'),
@@ -330,15 +344,23 @@ describe('attempt result secondary load', () => {
     assert.ok(acknowledge.indexOf("kind: 'journey'") >= 0);
     assert.ok(screenAt >= 0 && acknowledgeAt > screenAt);
     assert.doesNotMatch(acknowledge, /setBusy\(true\)/);
-    assert.match(acknowledge, /claimAcknowledgement/);
-    assert.match(acknowledge, /releaseAcknowledgement/);
+    assert.match(acknowledge, /beginAttemptClose/);
+    assert.match(acknowledge, /finishAttemptClose/);
     assert.match(acknowledge, /pathAnalyticsAbortRef\.current\?\.abort\(\)/);
     assert.match(acknowledge, /setDebugPending\(false\)/);
     assert.match(acknowledge, /ATTEMPT_ACK_FAILURE_MESSAGE/);
     const shellPaint = showAttemptResult.slice(0, showAttemptResult.indexOf('analyzeJourneyHeadline'));
     assert.match(shellPaint, /setScreen\(nextScreen\)/);
     assert.match(shellPaint, /open\.finish\(\)/);
-    assert.match(shellPaint, /nextSecondaryLoad/);
+    assert.match(shellPaint, /beginResultPresentation/);
+    assert.match(shellPaint, /startResultLoads/);
+    const retry = appRoot.slice(appRoot.indexOf('const retryPathAnalytics'), appRoot.indexOf('const leaveToHome'));
+    assert.match(retry, /retryPathAnalyticsSession/);
+    assert.doesNotMatch(retry, /nextSecondaryLoad/);
+    assert.match(appRoot, /modeUpdateMayReopen/);
+    assert.match(appRoot, /resumeMayReopenAttempt/);
+    assert.match(appRoot, /hideNavigationAfterDismiss/);
+    assert.match(appRoot, /restoreMayTouchAttempt/);
     assert.doesNotMatch(appRoot, /secondaryLoadTokenRef/);
     assert.match(showAttemptResult, /adoptSuccessor/);
     assert.match(showAttemptResult, /pathViewRef\.current === 'ready'/);
@@ -386,20 +408,25 @@ describe('attempt result secondary load', () => {
   });
 
   it('keeps an in-flight path load current until a replacement load starts', () => {
-    const initial = { requestId: 2, loadToken: 5 };
+    const initial = { requestId: 2, loadToken: 5, pathToken: 7 };
     const reopened = nextResultRequest(initial);
     assert.equal(reopened.loadToken, initial.loadToken);
+    assert.equal(reopened.pathToken, initial.pathToken);
     assert.equal(isCurrentResultRequest(reopened, initial.requestId), false);
     assert.equal(isCurrentSecondaryLoad(reopened, initial.loadToken), true);
+    assert.equal(isCurrentPathAnalyticsLoad(reopened, initial.pathToken), true);
 
     const replaced = nextSecondaryLoad(reopened);
     assert.equal(replaced.requestId, reopened.requestId);
+    assert.equal(replaced.pathToken, initial.pathToken);
     assert.equal(isCurrentSecondaryLoad(replaced, initial.loadToken), false);
+    assert.equal(isCurrentPathAnalyticsLoad(replaced, initial.pathToken), true);
     assert.equal(isCurrentResultRequest(replaced, reopened.requestId), true);
 
     const left = invalidateResultPresentation(reopened);
     assert.equal(isCurrentResultRequest(left, reopened.requestId), false);
     assert.equal(isCurrentSecondaryLoad(left, reopened.loadToken), false);
+    assert.equal(isCurrentPathAnalyticsLoad(left, reopened.pathToken), false);
   });
 
   it('keeps the budget result when a yielded analysis finishes late', async () => {
@@ -578,6 +605,102 @@ describe('attempt result secondary load', () => {
     assert.equal(acknowledgementFailureStillVisible({ kind: 'home' }, destination), false);
     assert.equal(acknowledgementFailureStillVisible({ kind: 'home' }, { kind: 'home' }), true);
     assert.match(ATTEMPT_ACK_FAILURE_MESSAGE, /next time the app opens/);
+  });
+
+  it('releases a close when acknowledgement succeeds or fails, and a repeated back does nothing', () => {
+    const attemptId = 'hw-close';
+    let session = openResultSession(createResultSession()).session;
+    const first = beginAttemptClose(session, attemptId);
+    assert.equal(first.claimed, true);
+    session = first.session;
+    const repeated = beginAttemptClose(session, attemptId);
+    assert.equal(repeated.claimed, false);
+    assert.equal(repeated.session.gate.requestId, session.gate.requestId);
+    assert.equal(repeated.session.acknowledgement?.attemptId, attemptId);
+
+    session = finishAttemptClose(session, attemptId, first.generation);
+    assert.equal(session.acknowledgement, null);
+    assert.equal(session.dismissal.attemptId, attemptId);
+    const afterSuccess = beginAttemptClose(session, attemptId);
+    assert.equal(afterSuccess.claimed, true);
+
+    session = finishAttemptClose(afterSuccess.session, attemptId, afterSuccess.generation);
+    const failed = beginAttemptClose(session, attemptId);
+    session = finishAttemptClose(failed.session, attemptId, failed.generation);
+    assert.equal(session.acknowledgement, null);
+    assert.equal(beginAttemptClose(session, attemptId).claimed, true);
+  });
+
+  it('does not reopen a result that Done left while mode, hide, restore, or resume were in flight', () => {
+    const attemptId = 'hw-race';
+    let session = openResultSession(createResultSession()).session;
+    const modeCaptured = captureResultWork(session);
+    const hideCaptured = captureResultWork(session);
+    const restoreCaptured = captureResultWork(session);
+    const resumeBeforeClose = captureResumeWatch(session);
+    assert.equal(modeUpdateMayReopen(session, modeCaptured, attemptId), true);
+    assert.equal(
+      hideNavigationAfterDismiss(session, attemptId, hideCaptured, 'attempt-result', 'attempt-result'),
+      'home',
+    );
+    assert.equal(restoreMayTouchAttempt(session, attemptId, restoreCaptured), true);
+
+    const close = beginAttemptClose(session, attemptId);
+    session = close.session;
+    const resumeDuringClose = captureResumeWatch(session);
+    assert.equal(modeUpdateMayReopen(session, modeCaptured, attemptId), false);
+    assert.equal(
+      hideNavigationAfterDismiss(session, attemptId, hideCaptured, 'attempt-result', 'attempt-result'),
+      'stay',
+    );
+    assert.equal(
+      hideNavigationAfterDismiss(session, attemptId, hideCaptured, 'attempt-detail', 'other'),
+      'stay',
+    );
+    assert.equal(restoreMayTouchAttempt(session, attemptId, restoreCaptured), false);
+    assert.equal(resumeMayReopenAttempt(session, resumeBeforeClose, attemptId), false);
+    assert.equal(resumeMayReopenAttempt(session, resumeDuringClose, attemptId), false);
+
+    session = finishAttemptClose(session, attemptId, close.generation);
+    assert.equal(session.acknowledgement, null);
+    assert.equal(modeUpdateMayReopen(session, modeCaptured, attemptId), false);
+    assert.equal(resumeMayReopenAttempt(session, resumeBeforeClose, attemptId), false);
+    assert.equal(resumeMayReopenAttempt(session, resumeDuringClose, attemptId), false);
+    assert.equal(
+      hideNavigationAfterDismiss(session, attemptId, hideCaptured, 'attempt-result', 'other'),
+      'stay',
+    );
+
+    const laterResume = captureResumeWatch(session);
+    assert.equal(resumeMayReopenAttempt(session, laterResume, attemptId), true);
+    const other = beginAttemptClose(session, 'hw-other');
+    session = finishAttemptClose(other.session, 'hw-other', other.generation);
+    assert.equal(resumeMayReopenAttempt(session, resumeBeforeClose, attemptId), false);
+    assert.equal(resumeMayReopenAttempt(session, resumeBeforeClose, 'hw-other'), false);
+    assert.equal(session.acknowledgement, null);
+    const reopened = openResultSession(session);
+    session = reopened.session;
+    const modeAfterReopen = captureResultWork(session);
+    assert.equal(modeUpdateMayReopen(session, modeAfterReopen, attemptId), true);
+    assert.equal(modeUpdateMayReopen(session, modeCaptured, attemptId), false);
+  });
+
+  it('keeps debug and headline current when path analytics is retried', () => {
+    const begun = beginResultPresentation(createResultSession());
+    assert.equal(isCurrentSecondaryLoad(begun.session.gate, begun.session.gate.loadToken), true);
+    const started = startResultLoads(begun.session);
+    const opened = openResultSession(createResultSession());
+    assert.equal(started.loadToken, opened.loadToken);
+    assert.equal(started.pathToken, opened.pathToken);
+    const retried = retryPathAnalyticsSession(opened.session);
+    assert.equal(retried.session.gate.requestId, opened.requestId);
+    assert.equal(retried.session.gate.loadToken, opened.loadToken);
+    assert.equal(isCurrentSecondaryLoad(retried.session.gate, opened.loadToken), true);
+    assert.equal(isCurrentPathAnalyticsLoad(retried.session.gate, opened.pathToken), false);
+    assert.equal(isCurrentPathAnalyticsLoad(retried.session.gate, retried.pathToken), true);
+    const left = beginAttemptClose(retried.session, 'hw-retry');
+    assert.equal(isCurrentSecondaryLoad(left.session.gate, opened.loadToken), false);
+    assert.equal(isCurrentPathAnalyticsLoad(left.session.gate, retried.pathToken), false);
   });
 
   it('drops the parent abort listener when the child path-analytics signal ends', () => {

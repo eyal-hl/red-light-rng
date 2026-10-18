@@ -36,28 +36,38 @@ import {
 import {
   acknowledgementFailureStillVisible,
   ATTEMPT_ACK_FAILURE_MESSAGE,
+  beginAttemptClose,
   beginResultOpen,
-  claimAcknowledgement,
+  beginResultPresentation,
+  captureResultWork,
+  captureResumeWatch,
   createAttemptResultShell,
+  createResultSession,
+  finishAttemptClose,
   forwardAbortSignal,
+  hideNavigationAfterDismiss,
   invalidateResultPresentation,
+  isCurrentPathAnalyticsLoad,
   isCurrentResultRequest,
   isCurrentSecondaryLoad,
   journeyPoolForAttempt,
   loadAttemptPathAnalytics,
   loadAttemptResultSecondary,
-  nextResultRequest,
-  nextSecondaryLoad,
+  modeUpdateMayReopen,
   PATH_ANALYTICS_INTERRUPTED_MESSAGE,
-  releaseAcknowledgement,
+  restoreMayTouchAttempt,
   resultExitDestination,
+  resultSurfaceKind,
+  resumeMayReopenAttempt,
+  retryPathAnalyticsSession,
+  startResultLoads,
   settledPathAnalyticsView,
   successorResultOpen,
-  type AcknowledgementLease,
+  type ResultSession,
+  type ResultWorkCapture,
   type SettledPathAnalyticsView,
   type AttemptResultSecondaryUpdate,
   type ResultOpen,
-  type ResultPresentationGate,
 } from '../product/attempt-result-load';
 import { yieldToEventLoop } from '../product/idle-yield';
 import {
@@ -181,11 +191,11 @@ export function AppRoot({ workspace }: AppRootProps) {
   const startupTokenRef = useRef(0);
   const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
   const journeyLoadTokenRef = useRef(0);
-  const presentationGateRef = useRef<ResultPresentationGate>({ requestId: 0, loadToken: 0 });
+  const resultSessionRef = useRef<ResultSession>(createResultSession());
   const resultOpenRef = useRef<ResultOpen | null>(null);
   const pathAnalyticsAbortRef = useRef<AbortController | null>(null);
   const routeDetailTokenRef = useRef(0);
-  const acknowledgementRef = useRef<AcknowledgementLease | null>(null);
+  const attemptResultRef = useRef<Attempt | null>(null);
   const headlineFocusRef = useRef<JourneyFocusAnalysis | null>(null);
   const pathViewRef = useRef<SettledPathAnalyticsView | null>(null);
   const screenRef = useRef<AppScreen>({ kind: 'loading' });
@@ -252,8 +262,8 @@ export function AppRoot({ workspace }: AppRootProps) {
     [commitJourneyLoad],
   );
 
-  const applyPathAnalyticsUpdate = useCallback((token: number, update: Extract<AttemptResultSecondaryUpdate, { kind: 'pathAnalytics' }>) => {
-    if (!isCurrentSecondaryLoad(presentationGateRef.current, token)) {
+  const applyPathAnalyticsUpdate = useCallback((pathToken: number, update: Extract<AttemptResultSecondaryUpdate, { kind: 'pathAnalytics' }>) => {
+    if (!isCurrentPathAnalyticsLoad(resultSessionRef.current.gate, pathToken)) {
       return;
     }
     const view = settledPathAnalyticsView(update);
@@ -332,6 +342,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      attemptResultRef.current = null;
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -340,12 +351,12 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const showAttemptResult = useCallback(
     async (attempt: Attempt, signal?: AbortSignal, nextScreen: AppScreen = { kind: 'attempt-result' }) => {
-      const requested = nextResultRequest(presentationGateRef.current);
-      presentationGateRef.current = requested;
-      const requestId = requested.requestId;
+      const begun = beginResultPresentation(resultSessionRef.current);
+      resultSessionRef.current = begun.session;
+      const requestId = begun.requestId;
       const open = beginResultOpen(requestId);
       resultOpenRef.current = open;
-      const stale = () => signal?.aborted || !isCurrentResultRequest(presentationGateRef.current, requestId);
+      const stale = () => signal?.aborted || !isCurrentResultRequest(resultSessionRef.current.gate, requestId);
       const adoptSuccessor = async () => {
         const successor = successorResultOpen(resultOpenRef.current, requestId);
         if (!successor) {
@@ -364,9 +375,10 @@ export function AppRoot({ workspace }: AppRootProps) {
         await adoptSuccessor();
         return;
       }
-      const started = nextSecondaryLoad(presentationGateRef.current);
-      presentationGateRef.current = started;
-      const token = started.loadToken;
+      const started = startResultLoads(resultSessionRef.current);
+      resultSessionRef.current = started.session;
+      const loadToken = started.loadToken;
+      const pathToken = started.pathToken;
       const shell = createAttemptResultShell(attempt);
       const loadController = beginPathAnalyticsSignal(pathAnalyticsAbortRef.current, signal);
       pathAnalyticsAbortRef.current = loadController;
@@ -376,6 +388,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
       setSelectedRoute(null);
+      attemptResultRef.current = attempt;
       setAttemptResult(attempt);
       setJourneyFocus(null);
       setAttemptDebug(shell.debug);
@@ -384,21 +397,22 @@ export function AppRoot({ workspace }: AppRootProps) {
       setPathAnalyticsUnavailable(false);
       setDebugError(null);
       setPathAnalyticsError(null);
+      screenRef.current = nextScreen;
       setScreen(nextScreen);
       void loadAttemptResultSecondary(
         workspace,
         attempt,
         (update) => {
-          if (!isCurrentSecondaryLoad(presentationGateRef.current, token)) {
-            return;
-          }
           if (update.kind === 'debug') {
+            if (!isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
+              return;
+            }
             setAttemptDebug(update.debug);
             setDebugError(update.debugError);
             setDebugPending(false);
             return;
           }
-          applyPathAnalyticsUpdate(token, update);
+          applyPathAnalyticsUpdate(pathToken, update);
         },
         {
           signal: loadController.signal,
@@ -409,7 +423,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       void (async () => {
         try {
           const route = await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId));
-          if (stale() || !isCurrentSecondaryLoad(presentationGateRef.current, token)) {
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
             return;
           }
           setSelectedRoute(route);
@@ -418,7 +432,7 @@ export function AppRoot({ workspace }: AppRootProps) {
             return;
           }
           const headline = await workspace.analyzeJourneyHeadline(pool, attempt.id);
-          if (stale() || !isCurrentSecondaryLoad(presentationGateRef.current, token)) {
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
             return;
           }
           if (pathViewRef.current === 'ready' || !headline?.focus) {
@@ -436,7 +450,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           }
           setJourneyFocus(headline.focus);
         } catch (caught) {
-          if (stale() || !isCurrentSecondaryLoad(presentationGateRef.current, token)) {
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
             return;
           }
           setError(caught instanceof Error ? caught.message : 'Could not open this result.');
@@ -594,6 +608,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         return;
       }
       void (async () => {
+        const seenResume = captureResumeWatch(resultSessionRef.current);
         await workspace.recover();
         const snapshot = await refreshHome();
         if (snapshot.activeAttempt) {
@@ -601,7 +616,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         if (snapshot.attemptResult) {
-          await showAttemptResult(snapshot.attemptResult);
+          if (resumeMayReopenAttempt(resultSessionRef.current, seenResume, snapshot.attemptResult.id)) {
+            await showAttemptResult(snapshot.attemptResult);
+          }
           return;
         }
         if (snapshot.activeRecording) {
@@ -785,14 +802,14 @@ export function AppRoot({ workspace }: AppRootProps) {
     if (!attemptResult) {
       return;
     }
-    const claim = claimAcknowledgement(acknowledgementRef.current, attemptResult.id);
-    acknowledgementRef.current = claim.lease;
-    if (!claim.claimed) {
+    const close = beginAttemptClose(resultSessionRef.current, attemptResult.id);
+    resultSessionRef.current = close.session;
+    if (!close.claimed) {
       return;
     }
     const attempt = attemptResult;
+    const closeGeneration = close.generation;
     const destination = resultExitDestination(attempt);
-    presentationGateRef.current = invalidateResultPresentation(presentationGateRef.current);
     pathAnalyticsAbortRef.current?.abort();
     setAttemptResult(null);
     setJourneyFocus(null);
@@ -803,6 +820,7 @@ export function AppRoot({ workspace }: AppRootProps) {
     setDebugError(null);
     setPathAnalyticsError(null);
     setError(null);
+    attemptResultRef.current = null;
     const journeyToken =
       destination.kind === 'journey' ? beginJourneySnapshotLoad(journeyLoadTokenRef.current).token : null;
     if (destination.kind === 'journey' && journeyToken != null) {
@@ -829,10 +847,11 @@ export function AppRoot({ workspace }: AppRootProps) {
         await workspace.acknowledgeAttemptResult(attempt.id);
       } catch {
         ackFailed = true;
-        acknowledgementRef.current = releaseAcknowledgement(acknowledgementRef.current, attempt.id);
         if (acknowledgementFailureStillVisible(visibleScreen(), destination)) {
           setError(ATTEMPT_ACK_FAILURE_MESSAGE);
         }
+      } finally {
+        resultSessionRef.current = finishAttemptClose(resultSessionRef.current, attempt.id, closeGeneration);
       }
       try {
         if (destination.kind === 'journey' && journeyToken != null) {
@@ -846,6 +865,7 @@ export function AppRoot({ workspace }: AppRootProps) {
             activeJourneyPoolRef.current = null;
             setJourneySnapshotReady(false);
             await refreshHome();
+            screenRef.current = { kind: 'home' };
             setScreen({ kind: 'home' });
           }
           return;
@@ -862,10 +882,25 @@ export function AppRoot({ workspace }: AppRootProps) {
   }, [attemptResult, commitJourneyLoad, refreshHome, workspace]);
 
   const leaveResultAfterHide = useCallback(
-    async (attempt: Attempt) => {
-      const stayOnHistory = screen.kind === 'attempt-detail' && 'pool' in screen;
-      const pool = stayOnHistory && screen.kind === 'attempt-detail' ? screen.pool : null;
-      if (attemptResult?.id === attempt.id) {
+    async (
+      attempt: Attempt,
+      captured: ResultWorkCapture,
+      capturedSurface: ReturnType<typeof resultSurfaceKind>,
+      historyPool: JourneyPoolId | null,
+    ) => {
+      await refreshHome();
+      const navigation = hideNavigationAfterDismiss(
+        resultSessionRef.current,
+        attempt.id,
+        captured,
+        capturedSurface,
+        resultSurfaceKind(screenRef.current.kind),
+      );
+      if (navigation === 'stay') {
+        return;
+      }
+      if (attemptResultRef.current?.id === attempt.id) {
+        attemptResultRef.current = null;
         setAttemptResult(null);
         setJourneyFocus(null);
         setAttemptDebug(null);
@@ -874,24 +909,32 @@ export function AppRoot({ workspace }: AppRootProps) {
         setPathAnalyticsUnavailable(false);
         setDebugError(null);
         setPathAnalyticsError(null);
-        presentationGateRef.current = invalidateResultPresentation(presentationGateRef.current);
+        resultSessionRef.current = {
+          ...resultSessionRef.current,
+          gate: invalidateResultPresentation(resultSessionRef.current.gate),
+        };
         pathAnalyticsAbortRef.current?.abort();
       }
-      await refreshHome();
-      if (pool) {
-        setScreen({ kind: 'history', pool });
-        await loadJourney(pool);
+      if (navigation === 'history' && historyPool) {
+        const next = { kind: 'history' as const, pool: historyPool };
+        screenRef.current = next;
+        setScreen(next);
+        await loadJourney(historyPool);
         return;
       }
-      if (screen.kind === 'attempt-result' || screen.kind === 'attempt-detail') {
+      if (navigation === 'home') {
+        screenRef.current = { kind: 'home' };
         setScreen({ kind: 'home' });
       }
     },
-    [attemptResult, loadJourney, refreshHome, screen],
+    [loadJourney, refreshHome],
   );
 
   const performHideIncomplete = useCallback(
     async (attemptId: string) => {
+      const captured = captureResultWork(resultSessionRef.current);
+      const capturedSurface = resultSurfaceKind(screenRef.current.kind);
+      const historyPool = screenRef.current.kind === 'attempt-detail' ? screenRef.current.pool : null;
       setBusy(true);
       setError(null);
       try {
@@ -900,7 +943,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError(result.reason);
           return;
         }
-        await leaveResultAfterHide(result.attempt);
+        await leaveResultAfterHide(result.attempt, captured, capturedSurface, historyPool);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not hide this incomplete attempt.');
       } finally {
@@ -927,6 +970,7 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const performRestoreIncomplete = useCallback(
     async (attemptId: string) => {
+      const captured = captureResultWork(resultSessionRef.current);
       setBusy(true);
       setError(null);
       try {
@@ -935,7 +979,13 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError(result.reason);
           return;
         }
-        if (attemptResult?.id === attemptId) {
+        const surface = resultSurfaceKind(screenRef.current.kind);
+        if (
+          restoreMayTouchAttempt(resultSessionRef.current, attemptId, captured) &&
+          attemptResultRef.current?.id === attemptId &&
+          (surface === 'attempt-result' || surface === 'attempt-detail')
+        ) {
+          attemptResultRef.current = result.attempt;
           setAttemptResult(result.attempt);
         }
         await refreshHome();
@@ -945,7 +995,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setBusy(false);
       }
     },
-    [attemptResult, refreshHome, workspace],
+    [refreshHome, workspace],
   );
 
   const onChangeResultMode = useCallback(
@@ -953,35 +1003,42 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!attemptResult) {
         return;
       }
-      const stayOnDetail = screen.kind === 'attempt-detail';
+      const attemptId = attemptResult.id;
+      const captured = captureResultWork(resultSessionRef.current);
+      const stayOnDetail = screenRef.current.kind === 'attempt-detail';
       setBusy(true);
       setError(null);
       try {
-        const updated = await workspace.setAttemptTransportationMode(attemptResult.id, mode);
-        if (updated) {
-          await showAttemptResult(
-            updated,
-            undefined,
-            stayOnDetail && updated.originPlaceId && updated.destinationPlaceId
-              ? {
-                  kind: 'attempt-detail',
-                  pool: {
-                    originPlaceId: updated.originPlaceId,
-                    destinationPlaceId: updated.destinationPlaceId,
-                    transportationMode: updated.transportationMode,
-                  },
-                  attemptId: updated.id,
-                }
-              : { kind: 'attempt-result' },
-          );
+        const updated = await workspace.setAttemptTransportationMode(attemptId, mode);
+        if (!updated || !modeUpdateMayReopen(resultSessionRef.current, captured, attemptId)) {
+          return;
         }
+        const surface = resultSurfaceKind(screenRef.current.kind);
+        if (surface !== 'attempt-result' && surface !== 'attempt-detail') {
+          return;
+        }
+        await showAttemptResult(
+          updated,
+          undefined,
+          stayOnDetail && updated.originPlaceId && updated.destinationPlaceId
+            ? {
+                kind: 'attempt-detail',
+                pool: {
+                  originPlaceId: updated.originPlaceId,
+                  destinationPlaceId: updated.destinationPlaceId,
+                  transportationMode: updated.transportationMode,
+                },
+                attemptId: updated.id,
+              }
+            : { kind: 'attempt-result' },
+        );
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not change transportation mode.');
       } finally {
         setBusy(false);
       }
     },
-    [attemptResult, screen.kind, showAttemptResult, workspace],
+    [attemptResult, showAttemptResult, workspace],
   );
 
   const retryPathAnalytics = useCallback(() => {
@@ -993,9 +1050,9 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
     const attempt = attemptResult;
     const retainedFocus = journeyFocus;
-    const started = nextSecondaryLoad(presentationGateRef.current);
-    presentationGateRef.current = started;
-    const token = started.loadToken;
+    const retried = retryPathAnalyticsSession(resultSessionRef.current);
+    resultSessionRef.current = retried.session;
+    const pathToken = retried.pathToken;
     const loadController = beginPathAnalyticsSignal(pathAnalyticsAbortRef.current);
     pathAnalyticsAbortRef.current = loadController;
     setPathAnalyticsPending(true);
@@ -1007,7 +1064,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       workspace,
       attempt,
       (update) => {
-        applyPathAnalyticsUpdate(token, update);
+        applyPathAnalyticsUpdate(pathToken, update);
       },
       {
         signal: loadController.signal,
@@ -1022,7 +1079,10 @@ export function AppRoot({ workspace }: AppRootProps) {
     journeyLoadTokenRef.current = abandoned.token;
     activeJourneyPoolRef.current = null;
     setJourneySnapshotReady(abandoned.snapshotReady);
-    presentationGateRef.current = invalidateResultPresentation(presentationGateRef.current);
+    resultSessionRef.current = {
+      ...resultSessionRef.current,
+      gate: invalidateResultPresentation(resultSessionRef.current.gate),
+    };
     pathAnalyticsAbortRef.current?.abort();
     setDebugPending(false);
     setPathAnalyticsPending(false);
@@ -1129,8 +1189,12 @@ export function AppRoot({ workspace }: AppRootProps) {
     if (screen.kind !== 'attempt-detail') {
       return;
     }
-    presentationGateRef.current = invalidateResultPresentation(presentationGateRef.current);
+    resultSessionRef.current = {
+      ...resultSessionRef.current,
+      gate: invalidateResultPresentation(resultSessionRef.current.gate),
+    };
     pathAnalyticsAbortRef.current?.abort();
+    attemptResultRef.current = null;
     setAttemptResult(null);
     setJourneyFocus(null);
     setAttemptDebug(null);
@@ -1140,7 +1204,9 @@ export function AppRoot({ workspace }: AppRootProps) {
     setDebugError(null);
     setPathAnalyticsError(null);
     const pool = screen.pool;
-    setScreen({ kind: 'history', pool });
+    const next = { kind: 'history' as const, pool };
+    screenRef.current = next;
+    setScreen(next);
     void loadJourney(pool);
   }, [loadJourney, screen]);
 
