@@ -6,6 +6,7 @@ import {
   MAX_EDITOR_SNAP_DISTANCE_METERS,
   pointAtProgress,
   projectOntoReferencePath,
+  projectOntoReferencePathNearProgress,
   snapEditorTap,
   TAP_TOO_FAR_REASON,
 } from '../src/domain/path-projection';
@@ -41,6 +42,36 @@ describe('path projection', () => {
     if (!result.ok) {
       assert.equal(result.reason, TAP_TOO_FAR_REASON);
     }
+  });
+
+  it('limits near-progress projection to the progress window on a long path', () => {
+    const path = northPath({ points: 500, stepMeters: 10 });
+    const onPath = pointAtProgress(path, 2500);
+    const nearby = projectOntoReferencePathNearProgress(path, onPath, {
+      centerProgressMeters: 2500,
+      forwardWindowMeters: 90,
+      backwardWindowMeters: 25,
+    });
+    assert.ok(nearby);
+    assert.ok(Math.abs(nearby.progressMeters - 2500) < 1);
+    assert.ok(nearby.snapDistanceMeters < 1);
+
+    const outsideWindow = projectOntoReferencePathNearProgress(path, onPath, {
+      centerProgressMeters: 0,
+      forwardWindowMeters: 90,
+      backwardWindowMeters: 25,
+    });
+    assert.ok(outsideWindow);
+    assert.ok(outsideWindow.progressMeters < 120);
+    assert.ok(outsideWindow.snapDistanceMeters > 1000);
+
+    const again = projectOntoReferencePathNearProgress(path, onPath, {
+      centerProgressMeters: 2500,
+      forwardWindowMeters: 90,
+      backwardWindowMeters: 25,
+    });
+    assert.equal(again?.progressMeters, nearby.progressMeters);
+    assert.equal(again?.snapDistanceMeters, nearby.snapDistanceMeters);
   });
 
   it('snaps a finish center past the last reference point onto the path end', () => {

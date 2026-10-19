@@ -63,10 +63,12 @@ type AttemptResultScreenProps = {
   pathAnalyticsPending?: boolean;
   debugError?: string | null;
   pathAnalyticsError?: string | null;
+  pathAnalyticsUnavailable?: boolean;
   busy: boolean;
   error: string | null;
   doneLabel?: string;
   onDone: () => void;
+  onRetryPathAnalytics?: () => void;
   onHideIncomplete?: () => void;
   onRestoreIncomplete?: () => void;
   onChangeMode?: (mode: TransportationMode) => void;
@@ -718,10 +720,12 @@ export function AttemptResultScreen({
   pathAnalyticsPending = false,
   debugError = null,
   pathAnalyticsError = null,
+  pathAnalyticsUnavailable = false,
   busy,
   error,
   doneLabel = 'DONE',
   onDone,
+  onRetryPathAnalytics,
   onHideIncomplete,
   onRestoreIncomplete,
   onChangeMode,
@@ -851,7 +855,7 @@ export function AttemptResultScreen({
           {journey?.rank != null ? (
             <Text style={styles.subtitle}>{formatRankAmong(journey.rank, journey.summary.rankedAttemptCount)}</Text>
           ) : null}
-          {journey && !pathAnalyticsPending ? (
+          {journey ? (
             <ResultExplanationBlock
               explanation={journey.resultExplanation}
               displayedComparisonLocations={displayedComparisonLocations}
@@ -862,12 +866,26 @@ export function AttemptResultScreen({
           {pathAnalyticsPending ? (
             <Text style={styles.mutedText}>Loading path analytics…</Text>
           ) : pathAnalyticsError ? (
-            <Text style={styles.errorText}>{pathAnalyticsError}</Text>
+            <View>
+              <Text style={styles.errorText}>{pathAnalyticsError}</Text>
+              {onRetryPathAnalytics ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry path analytics"
+                  onPress={onRetryPathAnalytics}
+                  style={[styles.button, styles.secondaryButton, styles.pathAnalyticsRetry]}
+                >
+                  <Text style={styles.buttonText}>RETRY</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : pathAnalyticsUnavailable || journey?.pathUnavailable ? (
+            <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
           ) : null}
         </View>
       ) : null}
 
-      {route || debug?.place.recordedPath.length || debugPending || pathAnalyticsPending ? (
+      {route || debug?.place.recordedPath.length || debugPending ? (
         <View style={styles.attemptMapPane} collapsable={false}>
           {route || debug?.place.recordedPath.length ? (
             <DeferredMapSlot style={styles.attemptMap} label="Loading map…">
@@ -998,10 +1016,6 @@ export function AttemptResultScreen({
             onSelectLocation={selectComparison}
           />
         ) : null}
-        {journey?.pathUnavailable && !pathAnalyticsPending ? (
-          <Text style={styles.warningText}>{PATH_ANALYTICS_UNAVAILABLE_MESSAGE}</Text>
-        ) : null}
-
         {onChangeMode ? (
           <View>
             <Text style={styles.sectionLabel}>TRANSPORTATION MODE</Text>
@@ -1120,9 +1134,9 @@ export function AttemptResultScreen({
           ) : null}
           <Pressable
             accessibilityRole="button"
-            disabled={busy}
+            accessibilityLabel={doneLabel}
             onPress={onDone}
-            style={[styles.button, styles.primaryButton, busy ? styles.disabledButton : null]}
+            style={[styles.button, styles.primaryButton]}
           >
             <Text style={styles.buttonText}>{doneLabel}</Text>
           </Pressable>

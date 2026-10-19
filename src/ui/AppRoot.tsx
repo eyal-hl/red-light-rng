@@ -34,10 +34,42 @@ import {
   type AppStartupStage,
 } from '../product/app-startup';
 import {
+  acknowledgementFailureStillVisible,
+  ATTEMPT_ACK_FAILURE_MESSAGE,
+  beginAttemptClose,
+  beginResultOpen,
+  beginResultPresentation,
+  captureResultWork,
+  captureResumeWatch,
   createAttemptResultShell,
+  createResultSession,
+  finishAttemptClose,
+  forwardAbortSignal,
+  hideNavigationAfterDismiss,
+  invalidateResultPresentation,
+  isCurrentPathAnalyticsLoad,
+  isCurrentResultRequest,
+  isCurrentSecondaryLoad,
   journeyPoolForAttempt,
+  loadAttemptPathAnalytics,
   loadAttemptResultSecondary,
+  modeUpdateMayReopen,
+  PATH_ANALYTICS_INTERRUPTED_MESSAGE,
+  restoreMayTouchAttempt,
+  resultExitDestination,
+  resultSurfaceKind,
+  resumeMayReopenAttempt,
+  retryPathAnalyticsSession,
+  startResultLoads,
+  settledPathAnalyticsView,
+  successorResultOpen,
+  type ResultSession,
+  type ResultWorkCapture,
+  type SettledPathAnalyticsView,
+  type AttemptResultSecondaryUpdate,
+  type ResultOpen,
 } from '../product/attempt-result-load';
+import { yieldToEventLoop } from '../product/idle-yield';
 import {
   beginJourneySnapshotLoad,
   canOpenJourneyHistory,
@@ -62,6 +94,14 @@ import { styles } from './styles';
 import { resolveAttemptDisplayRoute } from './attempt-display-route';
 import { handleSystemBack, type AppScreenKind } from './system-back';
 
+function beginPathAnalyticsSignal(
+  current: AbortController | null,
+  external?: AbortSignal,
+): AbortController {
+  current?.abort();
+  return forwardAbortSignal(external);
+}
+
 const LOCATING_ZONE: PlaceStartZoneStatus = {
   status: 'locating',
   placeId: null,
@@ -84,7 +124,7 @@ type AppRootProps = {
   workspace: RouteWorkspace;
 };
 
-function JourneyLoadingShell({ onBack }: { onBack: () => void }) {
+function JourneyLoadingShell({ onBack, error }: { onBack: () => void; error?: string | null }) {
   return (
     <View style={styles.content}>
       <Pressable accessibilityRole="button" onPress={onBack}>
@@ -92,6 +132,7 @@ function JourneyLoadingShell({ onBack }: { onBack: () => void }) {
       </Pressable>
       <Text style={styles.title}>Loading journey…</Text>
       <Text style={styles.mutedText}>Official time and PB load from saved attempts first.</Text>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </View>
   );
 }
@@ -145,12 +186,22 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [pathAnalyticsPending, setPathAnalyticsPending] = useState(false);
   const [debugError, setDebugError] = useState<string | null>(null);
   const [pathAnalyticsError, setPathAnalyticsError] = useState<string | null>(null);
+  const [pathAnalyticsUnavailable, setPathAnalyticsUnavailable] = useState(false);
   const [journeySnapshotReady, setJourneySnapshotReady] = useState(false);
   const startupTokenRef = useRef(0);
   const activeJourneyPoolRef = useRef<JourneyPoolId | null>(null);
   const journeyLoadTokenRef = useRef(0);
-  const secondaryLoadTokenRef = useRef(0);
+  const resultSessionRef = useRef<ResultSession>(createResultSession());
+  const resultOpenRef = useRef<ResultOpen | null>(null);
+  const pathAnalyticsAbortRef = useRef<AbortController | null>(null);
   const routeDetailTokenRef = useRef(0);
+  const attemptResultRef = useRef<Attempt | null>(null);
+  const headlineFocusRef = useRef<JourneyFocusAnalysis | null>(null);
+  const pathViewRef = useRef<SettledPathAnalyticsView | null>(null);
+  const screenRef = useRef<AppScreen>({ kind: 'loading' });
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
 
   const applyLoadedJourney = useCallback((pool: JourneyPoolId, loaded: LoadedJourney) => {
     const active = activeJourneyPoolRef.current;
@@ -180,15 +231,11 @@ export function AppRoot({ workspace }: AppRootProps) {
     return snapshot;
   }, [workspace]);
 
-  const loadJourney = useCallback(
-    async (pool: JourneyPoolId) => {
-      const began = beginJourneySnapshotLoad(journeyLoadTokenRef.current);
-      journeyLoadTokenRef.current = began.token;
-      activeJourneyPoolRef.current = pool;
-      setJourneySnapshotReady(began.snapshotReady);
+  const commitJourneyLoad = useCallback(
+    async (pool: JourneyPoolId, token: number) => {
       const loaded = await workspace.loadJourney(pool);
       const outcome = finishJourneySnapshotLoad(
-        began.token,
+        token,
         journeyLoadTokenRef.current,
         activeJourneyPoolRef.current,
         pool,
@@ -203,6 +250,66 @@ export function AppRoot({ workspace }: AppRootProps) {
     },
     [applyLoadedJourney, workspace],
   );
+
+  const loadJourney = useCallback(
+    async (pool: JourneyPoolId) => {
+      const began = beginJourneySnapshotLoad(journeyLoadTokenRef.current);
+      journeyLoadTokenRef.current = began.token;
+      activeJourneyPoolRef.current = pool;
+      setJourneySnapshotReady(began.snapshotReady);
+      return commitJourneyLoad(pool, began.token);
+    },
+    [commitJourneyLoad],
+  );
+
+  const applyPathAnalyticsUpdate = useCallback((pathToken: number, update: Extract<AttemptResultSecondaryUpdate, { kind: 'pathAnalytics' }>) => {
+    if (!isCurrentPathAnalyticsLoad(resultSessionRef.current.gate, pathToken)) {
+      return;
+    }
+    const view = settledPathAnalyticsView(update);
+    if (view === 'cancelled') {
+      setPathAnalyticsPending(false);
+      setPathAnalyticsError(PATH_ANALYTICS_INTERRUPTED_MESSAGE);
+      return;
+    }
+    if (view === 'error') {
+      setPathAnalyticsPending(false);
+      setPathAnalyticsUnavailable(false);
+      setPathAnalyticsError(update.pathAnalyticsError);
+      return;
+    }
+    if (view === 'skipped') {
+      setPathAnalyticsPending(false);
+      setPathAnalyticsUnavailable(false);
+      setPathAnalyticsError(null);
+      return;
+    }
+    if (view === 'unavailable') {
+      pathViewRef.current = 'unavailable';
+      setPathAnalyticsPending(false);
+      setPathAnalyticsError(null);
+      setPathAnalyticsUnavailable(true);
+      if (update.pathAnalytics?.focus) {
+        headlineFocusRef.current = update.pathAnalytics.focus;
+        setJourneyFocus(update.pathAnalytics.focus);
+        return;
+      }
+      const base = headlineFocusRef.current;
+      if (base) {
+        const unavailable = { ...base, pathAnalytics: null, pathUnavailable: true as const };
+        headlineFocusRef.current = unavailable;
+        setJourneyFocus(unavailable);
+      }
+      return;
+    }
+    pathViewRef.current = 'ready';
+    setPathAnalyticsPending(false);
+    setPathAnalyticsError(null);
+    setPathAnalyticsUnavailable(false);
+    if (update.pathAnalytics?.focus) {
+      setJourneyFocus(update.pathAnalytics.focus);
+    }
+  }, []);
 
   const openReview = useCallback(
     async (sessionId: string, signal?: AbortSignal) => {
@@ -235,6 +342,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      attemptResultRef.current = null;
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
     },
@@ -243,51 +351,113 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const showAttemptResult = useCallback(
     async (attempt: Attempt, signal?: AbortSignal, nextScreen: AppScreen = { kind: 'attempt-result' }) => {
-      const token = secondaryLoadTokenRef.current + 1;
-      secondaryLoadTokenRef.current = token;
-      setSelectedRoute(await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId)));
-      if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
-        return;
-      }
-      const pool = journeyPoolForAttempt(attempt);
-      let focus: JourneyFocusAnalysis | null = null;
-      if (pool) {
-        const headline = await workspace.analyzeJourneyHeadline(pool, attempt.id);
-        if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
+      const begun = beginResultPresentation(resultSessionRef.current);
+      resultSessionRef.current = begun.session;
+      const requestId = begun.requestId;
+      const open = beginResultOpen(requestId);
+      resultOpenRef.current = open;
+      const stale = () => signal?.aborted || !isCurrentResultRequest(resultSessionRef.current.gate, requestId);
+      const adoptSuccessor = async () => {
+        const successor = successorResultOpen(resultOpenRef.current, requestId);
+        if (!successor) {
+          open.finish();
           return;
         }
-        focus = headline?.focus ?? null;
+        try {
+          await successor;
+          open.finish();
+        } catch (successorFailure) {
+          open.finish(successorFailure);
+          throw successorFailure;
+        }
+      };
+      if (stale()) {
+        await adoptSuccessor();
+        return;
       }
+      const started = startResultLoads(resultSessionRef.current);
+      resultSessionRef.current = started.session;
+      const loadToken = started.loadToken;
+      const pathToken = started.pathToken;
       const shell = createAttemptResultShell(attempt);
+      const loadController = beginPathAnalyticsSignal(pathAnalyticsAbortRef.current, signal);
+      pathAnalyticsAbortRef.current = loadController;
+      headlineFocusRef.current = null;
+      pathViewRef.current = null;
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      setSelectedRoute(null);
+      attemptResultRef.current = attempt;
       setAttemptResult(attempt);
-      setJourneyFocus(focus);
+      setJourneyFocus(null);
       setAttemptDebug(shell.debug);
       setDebugPending(shell.debugPending);
       setPathAnalyticsPending(shell.pathAnalyticsPending);
+      setPathAnalyticsUnavailable(false);
       setDebugError(null);
       setPathAnalyticsError(null);
+      screenRef.current = nextScreen;
       setScreen(nextScreen);
-      void loadAttemptResultSecondary(workspace, attempt, (update) => {
-        if (signal?.aborted || secondaryLoadTokenRef.current !== token) {
-          return;
+      void loadAttemptResultSecondary(
+        workspace,
+        attempt,
+        (update) => {
+          if (update.kind === 'debug') {
+            if (!isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
+              return;
+            }
+            setAttemptDebug(update.debug);
+            setDebugError(update.debugError);
+            setDebugPending(false);
+            return;
+          }
+          applyPathAnalyticsUpdate(pathToken, update);
+        },
+        {
+          signal: loadController.signal,
+          yieldToIdle: yieldToEventLoop,
+        },
+      );
+      open.finish();
+      void (async () => {
+        try {
+          const route = await resolveAttemptDisplayRoute(attempt, (routeId) => workspace.getRoute(routeId));
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
+            return;
+          }
+          setSelectedRoute(route);
+          const pool = journeyPoolForAttempt(attempt);
+          if (!pool) {
+            return;
+          }
+          const headline = await workspace.analyzeJourneyHeadline(pool, attempt.id);
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
+            return;
+          }
+          if (pathViewRef.current === 'ready' || !headline?.focus) {
+            return;
+          }
+          if (pathViewRef.current === 'unavailable' && headlineFocusRef.current?.pathUnavailable) {
+            return;
+          }
+          headlineFocusRef.current = headline.focus;
+          if (pathViewRef.current === 'unavailable') {
+            const unavailable = { ...headline.focus, pathAnalytics: null, pathUnavailable: true as const };
+            headlineFocusRef.current = unavailable;
+            setJourneyFocus(unavailable);
+            return;
+          }
+          setJourneyFocus(headline.focus);
+        } catch (caught) {
+          if (stale() || !isCurrentSecondaryLoad(resultSessionRef.current.gate, loadToken)) {
+            return;
+          }
+          setError(caught instanceof Error ? caught.message : 'Could not open this result.');
         }
-        if (update.kind === 'debug') {
-          setAttemptDebug(update.debug);
-          setDebugError(update.debugError);
-          setDebugPending(false);
-          return;
-        }
-        setPathAnalyticsPending(false);
-        setPathAnalyticsError(update.pathAnalyticsError);
-        if (!update.skipped) {
-          setJourneyFocus(update.pathAnalytics?.focus ?? focus);
-        }
-      });
+      })();
     },
-    [workspace],
+    [applyPathAnalyticsUpdate, workspace],
   );
 
   const applyStartupSnapshot = useCallback(
@@ -425,7 +595,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         await showAttemptResult(processed.attempt);
-      })();
+      })().catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : 'Could not open this result.');
+      });
     }, 1000);
     return () => clearInterval(interval);
   }, [screen.kind, showAttemptResult, workspace]);
@@ -436,6 +608,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         return;
       }
       void (async () => {
+        const seenResume = captureResumeWatch(resultSessionRef.current);
         await workspace.recover();
         const snapshot = await refreshHome();
         if (snapshot.activeAttempt) {
@@ -443,7 +616,9 @@ export function AppRoot({ workspace }: AppRootProps) {
           return;
         }
         if (snapshot.attemptResult) {
-          await showAttemptResult(snapshot.attemptResult);
+          if (resumeMayReopenAttempt(resultSessionRef.current, seenResume, snapshot.attemptResult.id)) {
+            await showAttemptResult(snapshot.attemptResult);
+          }
           return;
         }
         if (snapshot.activeRecording) {
@@ -454,7 +629,9 @@ export function AppRoot({ workspace }: AppRootProps) {
         if (snapshot.pendingRecording) {
           await openReview(snapshot.pendingRecording.id);
         }
-      })();
+      })().catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : 'Could not open this result.');
+      });
     });
     return () => sub.remove();
   }, [openReview, refreshHome, showAttempt, showAttemptResult, workspace]);
@@ -621,75 +798,143 @@ export function AppRoot({ workspace }: AppRootProps) {
     }
   }, [refreshHome, showAttemptResult, workspace]);
 
-  const onAcknowledgeAttempt = useCallback(async () => {
+  const onAcknowledgeAttempt = useCallback(() => {
     if (!attemptResult) {
       return;
     }
-    setBusy(true);
+    const close = beginAttemptClose(resultSessionRef.current, attemptResult.id);
+    resultSessionRef.current = close.session;
+    if (!close.claimed) {
+      return;
+    }
+    const attempt = attemptResult;
+    const closeGeneration = close.generation;
+    const destination = resultExitDestination(attempt);
+    pathAnalyticsAbortRef.current?.abort();
+    setAttemptResult(null);
+    setJourneyFocus(null);
+    setAttemptDebug(null);
+    setDebugPending(false);
+    setPathAnalyticsPending(false);
+    setPathAnalyticsUnavailable(false);
+    setDebugError(null);
+    setPathAnalyticsError(null);
     setError(null);
-    try {
-      await workspace.acknowledgeAttemptResult(attemptResult.id);
-      const pool =
-        attemptResult.originPlaceId && attemptResult.destinationPlaceId
-          ? {
-              originPlaceId: attemptResult.originPlaceId,
-              destinationPlaceId: attemptResult.destinationPlaceId,
-              transportationMode: attemptResult.transportationMode,
-            }
-          : null;
-      setAttemptResult(null);
-      setJourneyFocus(null);
-      setAttemptDebug(null);
-      setDebugPending(false);
-      setPathAnalyticsPending(false);
-      setDebugError(null);
-      setPathAnalyticsError(null);
-      secondaryLoadTokenRef.current += 1;
-      if (pool) {
-        setScreen({ kind: 'journey', pool });
-        const loaded = await loadJourney(pool);
-        if (loaded.kind === 'ready' || loaded.kind === 'superseded') {
+    attemptResultRef.current = null;
+    const journeyToken =
+      destination.kind === 'journey' ? beginJourneySnapshotLoad(journeyLoadTokenRef.current).token : null;
+    if (destination.kind === 'journey' && journeyToken != null) {
+      journeyLoadTokenRef.current = journeyToken;
+      activeJourneyPoolRef.current = destination.pool;
+      setJourneySnapshotReady(false);
+      const next = { kind: 'journey' as const, pool: destination.pool };
+      screenRef.current = next;
+      setScreen(next);
+    } else {
+      screenRef.current = { kind: 'home' };
+      setScreen({ kind: 'home' });
+    }
+    const visibleScreen = () => {
+      const current = screenRef.current;
+      if (current.kind === 'journey' || current.kind === 'history' || current.kind === 'attempt-detail') {
+        return current;
+      }
+      return { kind: current.kind };
+    };
+    void (async () => {
+      let ackFailed = false;
+      try {
+        await workspace.acknowledgeAttemptResult(attempt.id);
+      } catch {
+        ackFailed = true;
+        if (acknowledgementFailureStillVisible(visibleScreen(), destination)) {
+          setError(ATTEMPT_ACK_FAILURE_MESSAGE);
+        }
+      } finally {
+        resultSessionRef.current = finishAttemptClose(resultSessionRef.current, attempt.id, closeGeneration);
+      }
+      try {
+        if (destination.kind === 'journey' && journeyToken != null) {
+          const loaded = await commitJourneyLoad(destination.pool, journeyToken);
+          if (
+            loaded.kind === 'missing' &&
+            !ackFailed &&
+            acknowledgementFailureStillVisible(visibleScreen(), destination)
+          ) {
+            setError('This journey is no longer available.');
+            activeJourneyPoolRef.current = null;
+            setJourneySnapshotReady(false);
+            await refreshHome();
+            screenRef.current = { kind: 'home' };
+            setScreen({ kind: 'home' });
+          }
           return;
         }
+        if (screenRef.current.kind === 'home') {
+          await refreshHome();
+        }
+      } catch (caught) {
+        if (acknowledgementFailureStillVisible(visibleScreen(), destination)) {
+          setError(caught instanceof Error ? caught.message : 'Could not open this journey.');
+        }
       }
-      await refreshHome();
-      setScreen({ kind: 'home' });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not close this result.');
-    } finally {
-      setBusy(false);
-    }
-  }, [attemptResult, loadJourney, refreshHome, workspace]);
+    })();
+  }, [attemptResult, commitJourneyLoad, refreshHome, workspace]);
 
   const leaveResultAfterHide = useCallback(
-    async (attempt: Attempt) => {
-      const stayOnHistory = screen.kind === 'attempt-detail' && 'pool' in screen;
-      const pool = stayOnHistory && screen.kind === 'attempt-detail' ? screen.pool : null;
-      if (attemptResult?.id === attempt.id) {
+    async (
+      attempt: Attempt,
+      captured: ResultWorkCapture,
+      capturedSurface: ReturnType<typeof resultSurfaceKind>,
+      historyPool: JourneyPoolId | null,
+    ) => {
+      await refreshHome();
+      const navigation = hideNavigationAfterDismiss(
+        resultSessionRef.current,
+        attempt.id,
+        captured,
+        capturedSurface,
+        resultSurfaceKind(screenRef.current.kind),
+      );
+      if (navigation === 'stay') {
+        return;
+      }
+      if (attemptResultRef.current?.id === attempt.id) {
+        attemptResultRef.current = null;
         setAttemptResult(null);
         setJourneyFocus(null);
         setAttemptDebug(null);
         setDebugPending(false);
         setPathAnalyticsPending(false);
+        setPathAnalyticsUnavailable(false);
         setDebugError(null);
         setPathAnalyticsError(null);
-        secondaryLoadTokenRef.current += 1;
+        resultSessionRef.current = {
+          ...resultSessionRef.current,
+          gate: invalidateResultPresentation(resultSessionRef.current.gate),
+        };
+        pathAnalyticsAbortRef.current?.abort();
       }
-      await refreshHome();
-      if (pool) {
-        setScreen({ kind: 'history', pool });
-        await loadJourney(pool);
+      if (navigation === 'history' && historyPool) {
+        const next = { kind: 'history' as const, pool: historyPool };
+        screenRef.current = next;
+        setScreen(next);
+        await loadJourney(historyPool);
         return;
       }
-      if (screen.kind === 'attempt-result' || screen.kind === 'attempt-detail') {
+      if (navigation === 'home') {
+        screenRef.current = { kind: 'home' };
         setScreen({ kind: 'home' });
       }
     },
-    [attemptResult, loadJourney, refreshHome, screen],
+    [loadJourney, refreshHome],
   );
 
   const performHideIncomplete = useCallback(
     async (attemptId: string) => {
+      const captured = captureResultWork(resultSessionRef.current);
+      const capturedSurface = resultSurfaceKind(screenRef.current.kind);
+      const historyPool = screenRef.current.kind === 'attempt-detail' ? screenRef.current.pool : null;
       setBusy(true);
       setError(null);
       try {
@@ -698,7 +943,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError(result.reason);
           return;
         }
-        await leaveResultAfterHide(result.attempt);
+        await leaveResultAfterHide(result.attempt, captured, capturedSurface, historyPool);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not hide this incomplete attempt.');
       } finally {
@@ -725,6 +970,7 @@ export function AppRoot({ workspace }: AppRootProps) {
 
   const performRestoreIncomplete = useCallback(
     async (attemptId: string) => {
+      const captured = captureResultWork(resultSessionRef.current);
       setBusy(true);
       setError(null);
       try {
@@ -733,7 +979,13 @@ export function AppRoot({ workspace }: AppRootProps) {
           setError(result.reason);
           return;
         }
-        if (attemptResult?.id === attemptId) {
+        const surface = resultSurfaceKind(screenRef.current.kind);
+        if (
+          restoreMayTouchAttempt(resultSessionRef.current, attemptId, captured) &&
+          attemptResultRef.current?.id === attemptId &&
+          (surface === 'attempt-result' || surface === 'attempt-detail')
+        ) {
+          attemptResultRef.current = result.attempt;
           setAttemptResult(result.attempt);
         }
         await refreshHome();
@@ -743,7 +995,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setBusy(false);
       }
     },
-    [attemptResult, refreshHome, workspace],
+    [refreshHome, workspace],
   );
 
   const onChangeResultMode = useCallback(
@@ -751,36 +1003,75 @@ export function AppRoot({ workspace }: AppRootProps) {
       if (!attemptResult) {
         return;
       }
-      const stayOnDetail = screen.kind === 'attempt-detail';
+      const attemptId = attemptResult.id;
+      const captured = captureResultWork(resultSessionRef.current);
+      const stayOnDetail = screenRef.current.kind === 'attempt-detail';
       setBusy(true);
       setError(null);
       try {
-        const updated = await workspace.setAttemptTransportationMode(attemptResult.id, mode);
-        if (updated) {
-          await showAttemptResult(
-            updated,
-            undefined,
-            stayOnDetail && updated.originPlaceId && updated.destinationPlaceId
-              ? {
-                  kind: 'attempt-detail',
-                  pool: {
-                    originPlaceId: updated.originPlaceId,
-                    destinationPlaceId: updated.destinationPlaceId,
-                    transportationMode: updated.transportationMode,
-                  },
-                  attemptId: updated.id,
-                }
-              : { kind: 'attempt-result' },
-          );
+        const updated = await workspace.setAttemptTransportationMode(attemptId, mode);
+        if (!updated || !modeUpdateMayReopen(resultSessionRef.current, captured, attemptId)) {
+          return;
         }
+        const surface = resultSurfaceKind(screenRef.current.kind);
+        if (surface !== 'attempt-result' && surface !== 'attempt-detail') {
+          return;
+        }
+        await showAttemptResult(
+          updated,
+          undefined,
+          stayOnDetail && updated.originPlaceId && updated.destinationPlaceId
+            ? {
+                kind: 'attempt-detail',
+                pool: {
+                  originPlaceId: updated.originPlaceId,
+                  destinationPlaceId: updated.destinationPlaceId,
+                  transportationMode: updated.transportationMode,
+                },
+                attemptId: updated.id,
+              }
+            : { kind: 'attempt-result' },
+        );
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'Could not change transportation mode.');
       } finally {
         setBusy(false);
       }
     },
-    [attemptResult, screen.kind, showAttemptResult, workspace],
+    [attemptResult, showAttemptResult, workspace],
   );
+
+  const retryPathAnalytics = useCallback(() => {
+    if (!attemptResult || !journeyPoolForAttempt(attemptResult)) {
+      setPathAnalyticsPending(false);
+      setPathAnalyticsUnavailable(false);
+      setPathAnalyticsError(null);
+      return;
+    }
+    const attempt = attemptResult;
+    const retainedFocus = journeyFocus;
+    const retried = retryPathAnalyticsSession(resultSessionRef.current);
+    resultSessionRef.current = retried.session;
+    const pathToken = retried.pathToken;
+    const loadController = beginPathAnalyticsSignal(pathAnalyticsAbortRef.current);
+    pathAnalyticsAbortRef.current = loadController;
+    setPathAnalyticsPending(true);
+    setPathAnalyticsUnavailable(false);
+    setPathAnalyticsError(null);
+    headlineFocusRef.current = retainedFocus;
+    pathViewRef.current = null;
+    void loadAttemptPathAnalytics(
+      workspace,
+      attempt,
+      (update) => {
+        applyPathAnalyticsUpdate(pathToken, update);
+      },
+      {
+        signal: loadController.signal,
+        yieldToIdle: yieldToEventLoop,
+      },
+    );
+  }, [applyPathAnalyticsUpdate, attemptResult, journeyFocus, workspace]);
 
   const leaveToHome = useCallback(() => {
     setError(null);
@@ -788,11 +1079,17 @@ export function AppRoot({ workspace }: AppRootProps) {
     journeyLoadTokenRef.current = abandoned.token;
     activeJourneyPoolRef.current = null;
     setJourneySnapshotReady(abandoned.snapshotReady);
-    secondaryLoadTokenRef.current += 1;
+    resultSessionRef.current = {
+      ...resultSessionRef.current,
+      gate: invalidateResultPresentation(resultSessionRef.current.gate),
+    };
+    pathAnalyticsAbortRef.current?.abort();
     setDebugPending(false);
     setPathAnalyticsPending(false);
+    setPathAnalyticsUnavailable(false);
     setDebugError(null);
     setPathAnalyticsError(null);
+    screenRef.current = { kind: 'home' };
     setScreen({ kind: 'home' });
     void refreshHome();
   }, [refreshHome]);
@@ -892,16 +1189,24 @@ export function AppRoot({ workspace }: AppRootProps) {
     if (screen.kind !== 'attempt-detail') {
       return;
     }
-    secondaryLoadTokenRef.current += 1;
+    resultSessionRef.current = {
+      ...resultSessionRef.current,
+      gate: invalidateResultPresentation(resultSessionRef.current.gate),
+    };
+    pathAnalyticsAbortRef.current?.abort();
+    attemptResultRef.current = null;
     setAttemptResult(null);
     setJourneyFocus(null);
     setAttemptDebug(null);
     setDebugPending(false);
     setPathAnalyticsPending(false);
+    setPathAnalyticsUnavailable(false);
     setDebugError(null);
     setPathAnalyticsError(null);
     const pool = screen.pool;
-    setScreen({ kind: 'history', pool });
+    const next = { kind: 'history' as const, pool };
+    screenRef.current = next;
+    setScreen(next);
     void loadJourney(pool);
   }, [loadJourney, screen]);
 
@@ -1369,7 +1674,9 @@ export function AppRoot({ workspace }: AppRootProps) {
               if (attempt) {
                 await showAttemptResult(attempt);
               }
-            })();
+            })().catch((caught: unknown) => {
+              setError(caught instanceof Error ? caught.message : 'Could not open this result.');
+            });
           }}
           onHideIncomplete={(attemptId) => {
             confirmHideIncomplete(attemptId);
@@ -1541,7 +1848,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
         />
         ) : (
-          <JourneyLoadingShell onBack={leaveToHome} />
+          <JourneyLoadingShell onBack={leaveToHome} error={error} />
         )
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
@@ -1590,8 +1897,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           pathAnalyticsPending={pathAnalyticsPending}
           debugError={debugError}
           pathAnalyticsError={pathAnalyticsError}
+          pathAnalyticsUnavailable={pathAnalyticsUnavailable}
           busy={busy}
           error={error}
+          onRetryPathAnalytics={retryPathAnalytics}
           onDone={() => {
             void onAcknowledgeAttempt();
           }}
@@ -1630,7 +1939,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
         />
         ) : (
-          <JourneyLoadingShell onBack={onBackFromHistory} />
+          <JourneyLoadingShell onBack={onBackFromHistory} error={error} />
         )
       ) : null}
       {screen.kind === 'attempt-detail' && attemptResult ? (
@@ -1644,8 +1953,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           pathAnalyticsPending={pathAnalyticsPending}
           debugError={debugError}
           pathAnalyticsError={pathAnalyticsError}
+          pathAnalyticsUnavailable={pathAnalyticsUnavailable}
           busy={busy}
           error={error}
+          onRetryPathAnalytics={retryPathAnalytics}
           doneLabel="BACK"
           onDone={() => {
             void onBackFromHistoryDetail();

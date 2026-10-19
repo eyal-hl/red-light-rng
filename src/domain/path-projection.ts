@@ -58,10 +58,26 @@ type SegmentProjection = PathProjection & {
   segmentEndProgressMeters: number;
 };
 
-function collectSegmentProjections(path: LatLng[], point: LatLng): SegmentProjection[] {
-  const candidates: SegmentProjection[] = [];
-  let cumulativeMeters = 0;
+type IndexedSegment = {
+  start: LatLng;
+  end: LatLng;
+  segmentStartProgressMeters: number;
+  segmentLength: number;
+};
 
+type PathProgressIndex = {
+  segments: IndexedSegment[];
+};
+
+const pathProgressIndexes = new WeakMap<LatLng[], PathProgressIndex>();
+
+function pathProgressIndex(path: LatLng[]): PathProgressIndex {
+  const cached = pathProgressIndexes.get(path);
+  if (cached) {
+    return cached;
+  }
+  const segments: IndexedSegment[] = [];
+  let cumulativeMeters = 0;
   for (let index = 1; index < path.length; index += 1) {
     const start = path[index - 1];
     const end = path[index];
@@ -69,20 +85,102 @@ function collectSegmentProjections(path: LatLng[], point: LatLng): SegmentProjec
       continue;
     }
     const segmentLength = haversineMeters(start, end);
-    const closest = closestPointOnSegment(start, end, point);
-    const segmentStartProgressMeters = cumulativeMeters;
-    const segmentEndProgressMeters = cumulativeMeters + segmentLength;
-    candidates.push({
-      snapped: closest.point,
-      progressMeters: cumulativeMeters + closest.t * segmentLength,
-      snapDistanceMeters: haversineMeters(closest.point, point),
-      segmentStartProgressMeters,
-      segmentEndProgressMeters,
+    segments.push({
+      start,
+      end,
+      segmentStartProgressMeters: cumulativeMeters,
+      segmentLength,
     });
     cumulativeMeters += segmentLength;
   }
+  const created = { segments };
+  pathProgressIndexes.set(path, created);
+  return created;
+}
 
-  return candidates;
+function projectIndexedSegment(segment: IndexedSegment, point: LatLng): SegmentProjection {
+  const closest = closestPointOnSegment(segment.start, segment.end, point);
+  const segmentEndProgressMeters = segment.segmentStartProgressMeters + segment.segmentLength;
+  return {
+    snapped: closest.point,
+    progressMeters: segment.segmentStartProgressMeters + closest.t * segment.segmentLength,
+    snapDistanceMeters: haversineMeters(closest.point, point),
+    segmentStartProgressMeters: segment.segmentStartProgressMeters,
+    segmentEndProgressMeters,
+  };
+}
+
+function firstSegmentReaching(segments: IndexedSegment[], windowStart: number): number {
+  let lo = 0;
+  let hi = segments.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const segment = segments[mid];
+    if (!segment) {
+      break;
+    }
+    const segmentEnd = segment.segmentStartProgressMeters + segment.segmentLength;
+    if (segmentEnd < windowStart) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+function progressWindowBounds(options: {
+  centerProgressMeters: number;
+  forwardWindowMeters: number;
+  backwardWindowMeters: number;
+}): { windowStart: number; windowEnd: number } {
+  return {
+    windowStart: options.centerProgressMeters - options.backwardWindowMeters,
+    windowEnd: options.centerProgressMeters + options.forwardWindowMeters,
+  };
+}
+
+function segmentsInProgressWindow(
+  segments: IndexedSegment[],
+  windowStart: number,
+  windowEnd: number,
+): IndexedSegment[] {
+  const inWindow: IndexedSegment[] = [];
+  for (let index = firstSegmentReaching(segments, windowStart); index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment || segment.segmentStartProgressMeters > windowEnd) {
+      break;
+    }
+    inWindow.push(segment);
+  }
+  return inWindow;
+}
+
+export function referencePathSegmentCount(path: LatLng[]): number {
+  if (path.length <= 1) {
+    return 0;
+  }
+  return pathProgressIndex(path).segments.length;
+}
+
+/** Segments the near-progress projection actually scores, not the whole reference path. */
+export function progressWindowSegmentCount(
+  path: LatLng[],
+  options: {
+    centerProgressMeters: number;
+    forwardWindowMeters: number;
+    backwardWindowMeters: number;
+  },
+): number {
+  if (path.length <= 1) {
+    return 0;
+  }
+  const bounds = progressWindowBounds(options);
+  return segmentsInProgressWindow(pathProgressIndex(path).segments, bounds.windowStart, bounds.windowEnd).length;
+}
+
+function collectSegmentProjections(path: LatLng[], point: LatLng): SegmentProjection[] {
+  return pathProgressIndex(path).segments.map((segment) => projectIndexedSegment(segment, point));
 }
 
 function pickNearestProjection(
@@ -169,12 +267,12 @@ export function projectOntoReferencePathNearProgress(
     return projectOntoReferencePath(path, point);
   }
 
-  const windowStart = options.centerProgressMeters - options.backwardWindowMeters;
-  const windowEnd = options.centerProgressMeters + options.forwardWindowMeters;
-  const inWindow = collectSegmentProjections(path, point).filter(
-    (candidate) =>
-      candidate.segmentEndProgressMeters >= windowStart && candidate.segmentStartProgressMeters <= windowEnd,
-  );
+  const bounds = progressWindowBounds(options);
+  const inWindow = segmentsInProgressWindow(
+    pathProgressIndex(path).segments,
+    bounds.windowStart,
+    bounds.windowEnd,
+  ).map((segment) => projectIndexedSegment(segment, point));
 
   return pickNearestProjection(inWindow, (candidate) => {
     const delta = candidate.progressMeters - options.centerProgressMeters;

@@ -214,6 +214,54 @@ describe('app startup watchdog', () => {
     session.cancel();
   });
 
+  it('fails startup when the restored screen throws instead of leaving Loading up', async () => {
+    const failures: AppStartupFailure[] = [];
+    const session = startAppStartup(
+      resolvingHost(),
+      {
+        onStage: () => {},
+        onHomeReady: async () => {
+          throw new Error('headline exploded');
+        },
+        onFailure: (failure) => {
+          failures.push(failure);
+        },
+      },
+      { watchdogMs: 5_000, stageTimeoutMs: 5_000 },
+    );
+
+    await session.finished;
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]?.timedOut, false);
+    assert.match(failures[0]?.message ?? '', /headline exploded/);
+  });
+
+  it('stays in startup until a delayed restored-screen failure rejects', async () => {
+    const failures: AppStartupFailure[] = [];
+    let release: ((error: Error) => void) | null = null;
+    const session = startAppStartup(
+      resolvingHost(),
+      {
+        onStage: () => {},
+        onHomeReady: () =>
+          new Promise<void>((_resolve, reject) => {
+            release = reject;
+          }),
+        onFailure: (failure) => {
+          failures.push(failure);
+        },
+      },
+      { watchdogMs: 5_000, stageTimeoutMs: 5_000 },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(failures.length, 0);
+    release?.(new Error('headline exploded'));
+    await session.finished;
+    assert.equal(failures.length, 1);
+    assert.match(failures[0]?.message ?? '', /headline exploded/);
+  });
+
   it('wires AppRoot to the independent watchdog, shows the stuck stage, and defers pending repair', () => {
     const appRoot = readFileSync('src/ui/AppRoot.tsx', 'utf8');
     const workspace = readFileSync('src/product/route-workspace.ts', 'utf8');
