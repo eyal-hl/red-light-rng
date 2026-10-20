@@ -10,8 +10,10 @@ import { attachAttemptLocalStart } from '../domain/attempt-local-time';
 import { checkpointCrossingsForWindow, replayAttemptTrace } from '../domain/attempt-timing';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
-import type { Place } from '../domain/place';
+import { clonePlace, type Place } from '../domain/place';
 import {
+  deriveGpsReadiness,
+  isAttemptCaptureAvailable,
   presentArmedAttemptStatus,
   WAITING_GPS_READINESS,
   type AttemptCaptureHealth,
@@ -47,6 +49,13 @@ export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
   startZoneStatus: PlaceStartZoneStatus;
   gpsReadiness: GpsReadiness;
+  /**
+   * Read-only map fields from the same persisted sample read and place set the
+   * attempt engine just used. They do not feed start/finish qualification.
+   */
+  latestSample: LocationSample | null;
+  effectivePlaces: Place[];
+  sampleGpsReadiness: GpsReadiness;
 };
 
 export type PathVariantRecomputeResult = {
@@ -71,6 +80,30 @@ const LOCATING_START_ZONE: PlaceStartZoneStatus = {
   distanceMeters: null,
   overlapTieBreak: null,
 };
+
+function emptyLocationDisplay(): Pick<
+  ProcessActiveAttemptResult,
+  'latestSample' | 'effectivePlaces' | 'sampleGpsReadiness'
+> {
+  return {
+    latestSample: null,
+    effectivePlaces: [],
+    sampleGpsReadiness: WAITING_GPS_READINESS,
+  };
+}
+
+function locationDisplayFields(
+  samples: LocationSample[],
+  places: Place[],
+  sampleGpsReadiness: GpsReadiness,
+): Pick<ProcessActiveAttemptResult, 'latestSample' | 'effectivePlaces' | 'sampleGpsReadiness'> {
+  const latest = samples.length > 0 ? samples[samples.length - 1] : null;
+  return {
+    latestSample: latest ? { ...latest } : null,
+    effectivePlaces: places.map(clonePlace),
+    sampleGpsReadiness,
+  };
+}
 
 function crossingId(attemptId: string, checkpointId: string): string {
   return `${attemptId}:${checkpointId}`;
@@ -209,15 +242,19 @@ export class AttemptRuntime {
         attempt: await this.attempts.getUnacknowledgedResult(),
         startZoneStatus: LOCATING_START_ZONE,
         gpsReadiness: WAITING_GPS_READINESS,
+        ...emptyLocationDisplay(),
       };
     }
     const samples = await this.sessions.listSamples(open.sessionId);
     const places = await this.placesForAttempt(open);
     const next = await this.applyPlaceEngine(open, samples, places);
     const engine = replayPlaceTrace(places, samples, { armedAtMs: open.armedAtMs, nowMs: this.now() });
-    const presented = presentArmedAttemptStatus(places, samples, engine, await this.readAttemptCaptureHealth());
+    const health = await this.readAttemptCaptureHealth();
+    const sampleGpsReadiness = deriveGpsReadiness(samples, isAttemptCaptureAvailable(health));
+    const presented = presentArmedAttemptStatus(places, samples, engine, health);
     const armedStatus = next.lifecycle === 'armed' ? presented.startZoneStatus : LOCATING_START_ZONE;
     const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
+    const locationDisplay = locationDisplayFields(samples, places, sampleGpsReadiness);
 
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
@@ -225,15 +262,15 @@ export class AttemptRuntime {
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
         const derived = await this.reconcileDerivedAttempt(pending, samples);
-        return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness };
+        return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness, ...locationDisplay };
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness };
+        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness, ...locationDisplay };
       }
     }
     await this.attempts.saveAttempt(next);
-    return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
+    return { attempt: next, startZoneStatus: armedStatus, gpsReadiness, ...locationDisplay };
   }
 
   async processActive(): Promise<Attempt | null> {

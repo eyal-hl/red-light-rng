@@ -57,6 +57,8 @@ Start detection is path-free:
 - returning inside the origin radius resets the candidate;
 - there is no maximum confirmation-time or speed requirement, so walking qualifies.
 
+While armed, the attempt screen may show a map of the latest location sample and saved places, including each place's configured detection radius. The user can pan, zoom, and recenter while still at the origin. The map does not start official timing and does not change `IN START ZONE` / `OUTSIDE START ZONE`.
+
 GPS drift alone should not begin an attempt. Time spent locking a door near Home should not count merely because START was pressed. Detection may confirm the start after the physical event; official `started_at` is reconstructed from recorded samples.
 
 If no qualifying departure occurs within 30 minutes of START, the attempt ends as `DID NOT START` with telemetry preserved for inspect.
@@ -75,7 +77,9 @@ Started automatically at 08:42:13
 [ END & INSPECT ]  [ Cancel ]
 ```
 
-No destination is predicted. Do not make the run depend on a live timer, split deltas, checkpoint buttons, a visible map, or a manual stop.
+No destination is predicted. A passive map of the latest location sample and saved places may remain visible. It has no pan, zoom, recenter, or navigation controls, and the run must not depend on viewing or tapping it. Do not make the run depend on a live timer, split deltas, checkpoint buttons, or a manual stop.
+
+When the app is backgrounded or the screen is locked, the rendered map is removed so it does not keep redrawing. Location recording and automatic finish detection continue. Opening the app again shows the map from the current attempt state.
 
 The app records location in the background. Path divergence must not fail the attempt as the wrong route.
 

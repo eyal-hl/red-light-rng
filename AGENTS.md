@@ -41,7 +41,7 @@ If sources conflict, prefer the most specific approved source and surface the co
 - For user-facing changes, verify actual behavior in the running application when practical.
 - Preserve raw run/location source data when changing derived analytics unless an approved decision explicitly changes that policy.
 - Do not introduce accounts, cloud services, social features, or a backend unless an approved ticket explicitly changes the local-first product boundary.
-- Do not turn the active-run experience into an interaction-heavy UI; phone-in-pocket behavior is a product invariant.
+- Do not turn the active-run experience into an interaction-heavy UI; phone-in-pocket behavior is a product invariant. A passive optional map may be shown during armed (interactive while stationary) and active (glance-only, no controls) attempts, as clarified in DEC-002. The run must never depend on viewing or tapping it.
 - Keep platform-sensitive background location behind the boundary defined in `docs/product/PLATFORM_SUPPORT.md`; do not leak Android-specific assumptions into shared route/timing/analytics code.
 - Do not claim iOS background tracking is validated until a real iPhone field test has been performed.
 

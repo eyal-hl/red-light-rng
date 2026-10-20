@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { geoZoneExtentPoints, type GeoZone, type LatLng } from '../domain/geo';
 import { prepareMapPresentation, type MapPresentationDebugSample } from './map-presentation';
+import type { LiveMapPlaceMarker, LiveMapUserMarker } from './live-map-markers';
 import { boundFallbackPathVertices, type PathVariantMapLine } from './path-variant-display';
 
 type FallbackCheckpoint = {
@@ -33,6 +34,9 @@ type FallbackRoutePreviewProps = {
   selectedSampleId?: string | null;
   officialStartPoint?: LatLng | null;
   officialFinishPoint?: LatLng | null;
+  placeMarkers?: LiveMapPlaceMarker[];
+  userMarker?: LiveMapUserMarker | null;
+  framePoints?: LatLng[];
 };
 
 type Point = { x: number; y: number };
@@ -51,6 +55,9 @@ function project(
   pathVariants: PathVariantMapLine[] = [],
   recordedTraceDisplayPoints?: LatLng[],
   debugDisplaySamples?: FallbackDebugSample[],
+  placeMarkers: LiveMapPlaceMarker[] = [],
+  userMarker: LiveMapUserMarker | null = null,
+  framePoints: LatLng[] = [],
 ): {
   points: Point[];
   start: Point | null;
@@ -70,6 +77,14 @@ function project(
     color: string;
     points: Point[];
   }[];
+  placePoints: {
+    id: string;
+    name: string;
+    point: Point;
+    diameterPercent: number;
+    emphasized: boolean;
+  }[];
+  userPoint: { point: Point; confidence: 'current' | 'last-known'; label: string; diameterPercent: number } | null;
 } {
   const coords = [...path, ...recordedPath];
   for (const variant of pathVariants) {
@@ -99,7 +114,16 @@ function project(
   if (officialFinishPoint) {
     coords.push(officialFinishPoint);
   }
-  if (coords.length === 0) {
+  if (framePoints.length === 0) {
+    for (const place of placeMarkers) {
+      coords.push(place.center, ...geoZoneExtentPoints({ center: place.center, radiusMeters: place.radiusMeters }));
+    }
+    if (userMarker) {
+      coords.push(userMarker.point);
+    }
+  }
+  const boundsCoords = framePoints.length > 0 ? framePoints : coords;
+  if (boundsCoords.length === 0) {
     return {
       points: [],
       start: null,
@@ -114,11 +138,13 @@ function project(
       officialStart: null,
       officialFinish: null,
       variantStrokes: [],
+      placePoints: [],
+      userPoint: null,
     };
   }
 
-  const lats = coords.map((item) => item.latitude);
-  const lngs = coords.map((item) => item.longitude);
+  const lats = boundsCoords.map((item) => item.latitude);
+  const lngs = boundsCoords.map((item) => item.longitude);
   const minLat = Math.min(...lats);
   const maxLat = Math.max(...lats);
   const minLng = Math.min(...lngs);
@@ -156,6 +182,24 @@ function project(
     })),
     officialStart: officialStartPoint ? toPoint(officialStartPoint) : null,
     officialFinish: officialFinishPoint ? toPoint(officialFinishPoint) : null,
+    placePoints: placeMarkers.map((place) => ({
+      id: place.id,
+      name: place.name,
+      point: toPoint(place.center),
+      diameterPercent: diameterPercent({ center: place.center, radiusMeters: place.radiusMeters }),
+      emphasized: place.emphasized,
+    })),
+    userPoint: userMarker
+      ? {
+          point: toPoint(userMarker.point),
+          confidence: userMarker.confidence,
+          label: userMarker.label,
+          diameterPercent:
+            userMarker.horizontalAccuracyMeters != null && userMarker.horizontalAccuracyMeters > 0
+              ? diameterPercent({ center: userMarker.point, radiusMeters: userMarker.horizontalAccuracyMeters })
+              : 0,
+        }
+      : null,
     variantStrokes: pathVariants.map((variant) => ({
       id: variant.id,
       name: variant.name,
@@ -179,6 +223,9 @@ export function FallbackRoutePreview({
   selectedSampleId = null,
   officialStartPoint = null,
   officialFinishPoint = null,
+  placeMarkers = [],
+  userMarker = null,
+  framePoints = [],
 }: FallbackRoutePreviewProps) {
   const boundedVariants = useMemo(() => {
     const boundedPaths = boundFallbackPathVertices(pathVariants.map((variant) => variant.path));
@@ -207,20 +254,26 @@ export function FallbackRoutePreview({
         boundedVariants,
         presentation.fallbackRecordedTracePoints,
         presentation.debugMarkers,
+        placeMarkers,
+        userMarker,
+        framePoints,
       ),
     [
       boundedVariants,
       checkpoints,
       debugSamples,
       finishZone,
+      framePoints,
       officialFinishPoint,
       officialStartPoint,
       path,
+      placeMarkers,
       presentation.debugMarkers,
       presentation.fallbackRecordedTracePoints,
       previewPoint,
       recordedPath,
       startZone,
+      userMarker,
       waitMarkers,
     ],
   );
@@ -327,6 +380,80 @@ export function FallbackRoutePreview({
             { left: `${projected.officialFinish.x}%`, top: `${projected.officialFinish.y}%` },
           ]}
         />
+      ) : null}
+      {projected.placePoints.map((place) => (
+        <View key={`place-${place.id}`}>
+          {place.diameterPercent > 0 ? (
+            <View
+              accessibilityLabel={`Saved place ${place.name} radius`}
+              style={[
+                styles.zone,
+                place.emphasized ? styles.placeZoneEmphasized : styles.placeZone,
+                {
+                  left: `${place.point.x}%`,
+                  top: `${place.point.y}%`,
+                  width: `${place.diameterPercent}%`,
+                  height: `${place.diameterPercent}%`,
+                  marginLeft: `${-place.diameterPercent / 2}%`,
+                  marginTop: `${-place.diameterPercent / 2}%`,
+                },
+              ]}
+            />
+          ) : null}
+          <View
+            accessibilityLabel={`Saved place ${place.name}`}
+            style={[
+              styles.placeDot,
+              place.emphasized ? styles.placeDotEmphasized : null,
+              { left: `${place.point.x}%`, top: `${place.point.y}%` },
+            ]}
+          />
+          <Text
+            style={[styles.placeLabel, { left: `${place.point.x}%`, top: `${place.point.y}%` }]}
+          >
+            {place.name}
+          </Text>
+        </View>
+      ))}
+      {projected.userPoint ? (
+        <View>
+          {projected.userPoint.diameterPercent > 0 ? (
+            <View
+              accessibilityLabel={
+                projected.userPoint.confidence === 'current'
+                  ? 'Current location accuracy'
+                  : 'Last known location accuracy'
+              }
+              style={[
+                styles.zone,
+                projected.userPoint.confidence === 'current' ? styles.userAccuracy : styles.userAccuracyMuted,
+                {
+                  left: `${projected.userPoint.point.x}%`,
+                  top: `${projected.userPoint.point.y}%`,
+                  width: `${projected.userPoint.diameterPercent}%`,
+                  height: `${projected.userPoint.diameterPercent}%`,
+                  marginLeft: `${-projected.userPoint.diameterPercent / 2}%`,
+                  marginTop: `${-projected.userPoint.diameterPercent / 2}%`,
+                },
+              ]}
+            />
+          ) : null}
+          <View
+            accessibilityLabel={
+              projected.userPoint.confidence === 'current' ? 'Current location' : 'Last known location'
+            }
+            style={[
+              styles.userDot,
+              projected.userPoint.confidence === 'last-known' ? styles.userDotMuted : null,
+              { left: `${projected.userPoint.point.x}%`, top: `${projected.userPoint.point.y}%` },
+            ]}
+          />
+          <Text
+            style={[styles.userLabel, { left: `${projected.userPoint.point.x}%`, top: `${projected.userPoint.point.y}%` }]}
+          >
+            {projected.userPoint.label}
+          </Text>
+        </View>
       ) : null}
       {projected.preview ? (
         <View
@@ -523,5 +650,68 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#ffffff',
     zIndex: 3,
+  },
+  placeZone: {
+    backgroundColor: 'rgba(138, 160, 184, 0.16)',
+    borderColor: '#9db0c4',
+  },
+  placeZoneEmphasized: {
+    backgroundColor: 'rgba(46, 125, 79, 0.2)',
+    borderColor: '#7dcea0',
+  },
+  placeDot: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    marginLeft: -6,
+    marginTop: -6,
+    borderRadius: 6,
+    backgroundColor: '#d7dee8',
+    borderWidth: 2,
+    borderColor: '#111111',
+    zIndex: 5,
+  },
+  placeDotEmphasized: {
+    backgroundColor: '#7dcea0',
+  },
+  placeLabel: {
+    position: 'absolute',
+    marginTop: 8,
+    color: '#f5f5f5',
+    fontSize: 11,
+    fontWeight: '700',
+    zIndex: 6,
+  },
+  userAccuracy: {
+    backgroundColor: 'rgba(126, 224, 255, 0.18)',
+    borderColor: '#7ee0ff',
+  },
+  userAccuracyMuted: {
+    backgroundColor: 'rgba(139, 147, 154, 0.16)',
+    borderColor: '#8b939a',
+  },
+  userDot: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    marginTop: -7,
+    borderRadius: 7,
+    backgroundColor: '#7ee0ff',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 6,
+  },
+  userDotMuted: {
+    backgroundColor: '#8b939a',
+    opacity: 0.75,
+  },
+  userLabel: {
+    position: 'absolute',
+    marginTop: -22,
+    color: '#d7f6ff',
+    fontSize: 11,
+    fontWeight: '700',
+    zIndex: 6,
   },
 });
