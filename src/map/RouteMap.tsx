@@ -1,10 +1,11 @@
-import { Camera, GeoJSONSource, Layer, Map } from '@maplibre/maplibre-react-native';
-import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Camera, GeoJSONSource, Layer, Map, type CameraRef } from '@maplibre/maplibre-react-native';
+import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { GeoZone, LatLng } from '../domain/geo';
 import { COURSE_CAMERA_PADDING, courseCameraBounds } from './course-camera-bounds';
 import { FallbackRoutePreview } from './FallbackRoutePreview';
+import type { LiveMapPlaceMarker, LiveMapUserMarker } from './live-map-markers';
 import {
   prepareMapPresentation,
   type MapPresentationDebugSample,
@@ -52,6 +53,17 @@ export type RouteMapProps = {
   onMapPress?: (point: LatLng) => void;
   onWaitMarkerPress?: (waitId: string) => void;
   cameraGesturesEnabled?: boolean;
+  compassEnabled?: boolean;
+  placeMarkers?: LiveMapPlaceMarker[];
+  userMarker?: LiveMapUserMarker | null;
+  /** Initial camera. When omitted, the map frames the route geometry once. */
+  cameraBounds?: [number, number, number, number] | null;
+  /** Latest frame used only when `fitBoundsToken` changes. */
+  fitBoundsTarget?: [number, number, number, number] | null;
+  fitBoundsToken?: number;
+  /** Fallback preview frame. Empty means the fallback fits every drawn point. */
+  framePoints?: LatLng[];
+  onUserViewportChange?: (userInteraction: boolean) => void;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -176,6 +188,51 @@ function toGeoJson(
       geometry: { type: 'Point', coordinates: [checkpoint.point.longitude, checkpoint.point.latitude] },
     });
   }
+  return { type: 'FeatureCollection', features };
+}
+
+function toPlaceMarkerGeoJson(placeMarkers: LiveMapPlaceMarker[]): FeatureCollection {
+  const features: FeatureCollection['features'] = [];
+  for (const place of placeMarkers) {
+    const selected = place.emphasized;
+    features.push({
+      type: 'Feature',
+      properties: { ...emptyProperties('place-zone', selected), label: place.name },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [circlePolygon(place.center, place.radiusMeters)],
+      },
+    });
+    features.push({
+      type: 'Feature',
+      properties: { ...emptyProperties('place-point', selected), label: place.name },
+      geometry: { type: 'Point', coordinates: [place.center.longitude, place.center.latitude] },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+function toUserMarkerGeoJson(userMarker?: LiveMapUserMarker | null): FeatureCollection {
+  if (!userMarker) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  const tone = userMarker.confidence;
+  const features: FeatureCollection['features'] = [];
+  if (userMarker.horizontalAccuracyMeters != null && userMarker.horizontalAccuracyMeters > 0) {
+    features.push({
+      type: 'Feature',
+      properties: { ...emptyProperties('user-accuracy'), tone, label: userMarker.label },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [circlePolygon(userMarker.point, userMarker.horizontalAccuracyMeters)],
+      },
+    });
+  }
+  features.push({
+    type: 'Feature',
+    properties: { ...emptyProperties('user-point'), tone, label: userMarker.label },
+    geometry: { type: 'Point', coordinates: [userMarker.point.longitude, userMarker.point.latitude] },
+  });
   return { type: 'FeatureCollection', features };
 }
 
@@ -332,6 +389,13 @@ function MapLibreRouteMap({
   onMapPress,
   onWaitMarkerPress,
   cameraGesturesEnabled = true,
+  compassEnabled = true,
+  placeMarkers = [],
+  userMarker = null,
+  cameraBounds = null,
+  fitBoundsTarget = null,
+  fitBoundsToken = 0,
+  onUserViewportChange,
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
   const data = useMemo(
@@ -356,6 +420,8 @@ function MapLibreRouteMap({
     () => toOfficialPointGeoJson(officialStartPoint, officialFinishPoint),
     [officialFinishPoint, officialStartPoint],
   );
+  const placeData = useMemo(() => toPlaceMarkerGeoJson(placeMarkers), [placeMarkers]);
+  const userData = useMemo(() => toUserMarkerGeoJson(userMarker), [userMarker]);
   const cameraPoints = useMemo(
     () => [
       ...checkpoints,
@@ -368,10 +434,19 @@ function MapLibreRouteMap({
     ],
     [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, pathVariants, recordedPath, waitMarkers],
   );
-  const initialBounds = useMemo(
+  const derivedBounds = useMemo(
     () => courseCameraBounds(path, startZone, finishZone, cameraPoints),
     [cameraPoints, finishZone, path, startZone],
   );
+  const initialBounds = cameraBounds ?? derivedBounds;
+  const cameraRef = useRef<CameraRef>(null);
+  const styleFitToken = useRef(0);
+  useEffect(() => {
+    if (!fitBoundsToken || !fitBoundsTarget || !cameraRef.current) {
+      return;
+    }
+    cameraRef.current.fitBounds(fitBoundsTarget, { duration: 0, padding: COURSE_CAMERA_PADDING });
+  }, [fitBoundsTarget, fitBoundsToken]);
 
   const selectWaitFromFeatures = (
     features: { properties?: { waitId?: unknown } | null }[] | undefined,
@@ -395,9 +470,31 @@ function MapLibreRouteMap({
       style={StyleSheet.absoluteFill}
       attribution
       logo
+      compass={compassEnabled}
       dragPan={cameraGesturesEnabled}
       touchZoom={cameraGesturesEnabled}
+      doubleTapZoom={cameraGesturesEnabled}
+      doubleTapHoldZoom={cameraGesturesEnabled}
+      touchRotate={cameraGesturesEnabled}
+      touchPitch={cameraGesturesEnabled}
       onDidFailLoadingMap={onBasemapFailed}
+      onDidFinishLoadingMap={() => {
+        if (!fitBoundsToken || !fitBoundsTarget || !cameraRef.current) {
+          return;
+        }
+        if (styleFitToken.current === fitBoundsToken) {
+          return;
+        }
+        styleFitToken.current = fitBoundsToken;
+        cameraRef.current.fitBounds(fitBoundsTarget, { duration: 0, padding: COURSE_CAMERA_PADDING });
+      }}
+      onRegionDidChange={
+        onUserViewportChange
+          ? (event) => {
+              onUserViewportChange(event.nativeEvent.userInteraction);
+            }
+          : undefined
+      }
       onPress={(event) => {
         const nativeEvent = event.nativeEvent as {
           lngLat?: unknown;
@@ -422,6 +519,7 @@ function MapLibreRouteMap({
       }}
     >
       <Camera
+        ref={cameraRef}
         initialViewState={{
           bounds: initialBounds,
           padding: COURSE_CAMERA_PADDING,
@@ -598,6 +696,101 @@ function MapLibreRouteMap({
           />
         </GeoJSONSource>
       ) : null}
+      {placeMarkers.length > 0 ? (
+        <GeoJSONSource id="attempt-places" data={placeData}>
+          <Layer
+            id="place-zone-fill"
+            type="fill"
+            filter={['==', ['get', 'kind'], 'place-zone']}
+            paint={{
+              'fill-color': ['case', ['==', ['get', 'selected'], 'yes'], '#2e7d4f', '#8aa0b8'],
+              'fill-opacity': ['case', ['==', ['get', 'selected'], 'yes'], 0.2, 0.12],
+            }}
+          />
+          <Layer
+            id="place-zone-line"
+            type="line"
+            filter={['==', ['get', 'kind'], 'place-zone']}
+            paint={{
+              'line-color': ['case', ['==', ['get', 'selected'], 'yes'], '#7dcea0', '#9db0c4'],
+              'line-width': 1.5,
+              'line-opacity': 0.85,
+            }}
+          />
+          <Layer
+            id="place-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'place-point']}
+            paint={{
+              'circle-radius': 6,
+              'circle-color': ['case', ['==', ['get', 'selected'], 'yes'], '#7dcea0', '#d7dee8'],
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#111111',
+            }}
+          />
+          <Layer
+            id="place-label"
+            type="symbol"
+            filter={['==', ['get', 'kind'], 'place-point']}
+            layout={{
+              'text-field': ['get', 'label'],
+              'text-font': ['literal', OPENFREEMAP_LIBERTY_TEXT_FONT],
+              'text-size': 12,
+              'text-offset': [0, 1.05],
+              'text-anchor': 'top',
+              'text-allow-overlap': true,
+            }}
+            paint={{
+              'text-color': '#f5f5f5',
+              'text-halo-color': '#111111',
+              'text-halo-width': 1.2,
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
+      {userMarker ? (
+        <GeoJSONSource id="attempt-user" data={userData}>
+          <Layer
+            id="user-accuracy"
+            type="fill"
+            filter={['==', ['get', 'kind'], 'user-accuracy']}
+            paint={{
+              'fill-color': ['case', ['==', ['get', 'tone'], 'last-known'], '#8b939a', '#7ee0ff'],
+              'fill-opacity': 0.16,
+            }}
+          />
+          <Layer
+            id="user-point"
+            type="circle"
+            filter={['==', ['get', 'kind'], 'user-point']}
+            paint={{
+              'circle-radius': ['case', ['==', ['get', 'tone'], 'last-known'], 6, 7],
+              'circle-color': ['case', ['==', ['get', 'tone'], 'last-known'], '#8b939a', '#7ee0ff'],
+              'circle-opacity': ['case', ['==', ['get', 'tone'], 'last-known'], 0.7, 1],
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#ffffff',
+            }}
+          />
+          <Layer
+            id="user-label"
+            type="symbol"
+            filter={['==', ['get', 'kind'], 'user-point']}
+            layout={{
+              'text-field': ['get', 'label'],
+              'text-font': ['literal', OPENFREEMAP_LIBERTY_TEXT_FONT],
+              'text-size': 12,
+              'text-offset': [0, -1.35],
+              'text-anchor': 'bottom',
+              'text-allow-overlap': true,
+            }}
+            paint={{
+              'text-color': ['case', ['==', ['get', 'tone'], 'last-known'], '#c5c8ce', '#d7f6ff'],
+              'text-halo-color': '#111111',
+              'text-halo-width': 1.2,
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
       {previewPoint ? (
         <GeoJSONSource id="ghost-preview" data={previewData}>
           <Layer
@@ -634,6 +827,14 @@ export function RouteMap({
   onMapPress,
   onWaitMarkerPress,
   cameraGesturesEnabled = true,
+  compassEnabled = true,
+  placeMarkers = [],
+  userMarker = null,
+  cameraBounds = null,
+  fitBoundsTarget = null,
+  fitBoundsToken = 0,
+  framePoints = [],
+  onUserViewportChange,
   style,
 }: RouteMapProps) {
   const [useFallback, setUseFallback] = useState(false);
@@ -653,6 +854,9 @@ export function RouteMap({
         selectedSampleId={selectedSampleId}
         officialStartPoint={officialStartPoint}
         officialFinishPoint={officialFinishPoint}
+        placeMarkers={placeMarkers}
+        userMarker={userMarker}
+        framePoints={framePoints}
       />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
       {onMapPress && !onWaitMarkerPress ? (
@@ -685,6 +889,13 @@ export function RouteMap({
             onMapPress={onMapPress}
             onWaitMarkerPress={onWaitMarkerPress}
             cameraGesturesEnabled={cameraGesturesEnabled}
+            compassEnabled={compassEnabled}
+            placeMarkers={placeMarkers}
+            userMarker={userMarker}
+            cameraBounds={cameraBounds}
+            fitBoundsTarget={fitBoundsTarget}
+            fitBoundsToken={fitBoundsToken}
+            onUserViewportChange={onUserViewportChange}
             onBasemapFailed={() => setUseFallback(true)}
           />
         </MapErrorBoundary>

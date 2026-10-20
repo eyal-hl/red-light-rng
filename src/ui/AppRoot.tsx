@@ -19,13 +19,20 @@ import {
 import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { DEFAULT_PLACE_RADIUS_METERS, placePermanentDeletionMessage, type Place } from '../domain/place';
+import {
+  sameAttemptLocationSample,
+  sameAttemptPlaces,
+  sameGpsReadiness,
+} from '../domain/attempt-live-map';
 import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
+import type { LocationSample } from '../domain/location-sample';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
 import type { RouteDerivation } from '../domain/route-derivation';
 import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
+import type { ProcessActiveAttemptResult } from '../product/attempt-runtime';
 import {
   APP_STARTUP_STAGE_LABELS,
   APP_STARTUP_WATCHDOG_MS,
@@ -171,6 +178,10 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [originName, setOriginName] = useState<string | null>(null);
   const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
   const [gpsReadiness, setGpsReadiness] = useState<GpsReadiness>(WAITING_GPS_READINESS);
+  const [latestSample, setLatestSample] = useState<LocationSample | null>(null);
+  const [effectivePlaces, setEffectivePlaces] = useState<Place[]>([]);
+  const [sampleGpsReadiness, setSampleGpsReadiness] = useState<GpsReadiness>(WAITING_GPS_READINESS);
+  const [attemptObservedAtMs, setAttemptObservedAtMs] = useState(() => Date.now());
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [journeyFocus, setJourneyFocus] = useState<JourneyFocusAnalysis | null>(null);
   const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
@@ -199,6 +210,9 @@ export function AppRoot({ workspace }: AppRootProps) {
   const headlineFocusRef = useRef<JourneyFocusAnalysis | null>(null);
   const pathViewRef = useRef<SettledPathAnalyticsView | null>(null);
   const screenRef = useRef<AppScreen>({ kind: 'loading' });
+  const showAttemptResultRef = useRef<(attempt: Attempt, signal?: AbortSignal) => Promise<void>>(
+    async () => undefined,
+  );
   useEffect(() => {
     screenRef.current = screen;
   }, [screen]);
@@ -325,28 +339,54 @@ export function AppRoot({ workspace }: AppRootProps) {
     [workspace],
   );
 
+  const publishAttemptRuntime = useCallback((processed: ProcessActiveAttemptResult): boolean => {
+    setAttemptObservedAtMs(Date.now());
+    setLatestSample((current) =>
+      sameAttemptLocationSample(current, processed.latestSample) ? current : processed.latestSample,
+    );
+    setEffectivePlaces((current) =>
+      sameAttemptPlaces(current, processed.effectivePlaces) ? current : processed.effectivePlaces,
+    );
+    setSampleGpsReadiness((current) =>
+      sameGpsReadiness(current, processed.sampleGpsReadiness) ? current : processed.sampleGpsReadiness,
+    );
+    if (!processed.attempt) {
+      return false;
+    }
+    setStartZoneStatus(processed.startZoneStatus);
+    setGpsReadiness(processed.gpsReadiness);
+    if (processed.attempt.originPlaceId) {
+      const origin = processed.effectivePlaces.find((place) => place.id === processed.attempt?.originPlaceId);
+      setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
+    } else {
+      setOriginName(processed.startZoneStatus.placeName);
+    }
+    if (processed.attempt.lifecycle === 'armed' || processed.attempt.lifecycle === 'active') {
+      setActiveAttempt(processed.attempt);
+      return true;
+    }
+    return false;
+  }, []);
+
   const showAttempt = useCallback(
     async (attempt: Attempt, signal?: AbortSignal) => {
-      if (attempt.originPlaceId) {
-        const origin = await workspace.getPlace(attempt.originPlaceId);
-        if (signal?.aborted) {
-          return;
-        }
-        setOriginName(origin?.name ?? null);
-      } else {
-        setOriginName(null);
-      }
+      const processed = await workspace.processActiveAttemptWithStartZoneStatus();
       if (signal?.aborted) {
         return;
       }
-      setActiveAttempt(attempt);
-      setStartZoneStatus(LOCATING_ZONE);
-      setGpsReadiness(WAITING_GPS_READINESS);
+      const open = publishAttemptRuntime(processed);
       attemptResultRef.current = null;
       setAttemptResult(null);
+      if (!open && processed.attempt) {
+        await showAttemptResultRef.current(processed.attempt, signal);
+        return;
+      }
+      if (!open) {
+        setActiveAttempt(attempt);
+      }
       setScreen({ kind: 'attempt' });
     },
-    [workspace],
+    [publishAttemptRuntime, workspace],
   );
 
   const showAttemptResult = useCallback(
@@ -459,6 +499,10 @@ export function AppRoot({ workspace }: AppRootProps) {
     },
     [applyPathAnalyticsUpdate, workspace],
   );
+
+  useEffect(() => {
+    showAttemptResultRef.current = (attempt, signal) => showAttemptResult(attempt, signal);
+  }, [showAttemptResult]);
 
   const applyStartupSnapshot = useCallback(
     async (snapshot: HomeSnapshot, signal?: AbortSignal) => {
@@ -576,31 +620,32 @@ export function AppRoot({ workspace }: AppRootProps) {
     if (screen.kind !== 'attempt') {
       return undefined;
     }
-    const interval = setInterval(() => {
-      void (async () => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
         const processed = await workspace.processActiveAttemptWithStartZoneStatus();
-        if (!processed.attempt) {
+        if (cancelled) {
           return;
         }
-        setStartZoneStatus(processed.startZoneStatus);
-        setGpsReadiness(processed.gpsReadiness);
-        if (processed.attempt.originPlaceId) {
-          const origin = await workspace.getPlace(processed.attempt.originPlaceId);
-          setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
-        } else {
-          setOriginName(processed.startZoneStatus.placeName);
+        const open = publishAttemptRuntime(processed);
+        if (!open && processed.attempt) {
+          await showAttemptResult(processed.attempt);
         }
-        if (processed.attempt.lifecycle === 'armed' || processed.attempt.lifecycle === 'active') {
-          setActiveAttempt(processed.attempt);
-          return;
+      } catch (caught: unknown) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : 'Could not open this result.');
         }
-        await showAttemptResult(processed.attempt);
-      })().catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : 'Could not open this result.');
-      });
+      }
+    };
+    void refresh();
+    const interval = setInterval(() => {
+      void refresh();
     }, 1000);
-    return () => clearInterval(interval);
-  }, [screen.kind, showAttemptResult, workspace]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [publishAttemptRuntime, screen.kind, showAttemptResult, workspace]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (status) => {
@@ -1876,6 +1921,10 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={activeAttempt}
           gpsReadiness={gpsReadiness}
           startZoneStatus={startZoneStatus}
+          latestSample={latestSample}
+          effectivePlaces={effectivePlaces}
+          sampleGpsReadiness={sampleGpsReadiness}
+          observedAtMs={attemptObservedAtMs}
           busy={busy}
           error={error}
           onEndAndInspect={() => {

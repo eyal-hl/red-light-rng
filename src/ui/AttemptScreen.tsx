@@ -1,9 +1,18 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
+import {
+  presentAttemptLiveMap,
+  shouldRenderAttemptMap,
+  type AttemptLiveMapLifecycle,
+} from '../domain/attempt-live-map';
 import { formatTimeOfDay } from '../domain/duration';
 import { formatGpsReadinessLabel, type GpsReadiness } from '../domain/gps-readiness';
+import type { LocationSample } from '../domain/location-sample';
+import type { Place } from '../domain/place';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
+import { AttemptLiveMap } from './AttemptLiveMap';
 import { styles } from './styles';
 
 type AttemptScreenProps = {
@@ -11,6 +20,10 @@ type AttemptScreenProps = {
   attempt: Attempt;
   gpsReadiness: GpsReadiness;
   startZoneStatus: PlaceStartZoneStatus;
+  latestSample: LocationSample | null;
+  effectivePlaces: Place[];
+  sampleGpsReadiness: GpsReadiness;
+  observedAtMs: number;
   busy: boolean;
   error: string | null;
   onEndAndInspect: () => void;
@@ -76,18 +89,41 @@ export function AttemptScreen({
   attempt,
   gpsReadiness,
   startZoneStatus,
+  latestSample,
+  effectivePlaces,
+  sampleGpsReadiness,
+  observedAtMs,
   busy,
   error,
   onEndAndInspect,
   onCancel,
 }: AttemptScreenProps) {
   const armed = attempt.lifecycle === 'armed';
+  const lifecycle: AttemptLiveMapLifecycle = attempt.lifecycle === 'active' ? 'active' : 'armed';
   const activeTitle = originName ? `${originName} → ?` : 'Journey';
   const readinessLabel = formatGpsReadinessLabel(gpsReadiness);
+  const [appState, setAppState] = useState(AppState.currentState);
+  const model = useMemo(
+    () =>
+      presentAttemptLiveMap({
+        lifecycle,
+        latestSample,
+        sampleGpsReadiness,
+        places: effectivePlaces,
+        startZoneStatus,
+        nowMs: observedAtMs,
+      }),
+    [effectivePlaces, latestSample, lifecycle, observedAtMs, sampleGpsReadiness, startZoneStatus],
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', setAppState);
+    return () => subscription.remove();
+  }, []);
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <View style={attemptStyles.header}>
         <Text style={styles.kicker}>{armed ? 'ARMED' : 'RUN ACTIVE'}</Text>
         <Text style={styles.title}>{armed ? 'Waiting for start' : activeTitle}</Text>
         {armed ? (
@@ -118,6 +154,30 @@ export function AttemptScreen({
             />
           </View>
         ) : null}
+      </View>
+      <View style={attemptStyles.mapPane}>
+        {shouldRenderAttemptMap(appState) ? (
+          <AttemptLiveMap model={model} />
+        ) : (
+          <View accessibilityLabel="Attempt map paused" style={attemptStyles.paused}>
+            <Text style={styles.mutedText}>Map paused. Recording continues.</Text>
+          </View>
+        )}
+      </View>
+      <View style={attemptStyles.footer}>
+        {model.statusNote ? (
+          <Text accessibilityLabel={model.statusNote} style={styles.mutedText}>
+            {model.statusNote}
+          </Text>
+        ) : null}
+        {model.emptyPlacesNote ? (
+          <Text accessibilityLabel="No saved places" style={styles.mutedText}>
+            {model.emptyPlacesNote}
+          </Text>
+        ) : null}
+        {model.distantPlacesNote ? (
+          <Text style={styles.mutedText}>{model.distantPlacesNote}</Text>
+        ) : null}
         <Text style={styles.mutedText}>You can lock your phone and put it in your pocket.</Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.actions}>
@@ -138,16 +198,39 @@ export function AttemptScreen({
             <Text style={styles.buttonText}>Cancel</Text>
           </Pressable>
         </View>
-      </ScrollView>
+      </View>
     </View>
   );
 }
 
 const attemptStyles = StyleSheet.create({
+  header: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+  },
+  footer: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  mapPane: {
+    flex: 1,
+    minHeight: 180,
+    marginHorizontal: 20,
+    marginBottom: 8,
+  },
+  paused: {
+    flex: 1,
+    minHeight: 180,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1c2430',
+    paddingHorizontal: 16,
+  },
   statusBlock: {
     gap: 10,
     marginTop: -4,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   statusRow: {
     flexDirection: 'row',

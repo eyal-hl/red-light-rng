@@ -46,13 +46,13 @@ Eventually, the ideal experience is almost invisible during travel: **travel nor
 - Cloud sync or a backend.
 - Monetization or commercial product requirements.
 - Live navigation.
-- A large live dashboard, speedometer, or interaction-heavy run screen.
+- A large live dashboard, speedometer, or interaction-heavy run screen. A passive location map is allowed; see DEC-002.
 - AI-generated coaching as a prerequisite for useful insights.
 - Fully automatic recognition with no START in V0.1.
 
 ## Product constraints
 
-- The phone is expected to remain in the user's pocket while moving.
+- The phone is expected to remain in the user's pocket while moving. An optional map may show the current location and saved places while armed or active. During an active attempt it is passive and non-interactive, and it is never required to start, finish, cancel, or understand the official result.
 - The app must support background location recording during an armed/active attempt.
 - Timing, splits, and analytics must be derivable locally.
 - Raw GPS samples should be retained so splits and analytics can be recalculated later.

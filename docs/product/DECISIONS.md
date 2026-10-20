@@ -23,7 +23,8 @@ This is a personal-use project. A backend would add complexity without improving
 ## DEC-002 — No meaningful live-run UX
 
 **Status:** Accepted  
-**Date:** 2026-08-14
+**Date:** 2026-08-14  
+**Updated:** 2026-10-20
 
 ### Decision
 The phone is expected to remain in the user's pocket during an attempt. The active-run screen exists primarily for status/cancellation, not for live timing, navigation, or interaction.
@@ -35,6 +36,14 @@ The initial use case is travel by electric scooter. The product should not requi
 - Start, splits, and finish must be detected automatically after arming.
 - The main product reward happens in post-run analysis.
 - Features must not rely on active-run button presses.
+
+### Clarification — passive attempt map
+An optional map of the latest canonical location sample and saved places is allowed. This is a limited addition to the phone-in-pocket rule, not a reversal of it.
+
+- While **armed**, the user is stationary. The map may be panned, zoomed, and recentered. Start-zone status, Cancel, and End & Inspect stay as they are.
+- While **active**, the map is passive and glance-only. It has no pan, zoom, recenter, or navigation controls. Starting, finishing, cancelling, inspecting, and official timing must not depend on viewing or tapping the map.
+- Backgrounding the app or locking the screen unmounts the rendered map. Background location recording and the attempt engine keep running. Returning to the foreground remounts the map from the current runtime result without opening another location watcher.
+- There is still no live timing dashboard, turn-by-turn navigation, or required active-run interaction.
 
 ---
 
@@ -216,7 +225,7 @@ Reliable background telemetry is the highest-risk technical assumption in the pr
 
 **Status:** Accepted  
 **Date:** 2026-08-15  
-**Updated:** 2026-08-15
+**Updated:** 2026-10-20
 
 ### Decision
 Use **MapLibre React Native** as the initial map renderer for route review/detail, with the **OpenFreeMap Liberty** hosted style as the initial street-level basemap source:
@@ -236,5 +245,6 @@ Route review is the first feature that genuinely needs a street-level map. Choos
 - Route recording, persistence, reference-course derivation, save/delete behavior, and analysis must not depend on map availability or network access.
 - V0.1 does **not** require offline basemap/tile-pack management.
 - If the style/tiles are unavailable, the review/detail surface should still render the route path and start/finish-zone geometry in a local fallback/no-basemap presentation when practical, and must still allow saving/deleting route data.
+- The armed/active attempt map may request the same OpenFreeMap Liberty style and tiles near the live location. That is a location-centered basemap request under this decision. Recording, timing, and attempt controls must still work when those tiles cannot load.
 - Physical validation should include a tiles-unavailable/airplane-mode check proving that route data and local geometry remain usable even when the street basemap cannot load.
 - Replacing MapLibre or the hosted style source later should not require rewriting domain logic.

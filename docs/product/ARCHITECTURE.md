@@ -47,7 +47,7 @@ The initial application is a single local-first mobile system with several conce
 7. **Timing engine** — path-free place start/finish plus optional variant checkpoint crossings re-anchored to the journey window.
 8. **Analytics engine** — journey PBs/ranking always; Gold/Sum-of-Best/ghost/wait when a compatible variant exists.
 9. **Local persistence** — stores places, settings, routes, runs/recordings, raw telemetry, and derived/cached results in SQLite.
-10. **UI** — place/settings management and journey analysis before/after a run. Active-run UI should remain minimal.
+10. **UI** — place/settings management and journey analysis before/after a run. Active-run UI should remain minimal. An optional passive map of the latest canonical location sample and saved places may render during armed/active attempts. It is not required to operate the attempt, and it unmounts when the app is backgrounded or the screen is locked.
 11. **Map rendering** — renders project-owned geometry through an isolated `RouteMap`-style boundary; map-SDK types must not leak into domain/persistence/timing code.
 
 These are conceptual boundaries, not a requirement to create nine modules immediately.
@@ -108,7 +108,8 @@ Use MapLibre React Native initially for route review/detail, behind a project-ow
 - `LatLng[]` / reference path;
 - start/end zones;
 - later checkpoints;
-- optional display metadata.
+- optional display metadata;
+- an attempt's latest location sample and saved-place markers, rendered as project-owned layers rather than a map-SDK user-location provider.
 
 MapLibre coordinates, sources, layers, camera objects, and other SDK-specific types must remain UI implementation details.
 
