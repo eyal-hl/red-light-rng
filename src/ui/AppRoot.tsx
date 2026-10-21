@@ -26,6 +26,9 @@ import type { RouteDerivation } from '../domain/route-derivation';
 import type { RouteCompetitiveSummary } from '../domain/attempt-analysis';
 import { IDLE_TRACKING_STATE, type TrackingState } from '../domain/tracking-state';
 import type { TrackingSessionRecord } from '../persistence/location-sample-store';
+import type { BackupPreview } from '../persistence/backup-document';
+import { pickBackupFileText, shareBackupFile } from '../platform/backup-files';
+import type { LocalBackupService } from '../product/local-backup';
 import {
   APP_STARTUP_STAGE_LABELS,
   APP_STARTUP_WATCHDOG_MS,
@@ -122,6 +125,7 @@ type AppScreen =
 
 type AppRootProps = {
   workspace: RouteWorkspace;
+  backup: LocalBackupService;
 };
 
 function JourneyLoadingShell({ onBack, error }: { onBack: () => void; error?: string | null }) {
@@ -137,7 +141,7 @@ function JourneyLoadingShell({ onBack, error }: { onBack: () => void; error?: st
   );
 }
 
-export function AppRoot({ workspace }: AppRootProps) {
+export function AppRoot({ workspace, backup }: AppRootProps) {
   const [screen, setScreen] = useState<AppScreen>({ kind: 'loading' });
   const [places, setPlaces] = useState<Place[]>([]);
   const [journeys, setJourneys] = useState<JourneyPoolSummary[]>([]);
@@ -179,6 +183,8 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [restorePreview, setRestorePreview] = useState<BackupPreview | null>(null);
+  const [restoreText, setRestoreText] = useState<string | null>(null);
   const [failedReconciliationAttemptId, setFailedReconciliationAttemptId] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
   const [startupNonce, setStartupNonce] = useState(0);
@@ -1603,6 +1609,67 @@ export function AppRoot({ workspace }: AppRootProps) {
     screen.kind,
   ]);
 
+  const onExportBackup = () => {
+    void (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const exported = await backup.exportBackup();
+        await shareBackupFile(exported.text, exported.createdAtMs);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not export a backup.');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const onPickRestore = () => {
+    void (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const text = await pickBackupFileText();
+        if (text == null) {
+          return;
+        }
+        const preview = backup.previewBackup(text);
+        setRestoreText(text);
+        setRestorePreview(preview);
+      } catch (caught) {
+        setRestoreText(null);
+        setRestorePreview(null);
+        setError(caught instanceof Error ? caught.message : 'Could not read that backup.');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const onConfirmReplace = () => {
+    if (!restoreText) {
+      return;
+    }
+    void (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        await backup.restoreBackup(restoreText);
+        setRestoreText(null);
+        setRestorePreview(null);
+        await workspace.recomputePathVariants({ skipIfUnchanged: false });
+        await workspace.reconcilePendingAttempts();
+        await refreshHome();
+        const mode = await workspace.getActiveTransportationMode();
+        setActiveMode(mode);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not restore that backup.');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
   const resultTitle = journeyFocus?.summary.title ?? originName ?? 'Attempt';
   const journeyPoolForSnapshot =
     screen.kind === 'journey' || screen.kind === 'history' ? screen.pool : null;
@@ -1777,7 +1844,16 @@ export function AppRoot({ workspace }: AppRootProps) {
           mode={activeMode}
           busy={busy}
           error={error}
+          restorePreview={restorePreview}
           onBack={leaveToHome}
+          onExportBackup={onExportBackup}
+          onPickRestore={onPickRestore}
+          onConfirmReplace={onConfirmReplace}
+          onCancelRestore={() => {
+            setRestorePreview(null);
+            setRestoreText(null);
+            setError(null);
+          }}
           onChangeMode={(mode) => {
             void (async () => {
               await workspace.setActiveTransportationMode(mode);

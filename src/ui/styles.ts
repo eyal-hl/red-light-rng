@@ -191,6 +191,9 @@ export const styles = StyleSheet.create({
   disabledButton: {
     opacity: 0.45,
   },
+  stackedButton: {
+    marginTop: 12,
+  },
   buttonText: {
     color: '#ffffff',
     fontSize: 16,

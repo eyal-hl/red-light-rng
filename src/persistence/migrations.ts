@@ -595,9 +595,9 @@ export async function applyMigrations(sql: SqlExecutor, nowMs: number = Date.now
     if (migration.version <= version) {
       continue;
     }
-    await sql.withTransaction(async () => {
-      await migration.up(sql, nowMs);
-      await sql.exec(`PRAGMA user_version = ${migration.version}`);
+    await sql.withTransaction(async (tx) => {
+      await migration.up(tx, nowMs);
+      await tx.exec(`PRAGMA user_version = ${migration.version}`);
     });
     version = migration.version;
   }

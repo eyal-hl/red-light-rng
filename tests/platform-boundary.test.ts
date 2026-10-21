@@ -78,6 +78,11 @@ describe('platform boundary', () => {
       'src/ui/PlacesScreen.tsx',
       'src/ui/PlaceEditorScreen.tsx',
       'src/ui/SettingsScreen.tsx',
+      'src/domain/sha256.ts',
+      'src/persistence/backup-document.ts',
+      'src/persistence/backup-store.ts',
+      'src/product/local-backup.ts',
+      'src/platform/backup-files.ts',
     ];
 
     for (const file of sharedFiles) {

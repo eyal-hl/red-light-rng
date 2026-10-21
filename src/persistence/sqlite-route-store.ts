@@ -38,15 +38,15 @@ export class SqliteRouteStore implements RouteStore {
 
   async createRoute(route: Route): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      const existing = await sql.getFirst<{ id: string }>(
+    await sql.withTransaction(async (tx) => {
+      const existing = await tx.getFirst<{ id: string }>(
         'SELECT id FROM route WHERE source_recording_id = ?',
         [route.sourceRecordingId],
       );
       if (existing) {
         return;
       }
-      await sql.run(
+      await tx.run(
         `INSERT INTO route (
            id, name, transportation_mode, created_at_ms, source_recording_id,
            start_latitude, start_longitude, start_radius_meters,
@@ -74,12 +74,12 @@ export class SqliteRouteStore implements RouteStore {
         ],
       );
       for (const [index, point] of route.referencePath.entries()) {
-        await sql.run(
+        await tx.run(
           `INSERT INTO route_reference_point (route_id, seq, latitude, longitude) VALUES (?, ?, ?, ?)`,
           [route.id, index, point.latitude, point.longitude],
         );
       }
-      await this.replaceCheckpoints(sql, route.id, route.checkpoints);
+      await this.replaceCheckpoints(tx, route.id, route.checkpoints);
     });
   }
 
@@ -106,12 +106,12 @@ export class SqliteRouteStore implements RouteStore {
 
   async replaceCourseLayout(routeId: string, layout: CourseLayout): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      const existing = await sql.getFirst<{ id: string }>('SELECT id FROM route WHERE id = ?', [routeId]);
+    await sql.withTransaction(async (tx) => {
+      const existing = await tx.getFirst<{ id: string }>('SELECT id FROM route WHERE id = ?', [routeId]);
       if (!existing) {
         throw new Error(`Route not found: ${routeId}`);
       }
-      await sql.run(
+      await tx.run(
         `UPDATE route SET
            start_latitude = ?,
            start_longitude = ?,
@@ -134,7 +134,7 @@ export class SqliteRouteStore implements RouteStore {
           routeId,
         ],
       );
-      await this.replaceCheckpoints(sql, routeId, layout.checkpoints);
+      await this.replaceCheckpoints(tx, routeId, layout.checkpoints);
     });
   }
 

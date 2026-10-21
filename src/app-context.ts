@@ -5,6 +5,7 @@ import { SqlitePlaceStore } from './persistence/sqlite-place-store';
 import { SqliteRouteStore } from './persistence/sqlite-route-store';
 import { SqliteSettingsStore } from './persistence/sqlite-settings-store';
 import { AttemptRuntime } from './product/attempt-runtime';
+import { LocalBackupService } from './product/local-backup';
 import { RouteWorkspace } from './product/route-workspace';
 import { createExpoLocationPlatform } from './tracking/expo-location-platform';
 import { SharedLocationTracker } from './tracking/shared-location-tracker';
@@ -39,4 +40,9 @@ export const routeWorkspace = new RouteWorkspace(
   placeStore,
   settingsStore,
   locationPlatform,
+);
+export const localBackupService = new LocalBackupService(
+  getSqlExecutor,
+  () => locationTracker.stopLocationUpdates(),
+  () => routeWorkspace.invalidateDerivedViews(),
 );
