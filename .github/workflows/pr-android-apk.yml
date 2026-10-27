@@ -90,11 +90,36 @@ jobs:
           BT="$(ls -d "${ANDROID_HOME:?}"/build-tools/*/ | sort -V | tail -n 1)"
           APK="$GITHUB_WORKSPACE/artifacts/$APK_FILE"
           "${BT}aapt2" dump badging "$APK" > "$RUNNER_TEMP/badging.txt"
-          "${BT}apksigner" verify --print-certs "$APK" > "$RUNNER_TEMP/certs.txt"
+          # Public certificate info only (DN and digests are embedded in every distributed APK).
+          # Capture the exit code so the output is always logged, then fail the step as before.
+          APKSIGNER_RC=0
+          "${BT}apksigner" verify -v --print-certs "$APK" > "$RUNNER_TEMP/certs.txt" 2> "$RUNNER_TEMP/certs.err" || APKSIGNER_RC=$?
+          echo "::group::aapt2 package line (public badging info, non-secret)"
+          grep '^package:' "$RUNNER_TEMP/badging.txt" || true
+          echo "::endgroup::"
+          echo "::group::apksigner output (public certificate info, non-secret)"
+          echo "--- certs.txt ---"
+          cat "$RUNNER_TEMP/certs.txt"
+          echo "--- certs.err ---"
+          cat "$RUNNER_TEMP/certs.err"
+          echo "::endgroup::"
+          if [ "$APKSIGNER_RC" -ne 0 ]; then
+            echo "::error::apksigner verify exited $APKSIGNER_RC"
+            exit "$APKSIGNER_RC"
+          fi
+          # Fallback only when apksigner printed no signer digest line (ignoring Source Stamp lines).
+          DIGEST_LINES="$(grep -i 'certificate SHA-256 digest:' "$RUNNER_TEMP/certs.txt" | grep -vi 'source stamp' || true)"
+          if [ -z "$DIGEST_LINES" ]; then
+            keytool -printcert -jarfile "$APK" > "$RUNNER_TEMP/keytool.txt" 2>&1 || true
+            echo "::group::keytool output (public certificate info, non-secret; fallback)"
+            cat "$RUNNER_TEMP/keytool.txt"
+            echo "::endgroup::"
+          fi
           node scripts/apk-provenance.mjs verify \
             --event "$GITHUB_EVENT_PATH" \
             --badging "$RUNNER_TEMP/badging.txt" \
             --certs "$RUNNER_TEMP/certs.txt" \
+            --keytool "$RUNNER_TEMP/keytool.txt" \
             --checked-out-sha "$(git rev-parse HEAD)" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --out-dir "$GITHUB_WORKSPACE/artifacts"

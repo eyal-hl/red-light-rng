@@ -1,6 +1,6 @@
 // Pure provenance logic for the Android PR APK workflow, plus a small CLI the
 // workflow calls. No network, no EAS, no keys: it only reads tool output text.
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 
@@ -65,15 +65,42 @@ export function fingerprintsMatch(a, b) {
   return isSha256Hex(a) && isSha256Hex(b) && normalizeFingerprint(a) === normalizeFingerprint(b);
 }
 
-/** Parse `apksigner verify --print-certs`: distinct SHA-256 signer digests, and whether it reported failure. */
+/**
+ * Parse `apksigner verify -v --print-certs`: distinct SHA-256 signer digests, and whether it reported failure.
+ * Any line with a "certificate SHA-256 digest:" label counts (any prefix such as `Signer #1` or
+ * `Signer (minSdkVersion=24, ...)`, any indentation, CRLF). Source Stamp lines are not the signing identity
+ * and are ignored. The digest value itself is strict: a non-hex value stays malformed and fails validate().
+ */
 export function parseCerts(text) {
   const src = String(text ?? '');
   const digests = [];
-  for (const m of src.matchAll(/^Signer\b[^\n]*?certificate SHA-256 digest:\s*([0-9a-fA-F: ]+?)\s*$/gm)) {
-    const fp = normalizeFingerprint(m[1]);
+  for (const raw of src.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/source\s*stamp/i.test(line)) continue;
+    const label = /certificate SHA-256 digest:/i.exec(line);
+    if (!label) continue;
+    const fp = normalizeFingerprint(line.slice(label.index + label[0].length));
     if (!digests.includes(fp)) digests.push(fp);
   }
   return { sha256: digests, verifyFailed: /DOES NOT VERIFY/i.test(src) };
+}
+
+/** Parse `keytool -printcert -jarfile` output (fallback only): the `SHA256: AA:BB:...` fingerprint lines. */
+export function parseKeytoolCerts(text) {
+  const digests = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const m = /^\s*SHA256:\s*(.*?)\s*$/i.exec(raw);
+    if (!m) continue;
+    const fp = normalizeFingerprint(m[1]);
+    if (!digests.includes(fp)) digests.push(fp);
+  }
+  return { sha256: digests, verifyFailed: false };
+}
+
+/** Use keytool's digests only when apksigner produced none. Other checks still apply in validate(). */
+export function selectCerts(apkCerts, keytoolCerts) {
+  if (apkCerts.sha256.length > 0 || !keytoolCerts) return apkCerts;
+  return { sha256: keytoolCerts.sha256, verifyFailed: apkCerts.verifyFailed };
 }
 
 /** Parse `eas build:version:get --json` output; undefined when no numeric remote versionCode. */
@@ -222,7 +249,12 @@ export function main(argv, env = process.env, log = console) {
       const headSha = resolveHeadSha(event);
       const prNumber = resolvePrNumber(event);
       const badging = parseBadging(readText(args.badging));
-      const certs = parseCerts(readText(args.certs));
+      const apkCerts = parseCerts(readText(args.certs));
+      // keytool is consulted only when apksigner printed no digest; a missing keytool file counts as no digest.
+      const keytoolText = apkCerts.sha256.length === 0 && args.keytool
+        ? (existsSync(args.keytool) ? readText(args.keytool) : '')
+        : undefined;
+      const certs = selectCerts(apkCerts, keytoolText === undefined ? undefined : parseKeytoolCerts(keytoolText));
       const expectedFingerprint = (env.EXPECTED_ANDROID_CERT_SHA256 ?? '').trim();
       const errors = validate({ badging, certs, headSha, checkedOutSha: args['checked-out-sha'], expectedFingerprint });
       if (errors.length) {

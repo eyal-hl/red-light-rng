@@ -200,3 +200,126 @@ test('CLI check-checkout rejects the merge commit', () => {
   assert.equal(runCli(['check-checkout', '--event', evPath, '--actual', HEAD]).code, 0);
   assert.equal(runCli(['check-checkout', '--event', evPath, '--actual', MERGE]).code, 1);
 });
+
+// ---- repair round 1: real apksigner verbose output, keytool fallback -------
+
+const REAL_VERBOSE = [
+  'Verifies',
+  'Verified using v1 scheme (JAR signing): false',
+  'Verified using v2 scheme (APK Signature Scheme v2): true',
+  'Verified using v3 scheme (APK Signature Scheme v3): true',
+  'Verified using v3.1 scheme (APK Signature Scheme v3.1): false',
+  'Verified using v4 scheme (APK Signature Scheme v4): false',
+  'Verified for SourceStamp: false',
+  'Number of signers: 1',
+  'Signer #1 certificate DN: CN=Red Light RNG, OU=Mobile, O=Red Light RNG, L=Tel Aviv, ST=Central, C=IL',
+  `Signer #1 certificate SHA-256 digest: ${FP}`,
+  'Signer #1 certificate SHA-1 digest: 0123456789abcdef0123456789abcdef01234567',
+  'Signer #1 certificate MD5 digest: 0123456789abcdef0123456789abcdef',
+  'Signer #1 key algorithm: RSA',
+  'Signer #1 key size (bits): 2048',
+].join('\n') + '\n';
+
+test('parseCerts reads realistic verbose apksigner output (-v --print-certs)', () => {
+  const certs = p.parseCerts(REAL_VERBOSE);
+  assert.deepEqual(certs.sha256, [FP]);
+  assert.equal(certs.verifyFailed, false);
+  assert.deepEqual(p.validate({ ...good(), certs }), []);
+});
+
+test('parseCerts accepts uppercase colon-separated digests', () => {
+  assert.deepEqual(p.parseCerts(`Signer #1 certificate SHA-256 digest: ${FP_COLON}\n`).sha256, [FP]);
+  assert.deepEqual(p.parseCerts(`Signer #1 certificate SHA-256 digest: ${FP.toUpperCase()}\n`).sha256, [FP]);
+});
+
+test('parseCerts accepts Signer (...) prefixes, leading whitespace, and label case', () => {
+  assert.deepEqual(p.parseCerts(`Signer (minSdkVersion=24, maxSdkVersion=36) certificate SHA-256 digest: ${FP}\n`).sha256, [FP]);
+  assert.deepEqual(p.parseCerts(`Signer #1 (minSdkVersion=24) certificate SHA-256 digest: ${FP}\n`).sha256, [FP]);
+  assert.deepEqual(p.parseCerts(`    Signer #1 certificate SHA-256 digest: ${FP}\n`).sha256, [FP]);
+  assert.deepEqual(p.parseCerts(`Signer #1 Certificate Sha-256 Digest: ${FP}\n`).sha256, [FP]);
+});
+
+test('parseCerts handles CRLF line endings', () => {
+  const crlf = REAL_VERBOSE.replace(/\n/g, '\r\n');
+  assert.deepEqual(p.parseCerts(crlf).sha256, [FP]);
+  assert.equal(p.parseCerts(`DOES NOT VERIFY\r\n${crlf}`).verifyFailed, true);
+});
+
+test('parseCerts ignores Source Stamp signer digests', () => {
+  const other = 'e'.repeat(64);
+  const stamped = `${REAL_VERBOSE}Source Stamp Signer certificate SHA-256 digest: ${other}\n` +
+    `Source Stamp Signer (minSdkVersion=24) certificate SHA-256 digest: ${other}\n`;
+  assert.deepEqual(p.parseCerts(stamped).sha256, [FP]);
+  assert.deepEqual(p.validate({ ...good(), certs: p.parseCerts(stamped) }), []);
+});
+
+test('parseCerts keeps a malformed digest malformed (fail-closed)', () => {
+  const bad = p.parseCerts('Signer #1 certificate SHA-256 digest: zz-not-hex\n');
+  assert.ok(p.validate({ ...good(), certs: bad }).some((e: string) => e.includes('malformed')));
+  const short = p.parseCerts('Signer #1 certificate SHA-256 digest: 0a1b2c\n');
+  assert.ok(p.validate({ ...good(), certs: short }).some((e: string) => e.includes('malformed')));
+  const empty = p.parseCerts('Signer #1 certificate SHA-256 digest:\n');
+  assert.ok(p.validate({ ...good(), certs: empty }).length > 0);
+});
+
+const KEYTOOL_OUT = [
+  'Owner: CN=Red Light RNG, OU=Mobile, O=Red Light RNG, L=Tel Aviv, ST=Central, C=IL',
+  'Issuer: CN=Red Light RNG, OU=Mobile, O=Red Light RNG, L=Tel Aviv, ST=Central, C=IL',
+  'Certificate fingerprints:',
+  '\t SHA1: 01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67',
+  `\t SHA256: ${FP_COLON.toUpperCase()}`,
+  'Signature algorithm name: SHA256withRSA',
+].join('\r\n') + '\r\n';
+
+test('parseKeytoolCerts reads SHA256 fingerprint lines', () => {
+  assert.deepEqual(p.parseKeytoolCerts(KEYTOOL_OUT).sha256, [FP]);
+  assert.deepEqual(p.parseKeytoolCerts('').sha256, []);
+  assert.deepEqual(p.parseKeytoolCerts('keytool error: java.lang.Exception: no certs').sha256, []);
+});
+
+test('selectCerts uses keytool only when apksigner gave no digest', () => {
+  const none = p.parseCerts('Verifies\n');
+  const fromKeytool = p.selectCerts(none, p.parseKeytoolCerts(KEYTOOL_OUT));
+  assert.deepEqual(fromKeytool.sha256, [FP]);
+  assert.deepEqual(p.validate({ ...good(), certs: fromKeytool }), []);
+  const apk = p.parseCerts(REAL_VERBOSE);
+  assert.deepEqual(p.selectCerts(apk, p.parseKeytoolCerts(`SHA256: ${'f'.repeat(64)}`)).sha256, [FP]);
+});
+
+test('keytool fallback keeps the exactly-one-distinct rule and empty output still fails', () => {
+  const none = p.parseCerts('Verifies\n');
+  const two = p.parseKeytoolCerts(`SHA256: ${FP}\nSHA256: ${'f'.repeat(64)}\n`);
+  assert.ok(p.validate({ ...good(), certs: p.selectCerts(none, two) }).some((e: string) => e.includes('distinct')));
+  const empty = p.selectCerts(none, p.parseKeytoolCerts(''));
+  assert.ok(p.validate({ ...good(), certs: empty }).some((e: string) => e.includes('could not be extracted')));
+  const verifyFailed = p.selectCerts(p.parseCerts('DOES NOT VERIFY\n'), p.parseKeytoolCerts(KEYTOOL_OUT));
+  assert.ok(p.validate({ ...good(), certs: verifyFailed }).some((e: string) => e.includes('does not verify')));
+});
+
+test('CLI verify: apksigner without digest falls back to keytool file; empty keytool still fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'apk-prov-'));
+  const evPath = join(dir, 'event.json');
+  writeFileSync(evPath, JSON.stringify(event));
+  const noDigest = join(dir, 'certs-nodigest.txt');
+  writeFileSync(noDigest, 'Verifies\nVerified using v2 scheme (APK Signature Scheme v2): true\n');
+  const keytoolOk = join(dir, 'keytool-ok.txt');
+  writeFileSync(keytoolOk, KEYTOOL_OUT);
+  const keytoolEmpty = join(dir, 'keytool-empty.txt');
+  writeFileSync(keytoolEmpty, 'keytool error: no certificates\n');
+  const base = [
+    'verify', '--event', evPath,
+    '--badging', join(__dirname, 'fixtures/apk/badging.txt'),
+    '--run-url', 'https://example.invalid/run/1',
+    '--checked-out-sha', HEAD,
+  ];
+  const ok = runCli([...base, '--certs', noDigest, '--keytool', keytoolOk, '--out-dir', join(dir, 'ok')]);
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'ok/apk-provenance.json'), 'utf8')).certSha256, FP);
+
+  assert.equal(runCli([...base, '--certs', noDigest, '--keytool', keytoolEmpty]).code, 1);
+  assert.equal(runCli([...base, '--certs', noDigest]).code, 1);
+  assert.equal(runCli([...base, '--certs', noDigest, '--keytool', join(dir, 'missing.txt')]).code, 1);
+  // apksigner digest present: keytool is not consulted, even if it disagrees.
+  assert.equal(runCli([...base, '--certs', join(__dirname, 'fixtures/apk/certs.txt'), '--keytool', keytoolOk, '--out-dir', join(dir, 'pref')]).code, 0);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'pref/apk-provenance.json'), 'utf8')).certSha256, FP);
+});
