@@ -114,6 +114,8 @@ MapLibre coordinates, sources, layers, camera objects, and other SDK-specific ty
 
 Basemap/style/tile availability must not become a dependency of route recording, local persistence, route derivation, or analysis. V0.1 does not require offline tile packs. If map resources cannot load, route data must remain safe/saveable and the UI should clearly degrade rather than losing product state.
 
+The attempt map (`src/map/AttemptLiveMap.tsx`) is a read-only consumer of the attempt engine's own snapshot (`ProcessActiveAttemptResult.liveMap`: latest persisted sample and the exact `placesForAttempt` set from the same call). It must not add a location watcher, current-position poll, MapLibre user-location provider, extra place query or extra session. Its pure policy (marker freshness, viewport, camera, interactivity, visibility) lives in `src/domain/attempt-live-map.ts`. While displayed, OpenFreeMap tile requests expose the live vicinity to that service.
+
 ## Route matching
 
 A route is not an exact sequence of GPS coordinates. GPS measurements vary between attempts.

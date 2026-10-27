@@ -47,6 +47,8 @@ or
 OUTSIDE START ZONE
 ```
 
+The armed screen also shows a map of the current position and all effective saved places, each with its name and configured detection radius. The user may pan, zoom and recenter; the camera is fitted once (current position plus up to 3 nearest places within 3 km) and is never forced back after the user moves it. The position marker is solid only when the fix is at most 15 seconds old and its reported accuracy passes the engine's 45 m gate; an unreported accuracy is accepted, as the engine accepts it, and the caption then says `accuracy unknown`; a poorer or older fix is shown as a muted last-known position with its accuracy and age, and with no fix the map says it is waiting. A place is highlighted as in-zone only when the start-zone status above is `IN START ZONE`, never while it is `LOCATING…`. Missing GPS, denied permission, no saved places, or unavailable map tiles never block Cancel, End & Inspect or recording.
+
 Overlapping places pick the nearest center, then the lowest stable place id. The candidate is re-evaluated on every accepted sample until a qualifying departure pins the origin.
 
 Start detection is path-free:
@@ -76,6 +78,8 @@ Started automatically at 08:42:13
 ```
 
 No destination is predicted. Do not make the run depend on a live timer, split deltas, checkpoint buttons, a visible map, or a manual stop.
+
+The active screen may additionally show an optional, passive, non-interactive, non-required glance map of the current position and saved places (no gestures, no controls, not a reason to handle the phone while moving). It is unmounted while the app is backgrounded or the screen is locked and remounts from the persisted state on resume; the phone-in-pocket flow is unchanged.
 
 The app records location in the background. Path divergence must not fail the attempt as the wrong route.
 
