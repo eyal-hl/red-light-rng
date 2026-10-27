@@ -1,0 +1,4 @@
+Signer #1 certificate DN: CN=Android, OU=Android, O=Google Inc., L=Mountain View, ST=California, C=US
+Signer #1 certificate SHA-256 digest: 0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9
+Signer #1 certificate SHA-1 digest: 0123456789abcdef0123456789abcdef01234567
+Signer #1 certificate MD5 digest: 0123456789abcdef0123456789abcdef

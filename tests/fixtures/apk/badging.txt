@@ -1,0 +1,5 @@
+package: name='com.redlightrng.app' versionCode='7' versionName='0.1.0' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'
+sdkVersion:'24'
+targetSdkVersion:'36'
+uses-permission: name='android.permission.ACCESS_FINE_LOCATION'
+application-label:'Red Light RNG'

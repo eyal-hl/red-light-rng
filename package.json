@@ -11,7 +11,8 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "build": "expo export --platform android --platform ios --output-dir dist"
+    "build": "expo export --platform android --platform ios --output-dir dist",
+    "apk:dry-run": "node scripts/apk-provenance.mjs verify --event tests/fixtures/apk/event.json --badging tests/fixtures/apk/badging.txt --certs tests/fixtures/apk/certs.txt --checked-out-sha 1111111111111111111111111111111111111111 --run-url https://example.invalid/dry-run"
   },
   "dependencies": {
     "@maplibre/maplibre-react-native": "^11.3.6",
