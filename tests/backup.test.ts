@@ -322,6 +322,38 @@ describe('backup format and deterministic serialization', () => {
 });
 
 describe('backup round trips', () => {
+  it('exports and restores fractional official and checkpoint times from real GPS interpolation unchanged', async () => {
+    // Real place/route crossing interpolation produces fractional milliseconds. SQLite stores
+    // these as REAL even in INTEGER-affinity columns; export must not reject or round them.
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    await source.run(
+      "UPDATE attempt SET started_at_ms = started_at_ms + 0.375, finished_at_ms = finished_at_ms + 0.625 WHERE id = 'attempt-complete'",
+    );
+    await source.run(
+      "UPDATE attempt_checkpoint_crossing SET crossed_at_ms = crossed_at_ms + 0.125 WHERE attempt_id = 'attempt-complete'",
+    );
+    const original = await source.getFirst<{ started_at_ms: number; finished_at_ms: number }>(
+      "SELECT started_at_ms, finished_at_ms FROM attempt WHERE id = 'attempt-complete'",
+    );
+    assert.ok(original);
+    assert.equal(original.started_at_ms % 1, 0.375);
+    assert.equal(original.finished_at_ms % 1, 0.625);
+
+    const fileText = await exportText(source);
+    const { payload } = parseBackup(fileText);
+    const attempt = payload.attempts.find((item) => item.id === 'attempt-complete');
+    assert.ok(attempt);
+    assert.equal(attempt.started_at_ms, original.started_at_ms);
+    assert.equal(attempt.finished_at_ms, original.finished_at_ms);
+    assert.ok(attempt.crossings.length > 0);
+    assert.ok(attempt.crossings.some((crossing) => crossing.crossed_at_ms % 1 === 0.125));
+
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, payload);
+    assert.equal(await exportText(target), fileText, 'no timestamp rounding or history loss');
+  });
+
   it('round-trips a clean install, replacing existing data with an empty history', async () => {
     const empty = await openMigratedDb();
     const text = await exportText(empty);
