@@ -151,20 +151,22 @@ The data is structured and the useful first insights are deterministic. AI would
 
 ---
 
-## DEC-009 — Human gates remain before build and merge
+## DEC-009 — Owner authorization before coding and merge
 
-**Status:** Accepted  
+**Status:** Accepted (updated 2026-10-27)  
 **Date:** 2026-08-14
 
 ### Decision
-The autonomous development workflow keeps two explicit human gates: approve the product ticket before Cursor implementation begins, and approve/merge the resulting PR after automated review and QA.
+Two owner decisions are preserved: authorization to implement a defined product goal, and approval to merge the resulting change. **Implementation authorization may be granted in the original explicit "implement this" request**, recorded as a genuine owner-authored `[AUTO-RUN AUTHORIZED]` GitHub issue comment before applying the `proposal` label. This delegates bounded specification reconciliation and later implementation only after an independent current-version Disagreer PASS. No second redundant approval is needed.
+
+For ticket-only or brainstorming requests no implementation authority exists: the autonomous planning loop may challenge and reconcile safely but stops at READY FOR OWNER APPROVAL. New material scope, product choices, privacy/security risks or destructive changes require fresh owner authorization.
 
 ### Why
-The goal is autonomous execution, not autonomous product direction or uncontrolled merging.
+Keep autonomous delivery from creating unrequested code while removing unnecessary repeated approvals.
 
 ### Consequences
-- Brainstorming in ChatGPT can become a GitHub proposal without immediately triggering code.
-- An explicit approval action/label/comment is required to start implementation.
+- `proposal` labels alone never authorize code; trusted author, time and issue-specific scope matter.
+- A passed issue revision is identified with SHA-256 of the exact GitHub title and body.
 - Automated agents must not merge to the default branch.
 
 ---
