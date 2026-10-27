@@ -280,6 +280,11 @@ type FieldCheck = (value: unknown) => boolean;
 const isString: FieldCheck = (value) => typeof value === 'string';
 const isNonEmptyString: FieldCheck = (value) => typeof value === 'string' && value.length > 0;
 const isTimestamp: FieldCheck = (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+// Place and route crossing times are interpolated between GPS samples and legitimately have
+// fractional milliseconds. Preserve their exact values rather than rounding away official
+// start/finish times. Other schema timestamps and integer counters retain stricter checks.
+const isInterpolatedTimestamp: FieldCheck = (value) =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const isNonNegativeInt: FieldCheck = isTimestamp;
 const isFinite_: FieldCheck = (value) => typeof value === 'number' && Number.isFinite(value);
 const isNonNegativeFinite: FieldCheck = (value) => isFinite_(value) && (value as number) >= 0;
@@ -374,8 +379,8 @@ const ATTEMPT_FIELDS: FieldSpec = {
   lifecycle: oneOf('armed', 'active', 'completed', 'cancelled', 'abandoned', 'ended'),
   validity: oneOf('pending', 'valid', 'unranked'),
   armed_at_ms: isTimestamp,
-  started_at_ms: nullable(isTimestamp),
-  finished_at_ms: nullable(isTimestamp),
+  started_at_ms: nullable(isInterpolatedTimestamp),
+  finished_at_ms: nullable(isInterpolatedTimestamp),
   started_utc_offset_minutes: nullable(isUtcOffset),
   started_timezone_id: nullable(isString),
   started_local_time_source: nullable(oneOf('captured', 'reconstructed')),
@@ -391,7 +396,7 @@ const CROSSING_FIELDS: FieldSpec = {
   checkpoint_id: isNonEmptyString,
   checkpoint_name: isString,
   checkpoint_progress_m: isNonNegativeFinite,
-  crossed_at_ms: isTimestamp,
+  crossed_at_ms: isInterpolatedTimestamp,
 };
 
 function invalid(message: string): never {
