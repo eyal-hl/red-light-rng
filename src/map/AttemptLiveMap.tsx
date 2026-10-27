@@ -6,11 +6,14 @@ import {
   classifyCurrentPosition,
   createLiveMapVisibility,
   fallbackLiveMapLayout,
+  fallbackViewportBounds,
   formatLiveMapCaption,
   initialViewportBounds,
   INITIAL_LIVE_MAP_CAMERA,
   inZonePlaceId,
   liveMapInteractivity,
+  liveMarkerStructuralKey,
+  livePlacesStructuralKey,
   placeCirclePolygon,
   reduceLiveMapCamera,
   resolveLiveMapDisplay,
@@ -47,6 +50,20 @@ function useForegroundAppState(): string {
     };
   }, []);
   return state;
+}
+
+/**
+ * Returns the previously built value while its structural key is unchanged, so
+ * the GeoJSON source keeps its identity and is not re-set on every 1 s poll.
+ */
+function useStableByKey<T>(value: T, key: string): T {
+  const [stored, setStored] = useState({ key, value });
+  if (stored.key !== key) {
+    // Documented render-phase state adjustment: React re-renders at once with the new value.
+    setStored({ key, value });
+    return value;
+  }
+  return stored.value;
 }
 
 function placesGeoJson(places: AttemptLiveMapPlace[], inZoneId: string | null) {
@@ -95,8 +112,11 @@ function LiveMapSurface({
   const [camera, dispatch] = useReducer(reduceLiveMapCamera, INITIAL_LIVE_MAP_CAMERA);
   const [initialBounds] = useState(() => initialViewportBounds(marker.point, liveMap.places));
   const inZoneId = inZonePlaceId(startZoneStatus, liveMap.places);
-  const placeData = useMemo(() => placesGeoJson(liveMap.places, inZoneId), [inZoneId, liveMap.places]);
-  const markerData = useMemo(() => markerGeoJson(marker), [marker]);
+  const placeData = useStableByKey(
+    placesGeoJson(liveMap.places, inZoneId),
+    livePlacesStructuralKey(liveMap.places, inZoneId),
+  );
+  const markerData = useStableByKey(markerGeoJson(marker), liveMarkerStructuralKey(marker));
   const latitude = marker.point?.latitude ?? null;
   const longitude = marker.point?.longitude ?? null;
 
@@ -232,7 +252,7 @@ function LiveMapFallback({
   startZoneStatus: PlaceStartZoneStatus;
 }) {
   const layout = fallbackLiveMapLayout(
-    initialViewportBounds(marker.point, liveMap.places),
+    fallbackViewportBounds(marker.point, liveMap.places),
     liveMap.places,
     marker.point,
   );
@@ -284,12 +304,14 @@ export function AttemptLiveMap(props: AttemptLiveMapProps) {
   const { lifecycle, liveMap, startZoneStatus } = props;
   const appState = useForegroundAppState();
   const [tilesFailed, setTilesFailed] = useState(false);
-  const marker = useMemo(
+  const currentMarker = useMemo(
     () => classifyCurrentPosition(liveMap.latestFix, liveMap.observedAtMs),
     [liveMap.latestFix, liveMap.observedAtMs],
   );
+  // The caption ticks every poll; the marker handed to the map keeps identity while its drawn content is unchanged.
+  const marker = useStableByKey(currentMarker, liveMarkerStructuralKey(currentMarker));
   const mode = resolveLiveMapDisplay({ appState, rendererFailed: false, tilesFailed });
-  const caption = formatLiveMapCaption(marker);
+  const caption = formatLiveMapCaption(currentMarker);
   const showCanvas = marker.point != null || liveMap.places.length > 0;
   const fallback = <LiveMapFallback liveMap={liveMap} marker={marker} startZoneStatus={startZoneStatus} />;
 

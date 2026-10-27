@@ -88,14 +88,17 @@ export type CurrentPositionMarker =
       kind: 'last-known';
       point: LatLng;
       accuracyMeters: number | null;
-      ageMs: number;
-      reason: 'poor-accuracy' | 'stale' | 'poor-accuracy-and-stale';
+      /** Null when the fix is future-dated beyond the freshness window: its age is unknown. */
+      ageMs: number | null;
+      reason: 'poor-accuracy' | 'stale' | 'poor-accuracy-and-stale' | 'future-dated';
     }
   | { kind: 'unavailable'; point: null; accuracyMeters: null; ageMs: null };
 
 /**
  * Trustworthy = same accuracy gate the engine uses (`isAccuracyAccepted`:
- * null or at most `MAX_SAMPLE_ACCURACY_METERS`) and recorded within 15 s. Anything else with coordinates is a
+ * null or at most `MAX_SAMPLE_ACCURACY_METERS`; NaN/Infinity never pass) and recorded
+ * within 15 s. A fix recorded more than 15 s in the future (clock skew) is not
+ * trustworthy either: its age is unknown. Anything else with coordinates is a
  * muted last-known position; no coordinates is honestly unavailable.
  */
 export function classifyCurrentPosition(
@@ -110,12 +113,15 @@ export function classifyCurrentPosition(
   ) {
     return { kind: 'unavailable', point: null, accuracyMeters: null, ageMs: null };
   }
-  const ageMs = Math.max(0, observedAtMs - fix.recordedAtMs);
+  const skewMs = observedAtMs - fix.recordedAtMs;
+  const futureDated = skewMs < -LIVE_MAP_FRESH_FIX_MAX_AGE_MS;
+  const ageMs = futureDated ? null : Math.max(0, skewMs);
   const point = { latitude: fix.latitude, longitude: fix.longitude };
   const accurate =
-    fix.horizontalAccuracyMeters == null || fix.horizontalAccuracyMeters <= MAX_SAMPLE_ACCURACY_METERS;
-  const recent = ageMs <= LIVE_MAP_FRESH_FIX_MAX_AGE_MS;
-  if (accurate && recent) {
+    fix.horizontalAccuracyMeters == null ||
+    (Number.isFinite(fix.horizontalAccuracyMeters) && fix.horizontalAccuracyMeters <= MAX_SAMPLE_ACCURACY_METERS);
+  const recent = ageMs != null && ageMs <= LIVE_MAP_FRESH_FIX_MAX_AGE_MS;
+  if (ageMs != null && accurate && recent) {
     return { kind: 'fresh', point, accuracyMeters: fix.horizontalAccuracyMeters, ageMs };
   }
   return {
@@ -123,21 +129,56 @@ export function classifyCurrentPosition(
     point,
     accuracyMeters: fix.horizontalAccuracyMeters,
     ageMs,
-    reason: !accurate && !recent ? 'poor-accuracy-and-stale' : !accurate ? 'poor-accuracy' : 'stale',
+    reason: futureDated
+      ? 'future-dated'
+      : !accurate && !recent
+        ? 'poor-accuracy-and-stale'
+        : !accurate
+          ? 'poor-accuracy'
+          : 'stale',
   };
+}
+
+/** Finite accuracy prints as metres; anything else (null, NaN, Infinity) is honestly unknown. */
+function accuracyLabel(accuracyMeters: number | null): string {
+  return typeof accuracyMeters === 'number' && Number.isFinite(accuracyMeters)
+    ? `±${Math.round(accuracyMeters)} m`
+    : 'accuracy unknown';
 }
 
 export function formatLiveMapCaption(marker: CurrentPositionMarker): string {
   if (marker.kind === 'unavailable') {
     return 'Waiting for a GPS fix';
   }
-  const accuracy = marker.accuracyMeters != null ? `±${Math.round(marker.accuracyMeters)} m` : 'accuracy unknown';
-  const seconds = Math.round(marker.ageMs / 1000);
-  const age = seconds < 60 ? `${seconds} s ago` : `${Math.floor(seconds / 60)} min ago`;
+  const accuracy = accuracyLabel(marker.accuracyMeters);
   if (marker.kind === 'fresh') {
     return `Current position · ${accuracy}`;
   }
+  if (marker.ageMs == null) {
+    return `Last known position (not current) · ${accuracy} · time unknown`;
+  }
+  const seconds = Math.round(marker.ageMs / 1000);
+  const age = seconds < 60 ? `${seconds} s ago` : `${Math.floor(seconds / 60)} min ago`;
   return `Last known position (not current) · ${accuracy} · ${age}`;
+}
+
+/**
+ * Structural identity of what the place map layers draw. Equal keys mean the
+ * GeoJSON content is identical, so the map source need not be re-set.
+ */
+export function livePlacesStructuralKey(places: AttemptLiveMapPlace[], inZoneId: string | null): string {
+  return JSON.stringify([
+    inZoneId,
+    places.map((place) => [place.id, place.name, place.center.latitude, place.center.longitude, place.radiusMeters]),
+  ]);
+}
+
+/** Structural identity of the current-position dot (ignores the ticking age). */
+export function liveMarkerStructuralKey(marker: CurrentPositionMarker): string {
+  if (marker.point == null) {
+    return 'none';
+  }
+  return JSON.stringify([marker.kind, marker.point.latitude, marker.point.longitude, marker.accuracyMeters]);
 }
 
 /** At most 3 nearest places within 3 km of the position, nearest first. */
@@ -182,9 +223,23 @@ export function initialViewportBounds(
   position: LatLng | null,
   places: AttemptLiveMapPlace[],
 ): LiveMapBounds | null {
-  const chosen = position ? selectViewportPlaces(position, places) : places;
+  return framedBounds(position, position ? selectViewportPlaces(position, places) : places);
+}
+
+/**
+ * Offline schematic bounds: the position plus EVERY effective place (with radii),
+ * so the fallback never drops a saved place. The MapLibre viewport is unaffected.
+ */
+export function fallbackViewportBounds(
+  position: LatLng | null,
+  places: AttemptLiveMapPlace[],
+): LiveMapBounds | null {
+  return framedBounds(position, places);
+}
+
+function framedBounds(position: LatLng | null, places: AttemptLiveMapPlace[]): LiveMapBounds | null {
   const points: LatLng[] = position ? [position] : [];
-  for (const place of chosen) {
+  for (const place of places) {
     points.push(place.center, ...geoZoneExtentPoints(place));
   }
   return boundsOf(points);
@@ -417,7 +472,10 @@ export type FallbackLiveMapLayout = {
   marker: { xPercent: number; yPercent: number } | null;
 };
 
-/** Offline schematic: normalised positions inside the same bounds the map would frame. */
+/**
+ * Offline schematic: normalised positions inside `bounds`. Callers pass
+ * `fallbackViewportBounds`, which covers every place, so every place is drawn.
+ */
 export function fallbackLiveMapLayout(
   bounds: LiveMapBounds | null,
   places: AttemptLiveMapPlace[],
@@ -436,13 +494,6 @@ export function fallbackLiveMapLayout(
   });
   return {
     places: places
-      .filter(
-        (place) =>
-          place.center.longitude >= minLng &&
-          place.center.longitude <= maxLng &&
-          place.center.latitude >= minLat &&
-          place.center.latitude <= maxLat,
-      )
       .map((place) => {
         const [dLng] = geoZoneExtentPoints({ center: place.center, radiusMeters: place.radiusMeters }).slice(2, 3);
         const radiusLng = dLng ? dLng.longitude - place.center.longitude : 0;

@@ -6,12 +6,15 @@ import {
   classifyCurrentPosition,
   createLiveMapVisibility,
   fallbackLiveMapLayout,
+  fallbackViewportBounds,
   formatLiveMapCaption,
   initialViewportBounds,
   INITIAL_LIVE_MAP_CAMERA,
   inZonePlaceId,
   liveMapInteractivity,
+  liveMarkerStructuralKey,
   LIVE_MAP_FRESH_FIX_MAX_AGE_MS,
+  livePlacesStructuralKey,
   positionOutsideBounds,
   reduceLiveMapCamera,
   resolveLiveMapDisplay,
@@ -94,10 +97,33 @@ describe('current position classification', () => {
     assert.match(formatLiveMapCaption(marker), /Waiting for a GPS fix/);
   });
 
-  it('does not treat a future-dated fix as negative age', () => {
+  it('does not treat a small future skew as negative age', () => {
     const marker = classifyCurrentPosition({ ...fix(), recordedAtMs: NOW + 5_000 }, NOW);
     assert.equal(marker.kind, 'fresh');
     assert.equal(marker.kind === 'fresh' && marker.ageMs, 0);
+    const edge = classifyCurrentPosition({ ...fix(), recordedAtMs: NOW + LIVE_MAP_FRESH_FIX_MAX_AGE_MS }, NOW);
+    assert.equal(edge.kind, 'fresh');
+  });
+
+  it('mutes a fix dated more than 15 s in the future with an unknown time, never fresh', () => {
+    const marker = classifyCurrentPosition({ ...fix(), recordedAtMs: NOW + 60 * 60_000 }, NOW);
+    assert.equal(marker.kind, 'last-known');
+    assert.equal(marker.kind === 'last-known' && marker.reason, 'future-dated');
+    assert.equal(marker.kind === 'last-known' && marker.ageMs, null);
+    const caption = formatLiveMapCaption(marker);
+    assert.match(caption, /Last known/);
+    assert.match(caption, /time unknown/);
+    assert.doesNotMatch(caption, /0 s ago|Current position/);
+  });
+
+  it('treats non-finite accuracy as untrusted and captions it as unknown', () => {
+    for (const accuracy of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const marker = classifyCurrentPosition(fix({ accuracy }), NOW);
+      assert.equal(marker.kind, 'last-known', `accuracy ${accuracy} must not be fresh`);
+      const caption = formatLiveMapCaption(marker);
+      assert.match(caption, /accuracy unknown/);
+      assert.doesNotMatch(caption, /NaN|Infinity/);
+    }
   });
 });
 
@@ -282,12 +308,67 @@ describe('foreground visibility', () => {
 describe('offline fallback layout', () => {
   it('places saved places and the marker inside the schematic', () => {
     const places = [place('a', 100, 0, 50)];
-    const bounds = initialViewportBounds(HOME, places);
+    const bounds = fallbackViewportBounds(HOME, places);
     const layout = fallbackLiveMapLayout(bounds, places, HOME);
     assert.equal(layout.places.length, 1);
     assert.ok(layout.marker);
     assert.ok(layout.places[0]!.diameterPercent > 0);
     assert.deepEqual(fallbackLiveMapLayout(null, places, HOME), { places: [], marker: null });
+  });
+
+  it('draws every effective place, including one beyond the MapLibre viewport', () => {
+    const near = place('near', 100);
+    const far = place('far', 5_000);
+    const places = [near, far];
+    // The MapLibre viewport intentionally excludes the far place...
+    assert.deepEqual(selectViewportPlaces(HOME, places).map((item) => item.id), ['near']);
+    // ...but the offline schematic must still show both.
+    const layout = fallbackLiveMapLayout(fallbackViewportBounds(HOME, places), places, HOME);
+    assert.deepEqual(layout.places.map((item) => item.id).sort(), ['far', 'near']);
+    for (const item of layout.places) {
+      assert.ok(item.xPercent >= 0 && item.xPercent <= 100);
+      assert.ok(item.yPercent >= 0 && item.yPercent <= 100);
+    }
+    // The position is also inside the schematic frame.
+    assert.ok(layout.marker);
+  });
+
+  it('keeps the MapLibre initial viewport unchanged by the fallback bounds', () => {
+    const places = [place('near', 100), place('far', 5_000)];
+    assert.notDeepEqual(fallbackViewportBounds(HOME, places), initialViewportBounds(HOME, places));
+  });
+});
+
+describe('structural keys for map data', () => {
+  it('same content with new object identity yields the same place key', () => {
+    const a = [place('home', 0), place('work', 300, 0, 45)];
+    const b = a.map((item) => ({ ...item, center: { ...item.center } }));
+    assert.equal(livePlacesStructuralKey(a, 'home'), livePlacesStructuralKey(b, 'home'));
+  });
+
+  it('changed radius, centre, name, or in-zone place yields a different place key', () => {
+    const base = [place('home', 0), place('work', 300, 0, 45)];
+    const key = livePlacesStructuralKey(base, null);
+    assert.notEqual(livePlacesStructuralKey([place('home', 0), place('work', 300, 0, 46)], null), key);
+    assert.notEqual(livePlacesStructuralKey([place('home', 0), place('work', 301, 0, 45)], null), key);
+    assert.notEqual(
+      livePlacesStructuralKey([place('home', 0), { ...place('work', 300, 0, 45), name: 'Renamed' }], null),
+      key,
+    );
+    assert.notEqual(livePlacesStructuralKey(base, 'work'), key);
+  });
+
+  it('marker key ignores the ticking age and caption but tracks position, accuracy and kind', () => {
+    const fresh = classifyCurrentPosition(fix({ ageMs: 2_000 }), NOW);
+    const older = classifyCurrentPosition(fix({ ageMs: 3_000 }), NOW + 1_000);
+    assert.equal(liveMarkerStructuralKey(fresh), liveMarkerStructuralKey(older));
+    const moved = classifyCurrentPosition({ ...fix(), latitude: HOME.latitude + 0.0001 }, NOW);
+    assert.notEqual(liveMarkerStructuralKey(moved), liveMarkerStructuralKey(fresh));
+    const accuracyChanged = classifyCurrentPosition(fix({ accuracy: 12 }), NOW);
+    assert.notEqual(liveMarkerStructuralKey(accuracyChanged), liveMarkerStructuralKey(fresh));
+    const stale = classifyCurrentPosition(fix({ ageMs: 60_000 }), NOW);
+    assert.notEqual(liveMarkerStructuralKey(stale), liveMarkerStructuralKey(fresh));
+    assert.equal(liveMarkerStructuralKey(classifyCurrentPosition(null, NOW)), 'none');
   });
 });
 
