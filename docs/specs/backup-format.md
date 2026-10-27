@@ -45,7 +45,7 @@ Every durable table and column: `place`, `tracking_session`, `location_sample`, 
 
 ### Validation (all before any write)
 
-Supported version; digest; exact field sets (unknown fields are rejected, so nothing can be silently dropped); types, enums, finite coordinates in range, non-negative integer timestamps; unique ids (places, sessions, samples, routes, route source recordings, attempts, attempt sessions, checkpoint and crossing ids); every reference resolves (samples/attempts/routes -> sessions, attempts -> places/routes); finish not before start; file counts equal the real counts.
+Supported version; digest; exact field sets (unknown fields are rejected, so nothing can be silently dropped); types, enums, finite coordinates in range, non-negative finite millisecond timestamps (GPS-derived times may be fractional; device wall-clock session and attempt times are not ordered against each other, since a clock correction can move them backwards); unique ids (places, sessions, samples, routes, route source recordings, attempts, attempt sessions, checkpoint and crossing ids); every reference resolves (samples/attempts/routes -> sessions, attempts -> places/routes); attempt finish not before start; file counts equal the real counts.
 
 ### Versioning and migration
 

@@ -280,9 +280,10 @@ type FieldCheck = (value: unknown) => boolean;
 const isString: FieldCheck = (value) => typeof value === 'string';
 const isNonEmptyString: FieldCheck = (value) => typeof value === 'string' && value.length > 0;
 const isTimestamp: FieldCheck = (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-// Place and route crossing times are interpolated between GPS samples and legitimately have
-// fractional milliseconds. Preserve their exact values rather than rounding away official
-// start/finish times. Other schema timestamps and integer counters retain stricter checks.
+// GPS-derived times are legitimately fractional: expo-location on iOS reports fix timestamps in
+// fractional milliseconds (timeIntervalSince1970 * 1000), so stored sample times, place/route
+// crossing times and the attempt/session times derived from them keep their exact values rather
+// than being rounded or rejected. Other schema timestamps and integer counters retain strict checks.
 const isInterpolatedTimestamp: FieldCheck = (value) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const isNonNegativeInt: FieldCheck = isTimestamp;
@@ -320,8 +321,8 @@ const PLACE_FIELDS: FieldSpec = {
 
 const SESSION_FIELDS: FieldSpec = {
   id: isNonEmptyString,
-  started_at_ms: isTimestamp,
-  stopped_at_ms: nullable(isTimestamp),
+  started_at_ms: isInterpolatedTimestamp,
+  stopped_at_ms: nullable(isInterpolatedTimestamp),
   is_active: isBit,
   purpose: oneOf('legacy', 'route_creation', 'attempt'),
   capture_outcome: oneOf('active', 'finished', 'cancelled', 'interrupted', 'unknown'),
@@ -332,7 +333,7 @@ const SESSION_FIELDS: FieldSpec = {
 const SAMPLE_FIELDS: FieldSpec = {
   id: isNonEmptyString,
   session_id: isNonEmptyString,
-  recorded_at_ms: isTimestamp,
+  recorded_at_ms: isInterpolatedTimestamp,
   latitude: isLatitude,
   longitude: isLongitude,
   horizontal_accuracy_meters: nullable(isNonNegativeFinite),
@@ -552,11 +553,9 @@ export function validateBackupPayload(input: unknown): BackupPayload {
       invalid(`Attempt ${attempt.id} has a finish time but no start time.`);
     }
   }
-  for (const session of sessions) {
-    if (session.stopped_at_ms != null && session.stopped_at_ms < session.started_at_ms) {
-      invalid(`Tracking session ${session.id} stops before it starts.`);
-    }
-  }
+  // Tracking session start/stop times come from the device wall clock, which can be corrected
+  // backwards mid-recording. A stop-before-start ordering check here would make export fail for
+  // real local history, so only the structural timestamp checks above apply to sessions.
 
   return {
     places,

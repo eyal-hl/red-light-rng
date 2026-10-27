@@ -354,6 +354,84 @@ describe('backup round trips', () => {
     assert.equal(await exportText(target), fileText, 'no timestamp rounding or history loss');
   });
 
+  it('exports, restores and re-exports a fractional GPS sample time byte-identically', async () => {
+    // expo-location on iOS reports fix timestamps in fractional milliseconds. Such samples are
+    // legitimately stored and must never make export reject the whole history.
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    const first = await source.getFirst<{ id: string }>('SELECT id FROM location_sample ORDER BY rowid LIMIT 1');
+    assert.ok(first);
+    await source.run('UPDATE location_sample SET recorded_at_ms = ? WHERE id = ?', [1700000010000.114, first.id]);
+
+    const fileText = await exportText(source);
+    const { payload } = parseBackup(fileText);
+    const sample = payload.location_samples.find((item) => item.id === first.id);
+    assert.ok(sample);
+    assert.equal(sample.recorded_at_ms, 1700000010000.114, 'exact fractional value preserved');
+
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, payload);
+    const stored = await target.getFirst<{ recorded_at_ms: number }>(
+      'SELECT recorded_at_ms FROM location_sample WHERE id = ?',
+      [first.id],
+    );
+    assert.equal(stored?.recorded_at_ms, 1700000010000.114);
+    assert.equal(await exportText(target), fileText, 'byte-identical re-export');
+  });
+
+  it('terminalizes a restored ACTIVE session with fractional sample times and re-exports it', async () => {
+    const source = await openMigratedDb();
+    await seedLiveHistory(source);
+    await source.run(
+      "UPDATE location_sample SET recorded_at_ms = recorded_at_ms + 0.25 WHERE session_id IN ('s-armed-strong', 's-active-weak')",
+    );
+    const expectedStop = await source.getFirst<{ stop: number }>(
+      "SELECT MAX(recorded_at_ms) AS stop FROM location_sample WHERE session_id = 's-active-weak'",
+    );
+    assert.ok(expectedStop && expectedStop.stop % 1 === 0.25);
+
+    const fileText = await exportText(source);
+    const { payload } = parseBackup(fileText);
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, payload);
+
+    const sessions = new SqliteLocationSampleStore(async () => target);
+    const weakSession = (await sessions.getSession('s-active-weak'))!;
+    assert.equal(weakSession.isActive, false);
+    assert.equal(weakSession.stoppedAtMs, expectedStop.stop, 'stop derived from the fractional sample time');
+
+    const reexported = await exportText(target);
+    const reparsed = parseBackup(reexported);
+    assert.equal(
+      reparsed.payload.tracking_sessions.find((item) => item.id === 's-active-weak')?.stopped_at_ms,
+      expectedStop.stop,
+    );
+    assert.equal(
+      reparsed.payload.attempts.find((item) => item.id === 'attempt-active-weak')?.lifecycle,
+      'ended',
+    );
+  });
+
+  it('exports and restores a session whose wall-clock stop precedes its start after a clock correction', async () => {
+    // Session times come from Date.now(); a backwards device clock correction mid-recording must not
+    // make the whole history unexportable.
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    await seedSession(source, {
+      id: 's-clock-corrected',
+      startedAtMs: BASE_MS + 9_000_000,
+      stoppedAtMs: BASE_MS + 8_000_000,
+      purpose: 'route_creation',
+      captureOutcome: 'finished',
+      reviewDisposition: 'saved',
+    });
+    const fileText = await exportText(source);
+    const { payload } = parseBackup(fileText);
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, payload);
+    assert.equal(await exportText(target), fileText);
+  });
+
   it('round-trips a clean install, replacing existing data with an empty history', async () => {
     const empty = await openMigratedDb();
     const text = await exportText(empty);
@@ -593,6 +671,21 @@ describe('backup validation rejects bad files with zero writes', () => {
       name: 'negative timestamp',
       code: 'invalid_structure',
       make: (text) => mutatePayload(text, (p) => { p.tracking_sessions[0].started_at_ms = -1; }),
+    },
+    {
+      name: 'negative location sample timestamp',
+      code: 'invalid_structure',
+      make: (text) => mutatePayload(text, (p) => { p.location_samples[0].recorded_at_ms = -1; }),
+    },
+    {
+      name: 'location sample timestamp beyond the safe integer range',
+      code: 'invalid_structure',
+      make: (text) => mutatePayload(text, (p) => { p.location_samples[0].recorded_at_ms = Number.MAX_SAFE_INTEGER + 1; }),
+    },
+    {
+      name: 'negative session stop time',
+      code: 'invalid_structure',
+      make: (text) => mutatePayload(text, (p) => { p.tracking_sessions[0].stopped_at_ms = -0.5; }),
     },
     {
       name: 'string where a number belongs',
