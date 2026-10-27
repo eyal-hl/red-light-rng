@@ -4,6 +4,8 @@ import type { Attempt } from '../domain/attempt';
 import { formatTimeOfDay } from '../domain/duration';
 import { formatGpsReadinessLabel, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
+import { AttemptLiveMap } from '../map/AttemptLiveMap';
+import type { AttemptLiveMapData } from '../domain/attempt-live-map';
 import { styles } from './styles';
 
 type AttemptScreenProps = {
@@ -11,6 +13,7 @@ type AttemptScreenProps = {
   attempt: Attempt;
   gpsReadiness: GpsReadiness;
   startZoneStatus: PlaceStartZoneStatus;
+  liveMap: AttemptLiveMapData;
   busy: boolean;
   error: string | null;
   onEndAndInspect: () => void;
@@ -76,6 +79,7 @@ export function AttemptScreen({
   attempt,
   gpsReadiness,
   startZoneStatus,
+  liveMap,
   busy,
   error,
   onEndAndInspect,
@@ -118,6 +122,11 @@ export function AttemptScreen({
             />
           </View>
         ) : null}
+        <AttemptLiveMap
+          lifecycle={armed ? 'armed' : 'active'}
+          liveMap={liveMap}
+          startZoneStatus={startZoneStatus}
+        />
         <Text style={styles.mutedText}>You can lock your phone and put it in your pocket.</Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.actions}>

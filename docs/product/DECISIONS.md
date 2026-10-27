@@ -35,6 +35,7 @@ The initial use case is travel by electric scooter. The product should not requi
 - Start, splits, and finish must be detected automatically after arming.
 - The main product reward happens in post-run analysis.
 - Features must not rely on active-run button presses.
+- The ARMED screen may show an interactive current-location map with saved places (pan, zoom, recenter). The ACTIVE screen may show an optional, passive, non-interactive, non-required map for glances only. It has no gestures or map controls, never obstructs status, Cancel or End & Inspect, and is unmounted while the app is backgrounded or the screen is locked. Recording, timing and automatic finish never depend on it.
 
 ---
 
@@ -237,6 +238,7 @@ Route review is the first feature that genuinely needs a street-level map. Choos
 - OpenFreeMap is an external best-effort basemap service with no SLA; it must remain replaceable behind `RouteMap`.
 - Route recording, persistence, reference-course derivation, save/delete behavior, and analysis must not depend on map availability or network access.
 - V0.1 does **not** require offline basemap/tile-pack management.
+- The ARMED/ACTIVE attempt map (`AttemptLiveMap`) uses the same basemap, so while it is displayed OpenFreeMap tile requests reveal the user's live vicinity (the map area around the current position) to that third-party service. The map is not shown while backgrounded or locked, and falls back to a local schematic of saved places when tiles are unavailable. It reads only the attempt engine's persisted samples and effective place set; it adds no location watcher, position poll or MapLibre user-location provider.
 - If the style/tiles are unavailable, the review/detail surface should still render the route path and start/finish-zone geometry in a local fallback/no-basemap presentation when practical, and must still allow saving/deleting route data.
 - Physical validation should include a tiles-unavailable/airplane-mode check proving that route data and local geometry remain usable even when the street basemap cannot load.
 - Replacing MapLibre or the hosted style source later should not require rewriting domain logic.

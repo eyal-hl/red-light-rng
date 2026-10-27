@@ -8,6 +8,12 @@ import {
 } from '../domain/attempt';
 import { attachAttemptLocalStart } from '../domain/attempt-local-time';
 import { checkpointCrossingsForWindow, replayAttemptTrace } from '../domain/attempt-timing';
+import {
+  EMPTY_ATTEMPT_LIVE_MAP,
+  liveMapFix,
+  liveMapPlaces,
+  type AttemptLiveMapData,
+} from '../domain/attempt-live-map';
 import { createId } from '../domain/ids';
 import type { LocationSample } from '../domain/location-sample';
 import type { Place } from '../domain/place';
@@ -47,6 +53,8 @@ export type ProcessActiveAttemptResult = {
   attempt: Attempt | null;
   startZoneStatus: PlaceStartZoneStatus;
   gpsReadiness: GpsReadiness;
+  /** Read-only snapshot of the engine's own inputs for the passive attempt map. */
+  liveMap: AttemptLiveMapData;
 };
 
 export type PathVariantRecomputeResult = {
@@ -209,6 +217,7 @@ export class AttemptRuntime {
         attempt: await this.attempts.getUnacknowledgedResult(),
         startZoneStatus: LOCATING_START_ZONE,
         gpsReadiness: WAITING_GPS_READINESS,
+        liveMap: EMPTY_ATTEMPT_LIVE_MAP,
       };
     }
     const samples = await this.sessions.listSamples(open.sessionId);
@@ -218,6 +227,12 @@ export class AttemptRuntime {
     const presented = presentArmedAttemptStatus(places, samples, engine, await this.readAttemptCaptureHealth());
     const armedStatus = next.lifecycle === 'armed' ? presented.startZoneStatus : LOCATING_START_ZONE;
     const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
+    // Same samples and exact place set the engine just evaluated: no extra query.
+    const liveMap: AttemptLiveMapData = {
+      places: liveMapPlaces(places),
+      latestFix: liveMapFix(samples[samples.length - 1]),
+      observedAtMs: this.now(),
+    };
 
     if (!isOpenAttempt(next)) {
       await this.tracker.stopLocationUpdates();
@@ -225,15 +240,15 @@ export class AttemptRuntime {
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
         const derived = await this.reconcileDerivedAttempt(pending, samples);
-        return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness };
+        return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness, liveMap };
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness };
+        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness, liveMap };
       }
     }
     await this.attempts.saveAttempt(next);
-    return { attempt: next, startZoneStatus: armedStatus, gpsReadiness };
+    return { attempt: next, startZoneStatus: armedStatus, gpsReadiness, liveMap };
   }
 
   async processActive(): Promise<Attempt | null> {

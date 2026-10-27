@@ -79,6 +79,7 @@ import {
 import type { CombinedAttemptDebug, HomeSnapshot, LoadedJourney, RouteWorkspace } from '../product/route-workspace';
 import { sameJourneyPool } from '../domain/journey';
 import { AttemptResultScreen } from './AttemptResultScreen';
+import { EMPTY_ATTEMPT_LIVE_MAP, type AttemptLiveMapData } from '../domain/attempt-live-map';
 import { AttemptScreen } from './AttemptScreen';
 import { CourseEditorScreen } from './CourseEditorScreen';
 import { HistoryScreen } from './HistoryScreen';
@@ -171,6 +172,7 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [originName, setOriginName] = useState<string | null>(null);
   const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
   const [gpsReadiness, setGpsReadiness] = useState<GpsReadiness>(WAITING_GPS_READINESS);
+  const [liveMap, setLiveMap] = useState<AttemptLiveMapData>(EMPTY_ATTEMPT_LIVE_MAP);
   const [attemptResult, setAttemptResult] = useState<Attempt | null>(null);
   const [journeyFocus, setJourneyFocus] = useState<JourneyFocusAnalysis | null>(null);
   const [attemptDebug, setAttemptDebug] = useState<CombinedAttemptDebug | null>(null);
@@ -342,6 +344,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(attempt);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      setLiveMap(EMPTY_ATTEMPT_LIVE_MAP);
       attemptResultRef.current = null;
       setAttemptResult(null);
       setScreen({ kind: 'attempt' });
@@ -387,6 +390,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      setLiveMap(EMPTY_ATTEMPT_LIVE_MAP);
       setSelectedRoute(null);
       attemptResultRef.current = attempt;
       setAttemptResult(attempt);
@@ -584,6 +588,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         }
         setStartZoneStatus(processed.startZoneStatus);
         setGpsReadiness(processed.gpsReadiness);
+        setLiveMap(processed.liveMap);
         if (processed.attempt.originPlaceId) {
           const origin = await workspace.getPlace(processed.attempt.originPlaceId);
           setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
@@ -768,6 +773,7 @@ export function AppRoot({ workspace }: AppRootProps) {
       setActiveAttempt(null);
       setStartZoneStatus(LOCATING_ZONE);
       setGpsReadiness(WAITING_GPS_READINESS);
+      setLiveMap(EMPTY_ATTEMPT_LIVE_MAP);
       await refreshHome();
       setScreen({ kind: 'home' });
     } catch (caught) {
@@ -786,6 +792,7 @@ export function AppRoot({ workspace }: AppRootProps) {
         setActiveAttempt(null);
         setStartZoneStatus(LOCATING_ZONE);
         setGpsReadiness(WAITING_GPS_READINESS);
+        setLiveMap(EMPTY_ATTEMPT_LIVE_MAP);
         await refreshHome();
         setScreen({ kind: 'home' });
         return;
@@ -1876,6 +1883,7 @@ export function AppRoot({ workspace }: AppRootProps) {
           attempt={activeAttempt}
           gpsReadiness={gpsReadiness}
           startZoneStatus={startZoneStatus}
+          liveMap={liveMap}
           busy={busy}
           error={error}
           onEndAndInspect={() => {
