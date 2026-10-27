@@ -467,6 +467,17 @@ export function placeCirclePolygon(center: LatLng, radiusMeters: number, steps =
   return coordinates;
 }
 
+/**
+ * Offsets a fallback place circle by half its own rendered size, so its centre
+ * sits exactly on the place coordinate for any radius (and any minWidth clamp).
+ * Percentages resolve against the element's own width/height, which are equal
+ * because the circle keeps aspectRatio 1.
+ */
+export const FALLBACK_PLACE_CENTRE_TRANSFORM = [
+  { translateX: '-50%' },
+  { translateY: '-50%' },
+] as const;
+
 export type FallbackLiveMapLayout = {
   places: { id: string; name: string; xPercent: number; yPercent: number; diameterPercent: number }[];
   marker: { xPercent: number; yPercent: number } | null;

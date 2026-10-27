@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import {
   classifyCurrentPosition,
   createLiveMapVisibility,
+  FALLBACK_PLACE_CENTRE_TRANSFORM,
   fallbackLiveMapLayout,
   fallbackViewportBounds,
   formatLiveMapCaption,
@@ -331,6 +332,27 @@ describe('offline fallback layout', () => {
     }
     // The position is also inside the schematic frame.
     assert.ok(layout.marker);
+  });
+
+  it('centres each fallback circle on its place point for small and large radii', () => {
+    // Circles are positioned by their top-left corner at the place point and
+    // then shifted by half their own size, so the centre is the place point.
+    assert.deepEqual(FALLBACK_PLACE_CENTRE_TRANSFORM, [{ translateX: '-50%' }, { translateY: '-50%' }]);
+    const places = [place('small', 0, 0, 10), place('large', 800, 0, 400)];
+    const layout = fallbackLiveMapLayout(fallbackViewportBounds(HOME, places), places, HOME);
+    const small = layout.places.find((item) => item.id === 'small')!;
+    const large = layout.places.find((item) => item.id === 'large')!;
+    // Diameter scales with radius; the fixed -10px offset did not.
+    assert.ok(large.diameterPercent > small.diameterPercent * 10);
+    const bounds = fallbackViewportBounds(HOME, places)!;
+    const [minLng, minLat, maxLng, maxLat] = bounds;
+    for (const item of [small, large]) {
+      const source = places.find((candidate) => candidate.id === item.id)!;
+      const expectedX = ((source.center.longitude - minLng) / (maxLng - minLng)) * 100;
+      const expectedY = 100 - ((source.center.latitude - minLat) / (maxLat - minLat)) * 100;
+      assert.ok(Math.abs(item.xPercent - expectedX) < 1e-9);
+      assert.ok(Math.abs(item.yPercent - expectedY) < 1e-9);
+    }
   });
 
   it('keeps the MapLibre initial viewport unchanged by the fallback bounds', () => {

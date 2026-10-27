@@ -5,6 +5,7 @@ import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   classifyCurrentPosition,
   createLiveMapVisibility,
+  FALLBACK_PLACE_CENTRE_TRANSFORM,
   fallbackLiveMapLayout,
   fallbackViewportBounds,
   formatLiveMapCaption,
@@ -270,7 +271,7 @@ function LiveMapFallback({
                 top: `${place.yPercent}%`,
                 width: `${place.diameterPercent}%`,
                 aspectRatio: 1,
-                transform: [{ translateX: -10 }, { translateY: -10 }],
+                transform: FALLBACK_PLACE_CENTRE_TRANSFORM,
               },
               place.id === inZoneId ? styles.fallbackPlaceInZone : null,
             ]}
