@@ -1,10 +1,13 @@
+import appConfig from '../app.json';
 import { getSqlExecutor } from './persistence/database';
+import { createExpoBackupFiles } from './persistence/expo-backup-files';
 import { SqliteAttemptStore } from './persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from './persistence/sqlite-location-sample-store';
 import { SqlitePlaceStore } from './persistence/sqlite-place-store';
 import { SqliteRouteStore } from './persistence/sqlite-route-store';
 import { SqliteSettingsStore } from './persistence/sqlite-settings-store';
 import { AttemptRuntime } from './product/attempt-runtime';
+import { BackupService } from './product/backup-service';
 import { RouteWorkspace } from './product/route-workspace';
 import { createExpoLocationPlatform } from './tracking/expo-location-platform';
 import { SharedLocationTracker } from './tracking/shared-location-tracker';
@@ -39,4 +42,18 @@ export const routeWorkspace = new RouteWorkspace(
   placeStore,
   settingsStore,
   locationPlatform,
+);
+
+export const backupService = new BackupService(
+  getSqlExecutor,
+  createExpoBackupFiles(),
+  {
+    stopLocationUpdates: () => locationTracker.stopLocationUpdates(),
+    invalidateDerivedCaches: () => routeWorkspace.invalidateDerivedCaches(),
+    recomputeDerived: async () => {
+      await routeWorkspace.reconcilePendingAttempts();
+      await routeWorkspace.recomputePathVariants();
+    },
+  },
+  appConfig.expo.version,
 );

@@ -84,7 +84,10 @@ function crossingId(attemptId: string, checkpointId: string): string {
   return `${attemptId}:${checkpointId}`;
 }
 
-function terminalSessionInput(attempt: Attempt, stoppedAtMs: number): CompleteSessionInput {
+export function terminalSessionInput(
+  attempt: Pick<Attempt, 'lifecycle'>,
+  stoppedAtMs: number,
+): CompleteSessionInput {
   if (attempt.lifecycle === 'completed') {
     return { stoppedAtMs, captureOutcome: 'finished', reviewDisposition: 'saved' };
   }
