@@ -4,7 +4,7 @@ This repository is designed for projects maintained primarily by autonomous codi
 
 ## ChatGPT / orchestration entrypoint
 
-For product brainstorming, GitHub ticket orchestration, `/challenge`, `/build`, `/fix`, workflow-state interpretation, or continuing Red Light RNG from a fresh ChatGPT conversation, read `docs/CHATGPT.md` first, then `docs/WORKFLOW.md` and `AUTOMATIONS.md` as relevant.
+For product brainstorming and GitHub orchestration, read `docs/CHATGPT.md`, `CLAUDE.md`, `docs/WORKFLOW.md` and `AUTOMATIONS.md`. The current Claude subagents are in `.claude/agents/`; `automation-prompts/` is legacy Cursor-only.
 
 The repository and current GitHub state are authoritative. Do not rely on old chat context when the repository can answer the question.
 
@@ -56,7 +56,7 @@ Before presenting implementation as complete:
 5. Exercise primary user-facing flows for UI changes.
 6. Inspect runtime/device errors where applicable.
 7. Explicitly report anything incomplete, blocked, or uncertain.
-8. Ask the `verifier` subagent for an independent final check before opening/updating the PR.
+8. Have the Opus orchestrator dispatch the independent `reviewer` and `qa` subagents for the exact revision before presenting it as ready.
 
 ## Project commands
 
@@ -99,4 +99,6 @@ Style preferences and optional refactors should not block a PR.
 
 ## Repair dispatch
 
-There is no fixed lifetime limit on repair passes. Every Fixer pass requires a new explicit trusted `/fix` command from the human owner. The Fixer must perform one pass and stop; it must never self-dispatch or create an autonomous repair loop. If a blocker cannot be repaired safely, report `needs-human` with a concise explanation.
+The Claude Opus orchestrator may dispatch up to 3 automated repair rounds after actionable independent Reviewer/QA findings; each new commit requires fresh review and QA. Use Haiku Fixer first, escalate to Sonnet for no progress/complex defects, and report `needs-human` when blocked. Never fake physical Android testing. Only the owner authorizes merges.
+
+Legacy Cursor `/fix` and `/build` commands are not part of the Claude flow. See `AUTOMATIONS.md` and `.claude/ORCHESTRATOR.md`.
