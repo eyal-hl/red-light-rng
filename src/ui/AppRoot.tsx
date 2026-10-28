@@ -76,6 +76,12 @@ import {
   canPresentRetainedJourney,
   finishJourneySnapshotLoad,
 } from '../product/journey-navigation';
+import {
+  BACKUP_EXPORT_CONFIRM_ACTION,
+  BACKUP_EXPORT_CONFIRM_TITLE,
+  BACKUP_PRIVACY_WARNING,
+} from '../product/backup-copy';
+import { describeBackupError, type BackupService, type PendingRestore } from '../product/backup-service';
 import type { CombinedAttemptDebug, HomeSnapshot, LoadedJourney, RouteWorkspace } from '../product/route-workspace';
 import { sameJourneyPool } from '../domain/journey';
 import { AttemptResultScreen } from './AttemptResultScreen';
@@ -123,6 +129,7 @@ type AppScreen =
 
 type AppRootProps = {
   workspace: RouteWorkspace;
+  backupService?: BackupService;
 };
 
 function JourneyLoadingShell({ onBack, error }: { onBack: () => void; error?: string | null }) {
@@ -138,7 +145,7 @@ function JourneyLoadingShell({ onBack, error }: { onBack: () => void; error?: st
   );
 }
 
-export function AppRoot({ workspace }: AppRootProps) {
+export function AppRoot({ workspace, backupService }: AppRootProps) {
   const [screen, setScreen] = useState<AppScreen>({ kind: 'loading' });
   const [places, setPlaces] = useState<Place[]>([]);
   const [journeys, setJourneys] = useState<JourneyPoolSummary[]>([]);
@@ -181,6 +188,8 @@ export function AppRoot({ workspace }: AppRootProps) {
   const [historyGroupFilter, setHistoryGroupFilter] = useState<JourneyDepartureGroup | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<PendingRestore | null>(null);
   const [failedReconciliationAttemptId, setFailedReconciliationAttemptId] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<AppStartupStage>('opening-database');
   const [startupNonce, setStartupNonce] = useState(0);
@@ -1080,6 +1089,81 @@ export function AppRoot({ workspace }: AppRootProps) {
     );
   }, [applyPathAnalyticsUpdate, attemptResult, journeyFocus, workspace]);
 
+  const runExportBackup = useCallback(async () => {
+    if (!backupService) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setBackupNotice(null);
+    try {
+      const result = await backupService.exportBackup();
+      setBackupNotice(
+        `Backup ready (${result.counts.attempts} attempts, ${result.counts.location_samples} GPS samples): ${result.fileName}`,
+      );
+    } catch (caught) {
+      setError(describeBackupError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }, [backupService]);
+
+  const confirmExportBackup = useCallback(() => {
+    Alert.alert(BACKUP_EXPORT_CONFIRM_TITLE, BACKUP_PRIVACY_WARNING, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: BACKUP_EXPORT_CONFIRM_ACTION, onPress: () => void runExportBackup() },
+    ]);
+  }, [runExportBackup]);
+
+  const chooseRestoreFile = useCallback(async () => {
+    if (!backupService) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setBackupNotice(null);
+    setPendingRestore(null);
+    try {
+      const pending = await backupService.pickAndPreview();
+      if (pending) {
+        setPendingRestore(pending);
+      }
+    } catch (caught) {
+      setError(describeBackupError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }, [backupService]);
+
+  const confirmRestore = useCallback(async () => {
+    if (!backupService || !pendingRestore) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await backupService.confirmRestore(pendingRestore);
+      setPendingRestore(null);
+      await refreshHome();
+      const incomplete = outcome.terminalization.attempts.filter((item) => item.outcome === 'incomplete').length;
+      setBackupNotice(
+        [
+          `Restored ${outcome.counts.attempts} attempts, ${outcome.counts.places} places and ${outcome.counts.location_samples} GPS samples.`,
+          incomplete > 0
+            ? `${incomplete} run${incomplete === 1 ? '' : 's'} that were still armed or active in the backup were closed as incomplete.`
+            : null,
+          ...outcome.warnings,
+        ]
+          .filter((line): line is string => line != null)
+          .join(' '),
+      );
+    } catch (caught) {
+      setError(describeBackupError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }, [backupService, pendingRestore, refreshHome]);
+
   const leaveToHome = useCallback(() => {
     setError(null);
     const abandoned = beginJourneySnapshotLoad(journeyLoadTokenRef.current);
@@ -1696,6 +1780,8 @@ export function AppRoot({ workspace }: AppRootProps) {
           }}
           onOpenSettings={() => {
             setError(null);
+            setBackupNotice(null);
+            setPendingRestore(null);
             setScreen({ kind: 'settings' });
           }}
           onRecordPathVariant={() => {
@@ -1784,6 +1870,8 @@ export function AppRoot({ workspace }: AppRootProps) {
           mode={activeMode}
           busy={busy}
           error={error}
+          notice={backupNotice}
+          restorePreview={pendingRestore}
           onBack={leaveToHome}
           onChangeMode={(mode) => {
             void (async () => {
@@ -1791,6 +1879,10 @@ export function AppRoot({ workspace }: AppRootProps) {
               setActiveMode(mode);
             })();
           }}
+          onExportBackup={backupService ? confirmExportBackup : undefined}
+          onChooseRestoreFile={backupService ? chooseRestoreFile : undefined}
+          onConfirmRestore={confirmRestore}
+          onCancelRestore={() => setPendingRestore(null)}
         />
       ) : null}
       {screen.kind === 'recording' ? (

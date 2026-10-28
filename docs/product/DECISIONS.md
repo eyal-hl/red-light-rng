@@ -242,3 +242,19 @@ Route review is the first feature that genuinely needs a street-level map. Choos
 - If the style/tiles are unavailable, the review/detail surface should still render the route path and start/finish-zone geometry in a local fallback/no-basemap presentation when practical, and must still allow saving/deleting route data.
 - Physical validation should include a tiles-unavailable/airplane-mode check proving that route data and local geometry remain usable even when the street basemap cannot load.
 - Replacing MapLibre or the hosted style source later should not require rewriting domain logic.
+
+---
+
+## DEC-013 — Product-level portable backup, replace-only restore
+
+**Status:** Accepted (issue #72)
+**Date:** 2026-10-27
+
+### Decision
+Local history is exported to a single deterministic, versioned JSON file (`backup_format_version`, independent of the SQLite schema version) with a SHA-256 integrity check, and restored with a validate-first, replace-only, single-transaction flow. Details: `docs/specs/backup-format.md`.
+
+### Consequences
+- No cloud or account; the user chooses the destination through the OS share/save sheet. The file contains precise location history and the UI says so before export.
+- Restore never trusts a backed-up armed/active attempt or active session as live: they are terminalized from stored evidence, leftover OS updates are stopped, and derived data is recomputed.
+- Restore is refused while the current device has an open attempt or active tracking session.
+- New durable columns must be added to the backup coverage map (a test enforces this).

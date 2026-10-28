@@ -168,6 +168,15 @@ export class RouteWorkspace {
     private readonly createPlaceId: () => string = createId,
   ) {}
 
+  /** Drops every in-memory derived view, e.g. after a backup restore replaced the underlying data. */
+  invalidateDerivedCaches(): void {
+    this.homeCache.clear();
+    this.journeyCache.clear();
+    this.focusCache.clear();
+    this.debugCache.clear();
+    this.routeAnalysisCache.clear();
+  }
+
   resetNavigationLoad(): void {
     this.navigationLoad.counters = createNavigationLoadState().counters;
     this.navigationLoad.timings = [];

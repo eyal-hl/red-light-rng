@@ -24,5 +24,16 @@ export function createExpoSqlExecutor(database: SQLiteDatabase): SqlExecutor {
       });
       return result as T;
     },
+    async withExclusiveTransaction<T>(fn: (tx: SqlExecutor) => Promise<T>) {
+      let result: T | undefined;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        const inner = createExpoSqlExecutor(transaction);
+        // The exclusive connection is already inside its own transaction; nested calls join it.
+        inner.withTransaction = async <U>(nested: () => Promise<U>) => nested();
+        delete inner.withExclusiveTransaction;
+        result = await fn(inner);
+      });
+      return result as T;
+    },
   };
 }
