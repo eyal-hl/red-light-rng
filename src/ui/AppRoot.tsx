@@ -10,7 +10,12 @@ import {
   type CourseEditorDraft,
 } from '../domain/course-editor';
 import type { JourneyPoolId } from '../domain/journey';
-import type { JourneyFocusAnalysis, JourneyHistoryRow, JourneyPoolSummary } from '../domain/journey-analysis';
+import {
+  JourneyFocusStoppedError,
+  type JourneyFocusAnalysis,
+  type JourneyHistoryRow,
+  type JourneyPoolSummary,
+} from '../domain/journey-analysis';
 import {
   emptyDepartureGrouping,
   type JourneyDepartureGroup,
@@ -75,6 +80,8 @@ import {
   canOpenJourneyHistory,
   canPresentRetainedJourney,
   finishJourneySnapshotLoad,
+  journeyHotspotsViewFor,
+  type JourneyHotspotsState,
 } from '../product/journey-navigation';
 import {
   BACKUP_EXPORT_CONFIRM_ACTION,
@@ -124,7 +131,7 @@ type AppScreen =
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
   | { kind: 'history'; pool: JourneyPoolId }
-  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string }
+  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string; returnTo?: 'journey' }
   | { kind: 'place-editor'; placeId: string | null };
 
 type AppRootProps = {
@@ -175,6 +182,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
   );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
   const [journeyPathVariants, setJourneyPathVariants] = useState<JourneyPathVariantSummary[]>([]);
+  const [journeyHotspots, setJourneyHotspots] = useState<JourneyHotspotsState>({ status: 'idle' });
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
   const [originName, setOriginName] = useState<string | null>(null);
   const [startZoneStatus, setStartZoneStatus] = useState<PlaceStartZoneStatus>(LOCATING_ZONE);
@@ -1045,6 +1053,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
                   transportationMode: updated.transportationMode,
                 },
                 attemptId: updated.id,
+                returnTo:
+                  screenRef.current.kind === 'attempt-detail' ? screenRef.current.returnTo : undefined,
               }
             : { kind: 'attempt-result' },
         );
@@ -1206,6 +1216,33 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     [loadJourney, refreshHome],
   );
 
+  // Deferred hotspot hydration: starts only after the journey shell is ready, never blocks it.
+  useEffect(() => {
+    if (screen.kind !== 'journey' || !journeySnapshotReady) {
+      return;
+    }
+    const pool = screen.pool;
+    let cancelled = false;
+    workspace
+      .analyzeJourneyHotspots(pool, {
+        yieldToIdle: yieldToEventLoop,
+        shouldContinue: () => !cancelled,
+      })
+      .then((analysis) => {
+        if (!cancelled) {
+          setJourneyHotspots(analysis ? { status: 'ready', pool, analysis } : { status: 'error', pool });
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled && !(caught instanceof JourneyFocusStoppedError)) {
+          setJourneyHotspots({ status: 'error', pool });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [journeySnapshotReady, screen, workspace]);
+
   const onOpenHistory = useCallback(async () => {
     if (screen.kind !== 'journey') {
       return;
@@ -1295,11 +1332,42 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     setDebugError(null);
     setPathAnalyticsError(null);
     const pool = screen.pool;
-    const next = { kind: 'history' as const, pool };
+    const next =
+      screen.returnTo === 'journey'
+        ? { kind: 'journey' as const, pool }
+        : { kind: 'history' as const, pool };
     screenRef.current = next;
     setScreen(next);
     void loadJourney(pool);
   }, [loadJourney, screen]);
+
+  const onOpenHotspotAttempt = useCallback(
+    async (attemptId: string) => {
+      if (screen.kind !== 'journey') {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const attempt = await workspace.getAttempt(attemptId);
+        if (!attempt) {
+          setError('This attempt is no longer available.');
+          return;
+        }
+        await showAttemptResult(attempt, undefined, {
+          kind: 'attempt-detail',
+          pool: screen.pool,
+          attemptId,
+          returnTo: 'journey',
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [screen, showAttemptResult, workspace],
+  );
 
   const onBackFromHistory = useCallback(() => {
     if (screen.kind !== 'history') {
@@ -1935,6 +2003,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           grouping={journeyGrouping}
           history={journeyHistory}
           pathVariants={journeyPathVariants}
+          hotspots={journeyHotspotsViewFor(journeyHotspots, screen.pool)}
           busy={busy}
           error={error}
           onBack={leaveToHome}
@@ -1944,6 +2013,9 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           onOpenGroupAttempts={onOpenGroupAttempts}
           onOpenPathVariant={(routeId) => {
             void onOpenPathVariant(routeId);
+          }}
+          onOpenHotspotAttempt={(attemptId) => {
+            void onOpenHotspotAttempt(attemptId);
           }}
         />
         ) : (

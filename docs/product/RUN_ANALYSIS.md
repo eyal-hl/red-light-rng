@@ -146,6 +146,19 @@ Later versions should be able to identify recurring delay zones and quantify how
 
 These zones can also become candidates for automatically proposed checkpoints.
 
+### Recurring journey delay hotspots (shipped on journey detail)
+
+`src/domain/delay-hotspots.ts` is the pure, deterministic aggregation; every threshold below is a named constant there.
+
+- **Population.** Valid completed attempts (`isJourneyCompetitive`) of one directional journey and transportation mode whose assigned `routeId` resolves to a path variant that still matches the journey endpoints and is compatible with the attempt's own telemetry (`isCompatiblePathVariant`). Unassigned or incompatible attempts contribute nothing: no located events, no encounters, no unlocated totals. Wait events are never projected onto a default or oldest variant. Stop detection is untouched; events come from `deriveWaitEvents` through the existing anchored derivation.
+- **Identity.** Geographic complete-linkage on located wait coordinates with a cluster diameter of `HOTSPOT_CLUSTER_DIAMETER_METERS` = **30 m**: two events share a hotspot only if every pair in the cluster is within 30 m, so chains cannot grow. 30 m merges same-intersection waits and the 20 m fixture, and splits the 40 m / 50 m / 60 m parallel-street fixtures (projected wait coordinates about 39.96 / 49.94 / 59.93 m apart). The 40 m wait-comparison radius is deliberately not reused because it would merge the 40 m pair. Merge boundary: pairs at <= 30 m merge; > 30 m split. One event belongs to exactly one hotspot.
+- **Encounters.** An attempt encountered a hotspot if its saved variant `referencePath` passes within `HOTSPOT_ENCOUNTER_RADIUS_METERS` = 30 m of the hotspot coordinate (or it waited there). Frequency is `waited / encountered`: 10 main-path attempts that wait and 10 park-path attempts that never pass the light is 10/10, not 10/20. Several waits by one attempt in a hotspot sum their durations and count the attempt once.
+- **Recurring.** A hotspot is listed only with confirmed waiting on at least `HOTSPOT_MIN_WAITED_ATTEMPTS` = 2 attempts.
+- **Metrics.** Encountered and waited attempts and percentage, total confirmed waiting, mean/median/worst per-attempt confirmed waiting at the hotspot, representative coordinate (mean of members), spread (largest pairwise member distance) and low/medium/high confidence. Recent-vs-all-time trend compares mean waiting per encountered attempt in the rolling 30-day `finishedAtMs` window against all time, shown only with at least 3 recent and 3 older encountered attempts (`HOTSPOT_TREND_MIN_RECENT_ENCOUNTERS`, `HOTSPOT_TREND_MIN_OLDER_ENCOUNTERS`).
+- **Unlocated waits** are shown only as a separately labeled total and never as a map pin.
+- **Wording.** Confirmed waiting is observed stopped time; it is not time lost versus a personal best.
+- **Ranking.** Default by total confirmed waiting, optional by frequency; ties break by waited attempts, then worst wait, then stable hotspot id.
+
 ## Deterministic highlights
 
 Initial post-run summaries should be generated from structured rules rather than requiring an LLM.

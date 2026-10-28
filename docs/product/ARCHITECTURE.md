@@ -116,6 +116,8 @@ Basemap/style/tile availability must not become a dependency of route recording,
 
 The attempt map (`src/map/AttemptLiveMap.tsx`) is a read-only consumer of the attempt engine's own snapshot (`ProcessActiveAttemptResult.liveMap`: latest persisted sample and the exact `placesForAttempt` set from the same call). It must not add a location watcher, current-position poll, MapLibre user-location provider, extra place query or extra session. Its pure policy (marker freshness, viewport, camera, interactivity, visibility) lives in `src/domain/attempt-live-map.ts`. While displayed, OpenFreeMap tile requests expose the live vicinity to that service.
 
+Journey delay hotspots (`RouteWorkspace.analyzeJourneyHotspots`) read raw samples for every attempt in the pool, so they are hydrated only after the journey shell has painted and never on `loadJourney` (first paint keeps `listSamples === 0`). The result is memoized for the latest derivation key (attempts, places, routes, rolling-window membership and sample identities) and is read-only: it does not touch attempts, validity, PB or official timing.
+
 ## Route matching
 
 A route is not an exact sequence of GPS coordinates. GPS measurements vary between attempts.
