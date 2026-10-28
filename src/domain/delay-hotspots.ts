@@ -1,6 +1,6 @@
 import { isJourneyCompetitive, type Attempt } from './attempt';
 import { deriveAnchoredLayoutAttempt, timingCourseFromRoute } from './attempt-analysis';
-import { haversineMeters, type LatLng } from './geo';
+import { EARTH_RADIUS_METERS, haversineMeters, type LatLng } from './geo';
 import { journeyPoolKey, type JourneyPoolId } from './journey';
 import type { JourneyAttemptTrace } from './journey-analysis';
 import { isInRollingElapsedWindow, ROLLING_WINDOW_30_DAYS } from './journey-statistics';
@@ -346,7 +346,11 @@ function clusterMembers(members: Member[], diameter: number): Member[][] {
     }
     return root;
   };
-  const maxLatDelta = diameter / 111_320 + 1e-9;
+  // Haversine distance is never smaller than the latitude arc between two points, so any pair
+  // within the diameter has a latitude gap of at most diameter / metersPerDegreeLat. The 0.1%
+  // margin keeps the prune conservative against floating-point error.
+  const metersPerDegreeLat = (EARTH_RADIUS_METERS * Math.PI) / 180;
+  const maxLatDelta = (diameter / metersPerDegreeLat) * 1.001 + 1e-9;
   for (let i = 0; i < count; i += 1) {
     for (let j = i + 1; j < count; j += 1) {
       if (sorted[j]!.coordinate.latitude - sorted[i]!.coordinate.latitude > maxLatDelta) {

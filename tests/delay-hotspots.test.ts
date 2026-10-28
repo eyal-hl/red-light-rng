@@ -150,6 +150,55 @@ describe('delay hotspot clustering', () => {
     assert.equal(result.hotspots[0]!.waitedAttempts, 2);
   });
 
+  describe('north-south latitude sweep boundary', () => {
+    const METERS_PER_DEGREE_LAT_HAVERSINE = (6_371_000 * Math.PI) / 180;
+
+    function waitAtNorth(base: LatLng, northMeters: number, id: string): WaitEvent {
+      return {
+        id: `wait:${id}`,
+        startMs: 10_000,
+        endMs: 20_000,
+        durationMs: 10_000,
+        progressMeters: 500,
+        coordinate: {
+          latitude: base.latitude + northMeters / METERS_PER_DEGREE_LAT_HAVERSINE,
+          longitude: base.longitude,
+        },
+        locationState: 'located',
+      };
+    }
+
+    it('merges a 29.99 m due-north pair that the lat sweep must not prune', () => {
+      const main = route('main');
+      const base = pointAtProgress(main.referencePath, 500);
+      const northPoint = waitAtNorth(base, 29.99, 'north');
+      const distance = haversineMeters(base, northPoint.coordinate!);
+      assert.ok(distance > 29.98 && distance <= HOTSPOT_CLUSTER_DIAMETER_METERS);
+      const result = run([
+        input('n1', main, [waitAt(main, 500, 10_000)]),
+        input('n2', main, [{ ...northPoint, id: 'wait:north-2' }]),
+      ]);
+      assert.equal(result.hotspots.length, 1);
+      assert.equal(result.hotspots[0]!.waitedAttempts, 2);
+    });
+
+    it('splits a 30.5 m due-north pair', () => {
+      const main = route('main');
+      const base = pointAtProgress(main.referencePath, 500);
+      const far = waitAtNorth(base, 30.5, 'far');
+      const distance = haversineMeters(base, far.coordinate!);
+      assert.ok(distance > HOTSPOT_CLUSTER_DIAMETER_METERS && distance < 30.6);
+      const result = run([
+        input('s1', main, [waitAt(main, 500, 10_000)]),
+        input('s2', main, [waitAt(main, 500, 10_000)]),
+        input('t1', main, [{ ...far, id: 'wait:far-1' }]),
+        input('t2', main, [{ ...far, id: 'wait:far-2' }]),
+      ]);
+      assert.equal(result.hotspots.length, 2);
+      assert.deepEqual(result.hotspots.map((item) => item.waitedAttempts), [2, 2]);
+    });
+  });
+
   for (const eastMeters of [40, 50, 60]) {
     it(`splits ${eastMeters} m parallel-street fixtures`, () => {
       const a = route('a');
