@@ -23,7 +23,13 @@ import {
 } from '../domain/path-variant-discovery';
 import { deriveRouteGeometry, type RouteDerivation } from '../domain/route-derivation';
 import type { TrackingState } from '../domain/tracking-state';
-import { isOpenAttempt, type Attempt } from '../domain/attempt';
+import { isJourneyCompetitive, isOpenAttempt, type Attempt } from '../domain/attempt';
+import {
+  computeDelayHotspots,
+  deriveHotspotAttemptInput,
+  type DelayHotspotAnalysis,
+  type HotspotAttemptInput,
+} from '../domain/delay-hotspots';
 import {
   emptyAttemptReconciliationReport,
   type AttemptReconciliationReport,
@@ -77,6 +83,7 @@ import {
   homeDerivationKey,
   journeyDerivationKey,
   MapKeyedCache,
+  hotspotDerivationKey,
   routeAnalysisDerivationKey,
   SingleKeyedCache,
   type SampleIdentity,
@@ -149,6 +156,7 @@ export class RouteWorkspace {
   private readonly homeCache = new SingleKeyedCache<HomeSnapshot>();
   private readonly journeyCache = new MapKeyedCache<LoadedJourney>();
   private readonly focusCache = new MapKeyedCache<AnalyzeJourneyResult>();
+  private readonly hotspotCache = new SingleKeyedCache<DelayHotspotAnalysis>();
   private readonly debugCache = new MapKeyedCache<CombinedAttemptDebug | null>();
   private readonly routeAnalysisCache = new MapKeyedCache<{
     route: Route;
@@ -882,6 +890,72 @@ export class RouteWorkspace {
       };
       this.journeyCache.set(key, loaded);
       return { value: loaded, cacheHit: false };
+    });
+  }
+
+  /**
+   * Deferred, post-render hotspot hydration. Loads raw samples for every attempt in the
+   * pool, so it must never run on the journey first-paint path. The result is memoized
+   * for the latest derivation key only (bounded to one journey).
+   */
+  async analyzeJourneyHotspots(
+    pool: JourneyPoolId,
+    options?: {
+      yieldToIdle?: () => Promise<void>;
+      shouldContinue?: () => boolean;
+    },
+  ): Promise<DelayHotspotAnalysis | null> {
+    return timeNavigationLoad(this.navigationLoad, 'analyzeJourneyHotspots', async () => {
+      const counters = this.navigationLoad.counters;
+      counters.analyzeHotspotsReads += 1;
+      const origin = await this.places.getPlace(pool.originPlaceId);
+      const destination = await this.places.getPlace(pool.destinationPlaceId);
+      if (!origin || !destination) {
+        counters.analyzeHotspotsMisses += 1;
+        return { value: null, cacheHit: false };
+      }
+      const [allAttempts, routes] = await Promise.all([
+        this.attempts.listAttempts(),
+        this.routes.listRoutes(),
+      ]);
+      const asOfMs = this.now();
+      const poolAttempts = allAttempts.filter((attempt) => attemptInPool(attempt, pool));
+      const sampleIdentities = await this.sampleIdentitiesFor(poolAttempts);
+      const key = hotspotDerivationKey({
+        pool,
+        attempts: poolAttempts,
+        origin,
+        destination,
+        routes,
+        asOfMs,
+        sampleIdentities,
+      });
+      const cached = this.hotspotCache.get(key);
+      if (cached) {
+        counters.analyzeHotspotsHits += 1;
+        return { value: cached, cacheHit: true };
+      }
+      counters.analyzeHotspotsMisses += 1;
+      const inputs: HotspotAttemptInput[] = [];
+      for (const attempt of poolAttempts) {
+        if (!isJourneyCompetitive(attempt)) {
+          continue;
+        }
+        if (options?.shouldContinue && !options.shouldContinue()) {
+          throw new JourneyFocusStoppedError();
+        }
+        if (options?.yieldToIdle) {
+          await options.yieldToIdle();
+        }
+        if (options?.shouldContinue && !options.shouldContinue()) {
+          throw new JourneyFocusStoppedError();
+        }
+        const samples = await this.listAttemptSamples(attempt.sessionId);
+        inputs.push(deriveHotspotAttemptInput({ attempt, samples }, routes));
+      }
+      const analysis = computeDelayHotspots({ pool, origin, destination, attempts: inputs, asOfMs });
+      this.hotspotCache.set(key, analysis);
+      return { value: analysis, cacheHit: false };
     });
   }
 

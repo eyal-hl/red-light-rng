@@ -3,6 +3,7 @@ export type NavigationLoadOperation =
   | 'loadJourney'
   | 'analyzeJourneyHeadline'
   | 'analyzeJourney'
+  | 'analyzeJourneyHotspots'
   | 'inspectAttempt'
   | 'analyzeRoute'
   | 'legacySampleScan'
@@ -28,6 +29,9 @@ export type NavigationLoadCounters = {
   analyzeJourneyReads: number;
   analyzeJourneyHits: number;
   analyzeJourneyMisses: number;
+  analyzeHotspotsReads: number;
+  analyzeHotspotsHits: number;
+  analyzeHotspotsMisses: number;
   inspectAttemptReads: number;
   inspectAttemptHits: number;
   inspectAttemptMisses: number;
@@ -63,6 +67,9 @@ export function emptyNavigationLoadCounters(): NavigationLoadCounters {
     analyzeJourneyReads: 0,
     analyzeJourneyHits: 0,
     analyzeJourneyMisses: 0,
+    analyzeHotspotsReads: 0,
+    analyzeHotspotsHits: 0,
+    analyzeHotspotsMisses: 0,
     inspectAttemptReads: 0,
     inspectAttemptHits: 0,
     inspectAttemptMisses: 0,

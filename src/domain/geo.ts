@@ -8,7 +8,7 @@ export type GeoZone = {
   radiusMeters: number;
 };
 
-const EARTH_RADIUS_METERS = 6_371_000;
+export const EARTH_RADIUS_METERS = 6_371_000;
 
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;

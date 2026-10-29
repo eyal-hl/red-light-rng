@@ -1,5 +1,6 @@
 import { sameJourneyPool, type JourneyPoolId } from '../domain/journey';
 import type { JourneyPoolSummary } from '../domain/journey-analysis';
+import type { DelayHotspotAnalysis } from '../domain/delay-hotspots';
 import type { Place } from '../domain/place';
 
 export type JourneySnapshotGateInput = {
@@ -73,4 +74,32 @@ export function canPresentRetainedJourney(input: JourneySnapshotGateInput): bool
 
 export function canOpenJourneyHistory(input: JourneySnapshotGateInput): boolean {
   return canPresentRetainedJourney(input);
+}
+
+/**
+ * Recurring-hotspot hydration is deferred: it loads raw samples for the whole pool, so it
+ * starts only after the journey shell has painted (snapshot ready) and never blocks it.
+ */
+export type JourneyHotspotsState =
+  | { status: 'idle' }
+  | { status: 'loading'; pool: JourneyPoolId }
+  | { status: 'ready'; pool: JourneyPoolId; analysis: DelayHotspotAnalysis }
+  | { status: 'error'; pool: JourneyPoolId };
+
+export function journeyHotspotsViewFor(
+  state: JourneyHotspotsState,
+  pool: JourneyPoolId,
+): JourneyHotspotsState {
+  if (state.status === 'idle' || !sameJourneyPool(state.pool, pool)) {
+    return { status: 'idle' };
+  }
+  return state;
+}
+
+export function shouldHydrateJourneyHotspots(input: {
+  snapshotReady: boolean;
+  pool: JourneyPoolId;
+  state: JourneyHotspotsState;
+}): boolean {
+  return input.snapshotReady && journeyHotspotsViewFor(input.state, input.pool).status === 'idle';
 }
