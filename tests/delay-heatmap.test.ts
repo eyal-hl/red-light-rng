@@ -5,12 +5,19 @@ import { EMPTY_ATTEMPT_LOCAL_START, type Attempt } from '../src/domain/attempt';
 import {
   clampHeatIntensity,
   delayHeatViewState,
+  heatRawValue,
   HEAT_MAX_FEATURES,
   HEAT_MIN_RADIUS_METERS,
   nearestRankPercentile,
   prepareDelayHeat,
 } from '../src/domain/delay-heatmap';
-import { computeDelayHotspots, type HotspotAttemptInput } from '../src/domain/delay-hotspots';
+import {
+  computeDelayHotspots,
+  rankDelayHotspots,
+  type DelayHotspot,
+  type DelayHotspotAnalysis,
+  type HotspotAttemptInput,
+} from '../src/domain/delay-hotspots';
 import type { LatLng } from '../src/domain/geo';
 import { pointAtProgress } from '../src/domain/path-projection';
 import type { Route } from '../src/domain/route';
@@ -277,13 +284,70 @@ describe('delay heat preparation', () => {
     assert.equal(JSON.stringify(attempts), snapshot);
   });
 
-  it('ties break by the existing ranking', () => {
-    const analysis = run([
+  it('ties on the raw value break by the existing #74 ranking, not by id', () => {
+    const base = run([
       input('a1', main, [waitAt(main, 300, 10_000), waitAt(main, 800, 10_000, 90_000)]),
       input('a2', main, [waitAt(main, 300, 10_000), waitAt(main, 800, 10_000, 90_000)]),
     ]);
-    const ids = prepareDelayHeat(analysis, 'frequency')!.features.map((f) => f.hotspotId);
-    assert.deepEqual(ids, [...ids].sort());
+    const template = base.hotspots[0]!;
+    // Ids chosen so plain id order (a < c < m < z) differs from the ranking order.
+    const withHotspots = (specs: Array<[string, Partial<DelayHotspot>]>): DelayHotspotAnalysis => ({
+      ...base,
+      hotspots: specs.map(([id, over]) => ({ ...template, id, ...over })),
+    });
+    const assertTieOrder = (
+      analysis: DelayHotspotAnalysis,
+      mode: 'frequency' | 'total',
+      tiedIds: string[],
+    ) => {
+      const prepared = prepareDelayHeat(analysis, mode)!;
+      const tiedValue = heatRawValue(
+        analysis.hotspots.find((h) => h.id === tiedIds[0])!,
+        mode,
+      );
+      const preparedTied = prepared.features
+        .filter((f) => tiedIds.includes(f.hotspotId))
+        .map((f) => f.hotspotId);
+      const ranked = rankDelayHotspots(analysis.hotspots, mode)
+        .filter((h) => tiedIds.includes(h.id))
+        .map((h) => h.id);
+      for (const f of prepared.features.filter((f) => tiedIds.includes(f.hotspotId))) {
+        assert.equal(f.rawValue, tiedValue);
+      }
+      assert.deepEqual(preparedTied, ranked);
+      assert.notDeepEqual(preparedTied, [...preparedTied].sort());
+      return prepared;
+    };
+
+    // total: all three tie on totalWaitMs; waitedAttempts 3 wins, then worstWaitMs 40k > 30k.
+    const totalAnalysis = withHotspots([
+      ['hotspot:m', { totalWaitMs: 90_000, waitedAttempts: 4, waitedRatio: 1, worstWaitMs: 50_000 }],
+      ['hotspot:z', { totalWaitMs: 60_000, waitedAttempts: 3, waitedRatio: 0.6, worstWaitMs: 20_000 }],
+      ['hotspot:c', { totalWaitMs: 60_000, waitedAttempts: 2, waitedRatio: 0.5, worstWaitMs: 40_000 }],
+      ['hotspot:a', { totalWaitMs: 60_000, waitedAttempts: 2, waitedRatio: 0.4, worstWaitMs: 30_000 }],
+    ]);
+    const totalOrder = assertTieOrder(totalAnalysis, 'total', ['hotspot:z', 'hotspot:c', 'hotspot:a']);
+    assert.deepEqual(
+      totalOrder.features.map((f) => f.hotspotId),
+      ['hotspot:m', 'hotspot:z', 'hotspot:c', 'hotspot:a'],
+    );
+
+    // frequency: all three tie on waitedAttempts; waitedRatio 0.9 wins, then ratio 0.5 with totalWaitMs 50k > 40k.
+    const frequencyAnalysis = withHotspots([
+      ['hotspot:m', { waitedAttempts: 4, waitedRatio: 1, totalWaitMs: 90_000, worstWaitMs: 50_000 }],
+      ['hotspot:z', { waitedAttempts: 2, waitedRatio: 0.9, totalWaitMs: 10_000, worstWaitMs: 5_000 }],
+      ['hotspot:c', { waitedAttempts: 2, waitedRatio: 0.5, totalWaitMs: 50_000, worstWaitMs: 30_000 }],
+      ['hotspot:a', { waitedAttempts: 2, waitedRatio: 0.5, totalWaitMs: 40_000, worstWaitMs: 20_000 }],
+    ]);
+    const frequencyOrder = assertTieOrder(frequencyAnalysis, 'frequency', [
+      'hotspot:z',
+      'hotspot:c',
+      'hotspot:a',
+    ]);
+    assert.deepEqual(
+      frequencyOrder.features.map((f) => f.hotspotId),
+      ['hotspot:m', 'hotspot:z', 'hotspot:c', 'hotspot:a'],
+    );
   });
 });
 

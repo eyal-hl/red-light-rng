@@ -750,6 +750,11 @@ export function RouteMap({
         officialFinishPoint={officialFinishPoint}
       />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
+      {heat.length > 0 ? (
+        <Text style={styles.fallbackNote}>
+          Heatmap needs the street map and is not drawn on this simplified preview.
+        </Text>
+      ) : null}
       {onMapPress && !onWaitMarkerPress ? (
         <Text style={styles.fallbackNote}>Tap-to-place is unavailable without the street map.</Text>
       ) : null}
