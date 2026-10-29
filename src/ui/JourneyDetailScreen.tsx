@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
+import { delayHeatViewState, type DelayHeatMode } from '../domain/delay-heatmap';
 import { rankDelayHotspots, visibleDelayHotspots, type DelayHotspotOrder } from '../domain/delay-hotspots';
 import { formatElapsed } from '../domain/duration';
 import type { JourneyDepartureGroup, JourneyDepartureGrouping } from '../domain/journey-departure';
@@ -10,10 +11,11 @@ import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery
 import { placeZone, type Place } from '../domain/place';
 import type { JourneyHotspotsState } from '../product/journey-navigation';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
-import { delayHotspotMapMarkers } from '../map/hotspot-display';
+import { delayHeatMapFeatures, delayHotspotMapMarkers } from '../map/hotspot-display';
 import { RouteMap } from '../map/RouteMap';
 import { pathVariantDisplayStyle, pathVariantDisplayStyles, pathVariantsToMapLines } from '../map/path-variant-display';
 import { DeferredMapSlot } from './DeferredMapSlot';
+import { JourneyDelayHeat } from './JourneyDelayHeat';
 import { JourneyDelayHotspots } from './JourneyDelayHotspots';
 import {
   durationOrDash,
@@ -73,6 +75,19 @@ export function JourneyDetailScreen({
     () => visibleDelayHotspots(rankedHotspots, hotspotsExpanded),
     [rankedHotspots, hotspotsExpanded],
   );
+  const [heatEnabled, setHeatEnabled] = useState(false);
+  const [heatMode, setHeatMode] = useState<DelayHeatMode>('frequency');
+  // Pure function of (analysis, mode): map gestures and re-renders never recompute it.
+  const heatView = useMemo(
+    () => delayHeatViewState(hotspots.status, analysis, heatMode),
+    [analysis, heatMode, hotspots.status],
+  );
+  const heatFeatures = useMemo(
+    () => (heatEnabled && heatView.kind === 'ready' ? heatView.heat.features : []),
+    [heatEnabled, heatView],
+  );
+  const mapHeat = useMemo(() => delayHeatMapFeatures(heatFeatures), [heatFeatures]);
+  const selectedHeat = heatFeatures.find((item) => item.hotspotId === selectedHotspotId) ?? null;
   const hotspotMarkers = useMemo(() => delayHotspotMapMarkers(shownHotspots), [shownHotspots]);
 
   return (
@@ -96,6 +111,8 @@ export function JourneyDetailScreen({
               checkpoints={[]}
               waitMarkers={hotspotMarkers}
               selectedMarkerId={selectedHotspotId}
+              heat={mapHeat}
+              onHeatPress={(hotspotId) => setSelectedHotspotId(hotspotId)}
               onWaitMarkerPress={(hotspotId) =>
                 setSelectedHotspotId((current) => (current === hotspotId ? null : hotspotId))
               }
@@ -113,6 +130,20 @@ export function JourneyDetailScreen({
           onSelectGroup={(group) => {
             if (group) {
               onOpenGroupAttempts(group);
+            }
+          }}
+        />
+        <JourneyDelayHeat
+          view={heatView}
+          enabled={heatEnabled}
+          mode={heatMode}
+          selected={selectedHeat}
+          onToggle={() => setHeatEnabled((value) => !value)}
+          onChangeMode={setHeatMode}
+          onOpenHotspot={(hotspotId) => {
+            setSelectedHotspotId(hotspotId);
+            if (!shownHotspots.some((item) => item.id === hotspotId)) {
+              setHotspotsExpanded(true);
             }
           }}
         />
