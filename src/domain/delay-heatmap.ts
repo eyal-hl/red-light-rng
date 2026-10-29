@@ -27,10 +27,12 @@ export const HEAT_MIN_ANALYZED_ATTEMPTS = 2;
 export const HEAT_MAX_FEATURES = 50;
 
 /**
- * Scaling reference percentile. Intensity = min(1, value / P90 of that mode's raw values
- * over ALL recurring hotspots), so one extreme wait saturates at 1 instead of flattening
- * the rest. Nearest-rank method: sort ascending, take index ceil(0.9 * n) - 1. The
- * reference is computed before the render cap, so capping never changes intensities.
+ * Scaling reference percentile. Intensity = min(1, value / reference), where the reference
+ * is `heatScaleReference` of that mode's raw values over ALL recurring hotspots: the
+ * nearest-rank P90 (index ceil(0.9 * n) - 1 over ascending values), but never the single
+ * largest value when n >= 2 (index capped at n - 2), so one extreme wait saturates at 1
+ * instead of flattening the rest. The reference is computed before the render cap, so
+ * capping never changes intensities.
  */
 export const HEAT_CLAMP_PERCENTILE = 0.9;
 
@@ -59,7 +61,7 @@ export type DelayHeatPreparation = {
   /** Recurring hotspots available before the render cap. */
   recurringCount: number;
   capped: boolean;
-  /** The raw value that maps to intensity 1 (the P90 reference). */
+  /** The raw value that maps to intensity 1 (see `heatScaleReference`). */
   scaleReference: number;
   oneOffWaitMs: number;
   unlocatedWaitMs: number;
@@ -83,6 +85,24 @@ export function nearestRankPercentile(values: readonly number[], fraction: numbe
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.max(1, Math.ceil(fraction * sorted.length));
   return sorted[Math.min(sorted.length, rank) - 1]!;
+}
+
+/**
+ * Scaling reference for one mode over all recurring hotspots (computed before the render
+ * cap). Rule: sort ascending; n = 0 gives 0; n = 1 gives that value; n >= 2 gives the
+ * nearest-rank P90 at index min(ceil(0.9 * n) - 1, n - 2), so the single largest value is
+ * never the reference.
+ */
+export function heatScaleReference(values: readonly number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 1) {
+    return sorted[0]!;
+  }
+  const nearestRankIndex = Math.ceil(HEAT_CLAMP_PERCENTILE * sorted.length) - 1;
+  return sorted[Math.min(nearestRankIndex, sorted.length - 2)]!;
 }
 
 /**
@@ -115,10 +135,7 @@ export function prepareDelayHeat(
     return null;
   }
   const hotspots = analysis.hotspots;
-  const reference = nearestRankPercentile(
-    hotspots.map((hotspot) => heatRawValue(hotspot, mode)),
-    HEAT_CLAMP_PERCENTILE,
-  );
+  const reference = heatScaleReference(hotspots.map((hotspot) => heatRawValue(hotspot, mode)));
   const order: DelayHotspotOrder = mode === 'frequency' ? 'frequency' : 'total';
   // Stable sort: ties on the raw value keep the existing #74 ranking (id is its last key).
   const ranked = rankDelayHotspots(hotspots, order).sort(

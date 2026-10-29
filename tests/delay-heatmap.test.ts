@@ -8,6 +8,7 @@ import {
   heatRawValue,
   HEAT_MAX_FEATURES,
   HEAT_MIN_RADIUS_METERS,
+  heatScaleReference,
   nearestRankPercentile,
   prepareDelayHeat,
 } from '../src/domain/delay-heatmap';
@@ -381,6 +382,84 @@ describe('delay heat clamp', () => {
     assert.equal(heat.scaleReference, 20_000);
     assert.ok(heat.features.every((f) => f.intensity === 1));
     assert.equal(heat.features[0]!.rawValue, 1_200_000);
+  });
+
+  it('small-N reference never uses the single largest value', () => {
+    assert.equal(heatScaleReference([]), 0);
+    assert.equal(heatScaleReference([7]), 7);
+    assert.equal(heatScaleReference([1_200_000, 20_000]), 20_000);
+    assert.equal(heatScaleReference([1, 2, 3, 4, 5, 6, 7, 8, 9, 100]), 9);
+    assert.equal(heatScaleReference([1, 2, 3, 4, 5]), 4);
+  });
+
+  it('two hotspots: one extreme wait keeps the normal hotspot at full intensity', () => {
+    const main = route('main');
+    const base = run([
+      input('a1', main, [waitAt(main, 300, 10_000)]),
+      input('a2', main, [waitAt(main, 300, 10_000)]),
+    ]);
+    const template = base.hotspots[0]!;
+    const analysis: DelayHotspotAnalysis = {
+      ...base,
+      hotspots: [
+        { ...template, id: 'hotspot:normal', totalWaitMs: 20_000 },
+        { ...template, id: 'hotspot:extreme', totalWaitMs: 1_200_000 },
+      ],
+    };
+    const heat = prepareDelayHeat(analysis, 'total')!;
+    assert.equal(heat.scaleReference, 20_000);
+    const byId = Object.fromEntries(heat.features.map((f) => [f.hotspotId, f.intensity]));
+    assert.equal(byId['hotspot:normal'], 1);
+    assert.equal(byId['hotspot:extreme'], 1);
+  });
+
+  it('five hotspots: one extreme wait leaves the normal hotspots in a readable range', () => {
+    const main = route('main');
+    const base = run([
+      input('a1', main, [waitAt(main, 300, 10_000)]),
+      input('a2', main, [waitAt(main, 300, 10_000)]),
+    ]);
+    const template = base.hotspots[0]!;
+    const totals = [200_000, 250_000, 300_000, 400_000, 1_200_000];
+    const analysis: DelayHotspotAnalysis = {
+      ...base,
+      hotspots: totals.map((totalWaitMs, i) => ({
+        ...template,
+        id: `hotspot:${i}`,
+        totalWaitMs,
+      })),
+    };
+    const heat = prepareDelayHeat(analysis, 'total')!;
+    assert.equal(heat.scaleReference, 400_000);
+    const byId = Object.fromEntries(heat.features.map((f) => [f.hotspotId, f.intensity]));
+    assert.equal(byId['hotspot:4'], 1);
+    const normals = [0, 1, 2, 3].map((i) => byId[`hotspot:${i}`]!);
+    assert.ok(Math.min(...normals) > 0.3, String(normals));
+    assert.ok(normals.every((v) => v > 0 && v <= 1));
+  });
+
+  it('single-hotspot and all-equal inputs still saturate at intensity 1', () => {
+    const main = route('main');
+    const single = prepareDelayHeat(
+      run([input('a1', main, [waitAt(main, 500, 10_000)]), input('a2', main, [waitAt(main, 500, 10_000)])]),
+      'total',
+    )!;
+    assert.equal(single.features.length, 1);
+    assert.equal(single.scaleReference, 20_000);
+    assert.equal(single.features[0]!.intensity, 1);
+
+    const base = run([
+      input('a1', main, [waitAt(main, 300, 10_000)]),
+      input('a2', main, [waitAt(main, 300, 10_000)]),
+    ]);
+    const template = base.hotspots[0]!;
+    const equal: DelayHotspotAnalysis = {
+      ...base,
+      hotspots: [0, 1, 2].map((i) => ({ ...template, id: `hotspot:${i}`, totalWaitMs: 50_000 })),
+    };
+    const heat = prepareDelayHeat(equal, 'total')!;
+    assert.equal(heat.scaleReference, 50_000);
+    assert.ok(heat.features.every((f) => f.intensity === 1));
   });
 });
 
