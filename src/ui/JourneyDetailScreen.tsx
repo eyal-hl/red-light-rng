@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { delayHeatViewState, type DelayHeatMode } from '../domain/delay-heatmap';
@@ -10,6 +10,14 @@ import type { JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { placeZone, type Place } from '../domain/place';
 import type { JourneyHotspotsState } from '../product/journey-navigation';
+import {
+  createJourneyWaitViewState,
+  mapHeatFeatures,
+  openHotspotFromHeat,
+  presentWaitView,
+  selectWaitView,
+  type JourneyWaitView,
+} from '../product/journey-wait-view';
 import { transportationModeIcon, transportationModeLabel } from '../domain/route';
 import { delayHeatMapFeatures, delayHotspotMapMarkers } from '../map/hotspot-display';
 import { RouteMap } from '../map/RouteMap';
@@ -17,6 +25,7 @@ import { pathVariantDisplayStyle, pathVariantDisplayStyles, pathVariantsToMapLin
 import { DeferredMapSlot } from './DeferredMapSlot';
 import { JourneyDelayHeat } from './JourneyDelayHeat';
 import { JourneyDelayHotspots } from './JourneyDelayHotspots';
+import { JourneyWaitViewSwitch } from './JourneyWaitViewSwitch';
 import {
   durationOrDash,
   JourneyStatRow,
@@ -64,35 +73,41 @@ export function JourneyDetailScreen({
   const variantStyles = pathVariantDisplayStyles(pathVariants.map((item) => item.route.id));
   const variantMapLines = pathVariantsToMapLines(pathVariants);
   const [hotspotOrder, setHotspotOrder] = useState<DelayHotspotOrder>('total');
-  const [hotspotsExpanded, setHotspotsExpanded] = useState(false);
-  const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
+  // One view at a time (recurring list or heat panel); expanded and selection survive switches.
+  const [waitView, setWaitView] = useState(createJourneyWaitViewState);
+  const presentation = presentWaitView(waitView);
+  const scrollRef = useRef<ScrollView>(null);
+  // Y of the view switch inside the scroll content, so drill-down can bring the list into view.
+  const waitSwitchY = useRef(0);
   const analysis = hotspots.status === 'ready' ? hotspots.analysis : null;
   const rankedHotspots = useMemo(
     () => rankDelayHotspots(analysis?.hotspots ?? [], hotspotOrder),
     [analysis, hotspotOrder],
   );
   const shownHotspots = useMemo(
-    () => visibleDelayHotspots(rankedHotspots, hotspotsExpanded),
-    [rankedHotspots, hotspotsExpanded],
+    () => visibleDelayHotspots(rankedHotspots, waitView.expanded),
+    [rankedHotspots, waitView.expanded],
   );
-  const [heatEnabled, setHeatEnabled] = useState(false);
   const [heatMode, setHeatMode] = useState<DelayHeatMode>('frequency');
   // Pure function of (analysis, mode): map gestures and re-renders never recompute it.
   const heatView = useMemo(
     () => delayHeatViewState(hotspots.status, analysis, heatMode),
     [analysis, heatMode, hotspots.status],
   );
-  const heatFeatures = useMemo(
-    () => (heatEnabled && heatView.kind === 'ready' ? heatView.heat.features : []),
-    [heatEnabled, heatView],
-  );
+  // Heat reaches the map only while the heatmap view is active.
+  const heatFeatures = useMemo(() => mapHeatFeatures(waitView.view, heatView), [waitView.view, heatView]);
   const mapHeat = useMemo(() => delayHeatMapFeatures(heatFeatures), [heatFeatures]);
-  const selectedHeat = heatFeatures.find((item) => item.hotspotId === selectedHotspotId) ?? null;
+  const selectedHeat =
+    heatFeatures.find((item) => item.hotspotId === waitView.selectedHotspotId) ?? null;
   const hotspotMarkers = useMemo(() => delayHotspotMapMarkers(shownHotspots), [shownHotspots]);
+
+  const changeWaitView = (view: JourneyWaitView) => setWaitView((state) => selectWaitView(state, view));
+  const selectHotspot = (hotspotId: string | null) =>
+    setWaitView((state) => ({ ...state, selectedHotspotId: hotspotId }));
 
   return (
     <View style={styles.screen}>
-      <ScrollView nestedScrollEnabled contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} nestedScrollEnabled contentContainerStyle={styles.content}>
         <Pressable accessibilityRole="button" onPress={onBack}>
           <Text style={styles.kicker}>← JOURNEYS</Text>
         </Pressable>
@@ -110,11 +125,14 @@ export function JourneyDetailScreen({
               finishZone={placeZone(destination)}
               checkpoints={[]}
               waitMarkers={hotspotMarkers}
-              selectedMarkerId={selectedHotspotId}
+              selectedMarkerId={waitView.selectedHotspotId}
               heat={mapHeat}
-              onHeatPress={(hotspotId) => setSelectedHotspotId(hotspotId)}
+              onHeatPress={(hotspotId) => selectHotspot(hotspotId)}
               onWaitMarkerPress={(hotspotId) =>
-                setSelectedHotspotId((current) => (current === hotspotId ? null : hotspotId))
+                setWaitView((state) => ({
+                  ...state,
+                  selectedHotspotId: state.selectedHotspotId === hotspotId ? null : hotspotId,
+                }))
               }
             />
           </DeferredMapSlot>
@@ -133,34 +151,47 @@ export function JourneyDetailScreen({
             }
           }}
         />
-        <JourneyDelayHeat
-          view={heatView}
-          enabled={heatEnabled}
-          mode={heatMode}
-          selected={selectedHeat}
-          onToggle={() => setHeatEnabled((value) => !value)}
-          onChangeMode={setHeatMode}
-          onOpenHotspot={(hotspotId) => {
-            setSelectedHotspotId(hotspotId);
-            if (!shownHotspots.some((item) => item.id === hotspotId)) {
-              setHotspotsExpanded(true);
-            }
+        <View
+          onLayout={(event) => {
+            waitSwitchY.current = event.nativeEvent.layout.y;
           }}
-        />
-        <JourneyDelayHotspots
-          state={hotspots}
-          analysis={analysis}
-          ranked={rankedHotspots}
-          visible={shownHotspots}
-          order={hotspotOrder}
-          expanded={hotspotsExpanded}
-          selectedId={selectedHotspotId}
-          busy={busy}
-          onChangeOrder={setHotspotOrder}
-          onToggleExpanded={() => setHotspotsExpanded((value) => !value)}
-          onSelect={setSelectedHotspotId}
-          onOpenAttempt={onOpenHotspotAttempt}
-        />
+        >
+          <JourneyWaitViewSwitch view={waitView.view} onSelect={changeWaitView} />
+        </View>
+        {presentation.showHeatPanel ? (
+          <JourneyDelayHeat
+            view={heatView}
+            mode={heatMode}
+            selected={selectedHeat}
+            onChangeMode={setHeatMode}
+            onOpenHotspot={(hotspotId) => {
+              setWaitView((state) =>
+                openHotspotFromHeat(
+                  state,
+                  hotspotId,
+                  shownHotspots.map((item) => item.id),
+                ),
+              );
+              scrollRef.current?.scrollTo({ y: Math.max(0, waitSwitchY.current - 8), animated: true });
+            }}
+          />
+        ) : null}
+        {presentation.showRecurringList ? (
+          <JourneyDelayHotspots
+            state={hotspots}
+            analysis={analysis}
+            ranked={rankedHotspots}
+            visible={shownHotspots}
+            order={hotspotOrder}
+            expanded={waitView.expanded}
+            selectedId={waitView.selectedHotspotId}
+            busy={busy}
+            onChangeOrder={setHotspotOrder}
+            onToggleExpanded={() => setWaitView((state) => ({ ...state, expanded: !state.expanded }))}
+            onSelect={selectHotspot}
+            onOpenAttempt={onOpenHotspotAttempt}
+          />
+        ) : null}
         <Text style={styles.mutedText}>
           Any path between these places counts. Journey PB is the headline. Path variants are optional
           secondary analytics.
