@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import type { DelayHeatFeature, DelayHeatViewState } from '../src/domain/delay-heatmap';
 import {
   createJourneyWaitViewState,
+  HOTSPOT_SCROLL_MARGIN,
+  hotspotScrollTarget,
   mapHeatFeatures,
   openHotspotFromHeat,
   presentWaitView,
@@ -147,5 +149,30 @@ describe('waitViewOptions', () => {
     }
     assert.equal(recurring[0]?.label, 'Recurring waits');
     assert.equal(recurring[1]?.label, 'Heatmap');
+  });
+});
+
+describe('hotspot drill-down scroll target', () => {
+  const offsets = new Map([
+    ['hot-a', 0],
+    ['hot-d', 420],
+  ]);
+
+  it('returns null when no drill-down is pending', () => {
+    assert.equal(hotspotScrollTarget({ pendingHotspotId: null, cardOffsets: offsets, listContentY: 900 }), null);
+  });
+
+  it('returns null until the pending card and the list position are both known', () => {
+    assert.equal(hotspotScrollTarget({ pendingHotspotId: 'hot-d', cardOffsets: offsets, listContentY: null }), null);
+    assert.equal(hotspotScrollTarget({ pendingHotspotId: 'hot-x', cardOffsets: offsets, listContentY: 900 }), null);
+  });
+
+  it('scrolls so a card below the fold sits just under the top margin', () => {
+    const target = hotspotScrollTarget({ pendingHotspotId: 'hot-d', cardOffsets: offsets, listContentY: 900 });
+    assert.equal(target, 900 + 420 - HOTSPOT_SCROLL_MARGIN);
+  });
+
+  it('never returns a negative scroll offset', () => {
+    assert.equal(hotspotScrollTarget({ pendingHotspotId: 'hot-a', cardOffsets: offsets, listContentY: 0 }), 0);
   });
 });

@@ -89,3 +89,31 @@ export function waitViewOptions(view: JourneyWaitView): JourneyWaitViewOption[] 
     },
   ];
 }
+
+/** Gap kept above a drilled-into hotspot card when the recurring list scrolls to it. */
+export const HOTSPOT_SCROLL_MARGIN = 16;
+
+export type HotspotScrollInput = {
+  /** Hotspot set by a heat drill-down that has not been scrolled to yet. */
+  pendingHotspotId: string | null;
+  /** Card y relative to the recurring list container, keyed by hotspot id. */
+  cardOffsets: ReadonlyMap<string, number>;
+  /** Recurring list container y inside the scroll content, or null until both parts are laid out. */
+  listContentY: number | null;
+};
+
+/**
+ * Scroll y that brings the pending hotspot card into view, or null when there is nothing
+ * to scroll for (no drill-down pending, card not reported yet, or list not laid out).
+ */
+export function hotspotScrollTarget(input: HotspotScrollInput): number | null {
+  const { pendingHotspotId, cardOffsets, listContentY } = input;
+  if (pendingHotspotId == null || listContentY == null) {
+    return null;
+  }
+  const cardY = cardOffsets.get(pendingHotspotId);
+  if (cardY == null) {
+    return null;
+  }
+  return Math.max(0, listContentY + cardY - HOTSPOT_SCROLL_MARGIN);
+}

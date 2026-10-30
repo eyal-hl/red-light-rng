@@ -50,6 +50,8 @@ export function JourneyDelayHotspots({
   onToggleExpanded,
   onSelect,
   onOpenAttempt,
+  onListLayout,
+  onCardLayout,
 }: {
   state: JourneyHotspotsState;
   analysis: DelayHotspotAnalysis | null;
@@ -63,6 +65,10 @@ export function JourneyDelayHotspots({
   onToggleExpanded: () => void;
   onSelect: (hotspotId: string | null) => void;
   onOpenAttempt: (attemptId: string) => void;
+  /** Cards container y, relative to this component's root. */
+  onListLayout?: (y: number) => void;
+  /** Card y, relative to the cards container, for scrolling to a drilled-into hotspot. */
+  onCardLayout?: (hotspotId: string, y: number) => void;
 }) {
   const totals = analysis?.totals ?? null;
   return (
@@ -78,13 +84,13 @@ export function JourneyDelayHotspots({
         <Text style={styles.mutedText}>Recurring waits are unavailable right now.</Text>
       ) : null}
       {state.status === 'ready' && analysis ? (
-        <View>
+        <>
           {ranked.length === 0 ? (
             <Text style={styles.emptyText}>
               No recurring waits yet. A spot needs confirmed waiting on at least two attempts.
             </Text>
           ) : (
-            <View>
+            <View onLayout={(event) => onListLayout?.(event.nativeEvent.layout.y)}>
               <View style={styles.statsViewRow}>
                 <OrderChip label="Worst total" selected={order === 'total'} onPress={() => onChangeOrder('total')} />
                 <OrderChip
@@ -102,6 +108,7 @@ export function JourneyDelayHotspots({
                   busy={busy}
                   onSelect={onSelect}
                   onOpenAttempt={onOpenAttempt}
+                  onLayout={onCardLayout}
                 />
               ))}
               {ranked.length > HOTSPOT_DEFAULT_VISIBLE_COUNT ? (
@@ -126,7 +133,7 @@ export function JourneyDelayHotspots({
               matching path variant are not included.
             </Text>
           ) : null}
-        </View>
+        </>
       ) : null}
     </View>
   );
@@ -139,6 +146,7 @@ function HotspotCard({
   busy,
   onSelect,
   onOpenAttempt,
+  onLayout,
 }: {
   rank: number;
   hotspot: DelayHotspot;
@@ -146,9 +154,13 @@ function HotspotCard({
   busy: boolean;
   onSelect: (hotspotId: string | null) => void;
   onOpenAttempt: (attemptId: string) => void;
+  onLayout?: (hotspotId: string, y: number) => void;
 }) {
   return (
-    <View style={[styles.card, selected ? styles.selectedCard : null]}>
+    <View
+      style={[styles.card, selected ? styles.selectedCard : null]}
+      onLayout={(event) => onLayout?.(hotspot.id, event.nativeEvent.layout.y)}
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Recurring wait ${rank}`}

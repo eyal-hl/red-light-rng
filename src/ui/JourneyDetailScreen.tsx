@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { delayHeatViewState, type DelayHeatMode } from '../domain/delay-heatmap';
@@ -13,6 +13,7 @@ import type { JourneyHotspotsState } from '../product/journey-navigation';
 import {
   createJourneyWaitViewState,
   mapHeatFeatures,
+  hotspotScrollTarget,
   openHotspotFromHeat,
   presentWaitView,
   selectWaitView,
@@ -79,6 +80,11 @@ export function JourneyDetailScreen({
   const scrollRef = useRef<ScrollView>(null);
   // Y of the view switch inside the scroll content, so drill-down can bring the list into view.
   const waitSwitchY = useRef(0);
+  // Drill-down from the heat panel scrolls to the selected card once the list has laid out.
+  const pendingHotspotScroll = useRef<string | null>(null);
+  const hotspotCardOffsets = useRef(new Map<string, number>());
+  const recurringSectionY = useRef<number | null>(null);
+  const recurringListY = useRef<number | null>(null);
   const analysis = hotspots.status === 'ready' ? hotspots.analysis : null;
   const rankedHotspots = useMemo(
     () => rankDelayHotspots(analysis?.hotspots ?? [], hotspotOrder),
@@ -104,6 +110,32 @@ export function JourneyDetailScreen({
   const changeWaitView = (view: JourneyWaitView) => setWaitView((state) => selectWaitView(state, view));
   const selectHotspot = (hotspotId: string | null) =>
     setWaitView((state) => ({ ...state, selectedHotspotId: hotspotId }));
+
+  const scrollToPendingHotspot = () => {
+    const sectionY = recurringSectionY.current;
+    const listY = recurringListY.current;
+    const target = hotspotScrollTarget({
+      pendingHotspotId: pendingHotspotScroll.current,
+      cardOffsets: hotspotCardOffsets.current,
+      listContentY: sectionY == null || listY == null ? null : sectionY + (styles.statsSection.marginTop ?? 0) + listY,
+    });
+    if (target == null) {
+      return;
+    }
+    pendingHotspotScroll.current = null;
+    scrollRef.current?.scrollTo({ y: target, animated: true });
+  };
+
+  // A drilled-into hotspot that is not in the rendered list (unknown id) never reports a card;
+  // fall back to the view switch position so the user still lands on the recurring list.
+  useEffect(() => {
+    const pendingId = pendingHotspotScroll.current;
+    if (pendingId == null || shownHotspots.some((item) => item.id === pendingId)) {
+      return;
+    }
+    pendingHotspotScroll.current = null;
+    scrollRef.current?.scrollTo({ y: Math.max(0, waitSwitchY.current - 8), animated: true });
+  }, [waitView, shownHotspots]);
 
   return (
     <View style={styles.screen}>
@@ -165,6 +197,11 @@ export function JourneyDetailScreen({
             selected={selectedHeat}
             onChangeMode={setHeatMode}
             onOpenHotspot={(hotspotId) => {
+              // The heat panel is unmounted here, so the list remounts and reports fresh layouts.
+              pendingHotspotScroll.current = hotspotId;
+              hotspotCardOffsets.current.clear();
+              recurringSectionY.current = null;
+              recurringListY.current = null;
               setWaitView((state) =>
                 openHotspotFromHeat(
                   state,
@@ -172,25 +209,39 @@ export function JourneyDetailScreen({
                   shownHotspots.map((item) => item.id),
                 ),
               );
-              scrollRef.current?.scrollTo({ y: Math.max(0, waitSwitchY.current - 8), animated: true });
             }}
           />
         ) : null}
         {presentation.showRecurringList ? (
-          <JourneyDelayHotspots
-            state={hotspots}
-            analysis={analysis}
-            ranked={rankedHotspots}
-            visible={shownHotspots}
-            order={hotspotOrder}
-            expanded={waitView.expanded}
-            selectedId={waitView.selectedHotspotId}
-            busy={busy}
-            onChangeOrder={setHotspotOrder}
-            onToggleExpanded={() => setWaitView((state) => ({ ...state, expanded: !state.expanded }))}
-            onSelect={selectHotspot}
-            onOpenAttempt={onOpenHotspotAttempt}
-          />
+          <View
+            onLayout={(event) => {
+              recurringSectionY.current = event.nativeEvent.layout.y;
+              scrollToPendingHotspot();
+            }}
+          >
+            <JourneyDelayHotspots
+              state={hotspots}
+              analysis={analysis}
+              ranked={rankedHotspots}
+              visible={shownHotspots}
+              order={hotspotOrder}
+              expanded={waitView.expanded}
+              selectedId={waitView.selectedHotspotId}
+              busy={busy}
+              onChangeOrder={setHotspotOrder}
+              onToggleExpanded={() => setWaitView((state) => ({ ...state, expanded: !state.expanded }))}
+              onSelect={selectHotspot}
+              onOpenAttempt={onOpenHotspotAttempt}
+              onListLayout={(y) => {
+                recurringListY.current = y;
+                scrollToPendingHotspot();
+              }}
+              onCardLayout={(hotspotId, y) => {
+                hotspotCardOffsets.current.set(hotspotId, y);
+                scrollToPendingHotspot();
+              }}
+            />
+          </View>
         ) : null}
         <Text style={styles.mutedText}>
           Any path between these places counts. Journey PB is the headline. Path variants are optional
