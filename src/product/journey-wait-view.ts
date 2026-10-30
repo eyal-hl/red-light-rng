@@ -1,3 +1,4 @@
+import type { DelayHotspot } from '../domain/delay-hotspots';
 import type { DelayHeatFeature, DelayHeatViewState } from '../domain/delay-heatmap';
 
 /**
@@ -71,6 +72,34 @@ export function mapHeatFeatures(view: JourneyWaitView, heatView: DelayHeatViewSt
     return [];
   }
   return heatView.heat.features;
+}
+
+/**
+ * Recurring wait pins (orange, n/total labels) are drawn only in the recurring view. The heatmap
+ * view replaces them with heat circles, so it pins nothing, whatever the heat state is.
+ */
+export function mapWaitMarkerHotspots(
+  view: JourneyWaitView,
+  shownHotspots: readonly DelayHotspot[],
+): readonly DelayHotspot[] {
+  return view === 'recurring' ? shownHotspots : [];
+}
+
+export type JourneyMapLayerInputs = {
+  markerHotspots: readonly DelayHotspot[];
+  heatFeatures: DelayHeatFeature[];
+};
+
+/** Map inputs for the active view: exactly one of recurring pins or heat circles, never both. */
+export function mapLayerInputs(
+  view: JourneyWaitView,
+  shownHotspots: readonly DelayHotspot[],
+  heatView: DelayHeatViewState,
+): JourneyMapLayerInputs {
+  return {
+    markerHotspots: mapWaitMarkerHotspots(view, shownHotspots),
+    heatFeatures: mapHeatFeatures(view, heatView),
+  };
 }
 
 export function waitViewOptions(view: JourneyWaitView): JourneyWaitViewOption[] {

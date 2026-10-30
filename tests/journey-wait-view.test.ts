@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import type { DelayHotspot } from '../src/domain/delay-hotspots';
 import type { DelayHeatFeature, DelayHeatViewState } from '../src/domain/delay-heatmap';
+import { delayHotspotMapMarkers } from '../src/map/hotspot-display';
 import {
   createJourneyWaitViewState,
   HOTSPOT_SCROLL_MARGIN,
   hotspotScrollTarget,
   mapHeatFeatures,
+  mapLayerInputs,
+  mapWaitMarkerHotspots,
   openHotspotFromHeat,
   presentWaitView,
   selectWaitView,
   waitViewOptions,
+  type JourneyWaitView,
   type JourneyWaitViewState,
 } from '../src/product/journey-wait-view';
 
@@ -38,6 +43,30 @@ const READY: DelayHeatViewState = {
     unlocatedWaitMs: 0,
   },
 };
+
+function hotspot(id: string): DelayHotspot {
+  return {
+    id,
+    coordinate: { latitude: 51.5, longitude: -0.12 },
+    spreadMeters: 5,
+    confidence: 'high',
+    encounteredAttempts: 4,
+    waitedAttempts: 3,
+    waitedRatio: 0.75,
+    eventCount: 3,
+    totalWaitMs: 60_000,
+    averageWaitMs: 20_000,
+    medianWaitMs: 20_000,
+    worstWaitMs: 30_000,
+    worstAttemptId: 'attempt-1',
+    trend: null,
+    contributions: [],
+  };
+}
+
+const LOADING: DelayHeatViewState = { kind: 'loading' };
+const UNAVAILABLE: DelayHeatViewState = { kind: 'unavailable' };
+const NOT_ENOUGH: DelayHeatViewState = { kind: 'not-enough-history', analyzedAttemptCount: 1 };
 
 function state(overrides: Partial<JourneyWaitViewState> = {}): JourneyWaitViewState {
   return { view: 'recurring', expanded: false, selectedHotspotId: null, ...overrides };
@@ -174,5 +203,91 @@ describe('hotspot drill-down scroll target', () => {
 
   it('never returns a negative scroll offset', () => {
     assert.equal(hotspotScrollTarget({ pendingHotspotId: 'hot-a', cardOffsets: offsets, listContentY: 0 }), 0);
+  });
+});
+
+describe('map layer gating', () => {
+  const SHOWN = [hotspot('hot-a'), hotspot('hot-b')];
+  const markerIds = (hotspots: readonly DelayHotspot[]) => delayHotspotMapMarkers(hotspots).map((marker) => marker.id);
+
+  it('recurring view with ready heat draws wait pins and no heat circles', () => {
+    const inputs = mapLayerInputs('recurring', SHOWN, READY);
+
+    assert.deepEqual(markerIds(inputs.markerHotspots), ['hot-a', 'hot-b']);
+    assert.deepEqual(inputs.heatFeatures, []);
+    assert.deepEqual(
+      delayHotspotMapMarkers(inputs.markerHotspots).map((marker) => marker.label),
+      ['3/4', '3/4'],
+    );
+  });
+
+  it('heatmap view with ready heat draws heat circles and no wait pins', () => {
+    const inputs = mapLayerInputs('heatmap', SHOWN, READY);
+
+    assert.deepEqual(inputs.markerHotspots, []);
+    assert.deepEqual(inputs.heatFeatures, [FEATURE]);
+    assert.deepEqual(delayHotspotMapMarkers(inputs.markerHotspots), []);
+  });
+
+  it('heatmap view with loading, not-enough-history or unavailable heat draws neither pins nor heat', () => {
+    for (const heatView of [LOADING, NOT_ENOUGH, UNAVAILABLE]) {
+      const inputs = mapLayerInputs('heatmap', SHOWN, heatView);
+      assert.deepEqual(inputs.markerHotspots, [], heatView.kind);
+      assert.deepEqual(inputs.heatFeatures, [], heatView.kind);
+    }
+  });
+
+  it('recurring view with zero hotspots draws neither pins nor heat', () => {
+    const inputs = mapLayerInputs('recurring', [], READY);
+
+    assert.deepEqual(inputs.markerHotspots, []);
+    assert.deepEqual(inputs.heatFeatures, []);
+  });
+
+  it('heatmap view with zero hotspots and ready heat draws no pins', () => {
+    assert.deepEqual(mapWaitMarkerHotspots('heatmap', []), []);
+  });
+
+  it('drill-down from a heat summary yields pins that include the selected hotspot', () => {
+    const shownIds = ['hot-a', 'hot-b', 'hot-c'];
+    const shown = shownIds.map(hotspot);
+    const start = state({ view: 'heatmap', expanded: false, selectedHotspotId: 'hot-a' });
+    const next = openHotspotFromHeat(start, 'hot-b', shownIds);
+    const inputs = mapLayerInputs(next.view, shown, READY);
+
+    assert.equal(next.view, 'recurring');
+    assert.equal(next.selectedHotspotId, 'hot-b');
+    assert.ok(markerIds(inputs.markerHotspots).includes('hot-b'));
+    assert.deepEqual(inputs.heatFeatures, []);
+  });
+
+  it('drill-down to a hidden hotspot expands the list so its pin is drawn', () => {
+    const shownIds = ['hot-a', 'hot-b', 'hot-c', 'hot-d'];
+    const next = openHotspotFromHeat(state({ view: 'heatmap', expanded: false }), 'hot-d', ['hot-a', 'hot-b', 'hot-c']);
+    const shown = next.expanded ? shownIds.map(hotspot) : shownIds.slice(0, 3).map(hotspot);
+    const inputs = mapLayerInputs(next.view, shown, READY);
+
+    assert.ok(markerIds(inputs.markerHotspots).includes('hot-d'));
+  });
+
+  it('toggling back to heatmap removes the pins again and restores heat', () => {
+    const shown = [hotspot('hot-a')];
+    const recurring = openHotspotFromHeat(state({ view: 'heatmap' }), 'hot-a', ['hot-a']);
+    assert.deepEqual(markerIds(mapLayerInputs(recurring.view, shown, READY).markerHotspots), ['hot-a']);
+
+    const heat = selectWaitView(recurring, 'heatmap');
+    const inputs = mapLayerInputs(heat.view, shown, READY);
+
+    assert.deepEqual(inputs.markerHotspots, []);
+    assert.deepEqual(inputs.heatFeatures, [FEATURE]);
+  });
+
+  it('mapWaitMarkerHotspots and mapHeatFeatures agree with mapLayerInputs for every view', () => {
+    const views: JourneyWaitView[] = ['recurring', 'heatmap'];
+    for (const view of views) {
+      const inputs = mapLayerInputs(view, SHOWN, READY);
+      assert.deepEqual(inputs.markerHotspots, mapWaitMarkerHotspots(view, SHOWN));
+      assert.deepEqual(inputs.heatFeatures, mapHeatFeatures(view, READY));
+    }
   });
 });

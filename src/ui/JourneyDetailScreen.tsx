@@ -12,8 +12,8 @@ import { placeZone, type Place } from '../domain/place';
 import type { JourneyHotspotsState } from '../product/journey-navigation';
 import {
   createJourneyWaitViewState,
-  mapHeatFeatures,
   hotspotScrollTarget,
+  mapLayerInputs,
   openHotspotFromHeat,
   presentWaitView,
   selectWaitView,
@@ -100,12 +100,20 @@ export function JourneyDetailScreen({
     () => delayHeatViewState(hotspots.status, analysis, heatMode),
     [analysis, heatMode, hotspots.status],
   );
-  // Heat reaches the map only while the heatmap view is active.
-  const heatFeatures = useMemo(() => mapHeatFeatures(waitView.view, heatView), [waitView.view, heatView]);
-  const mapHeat = useMemo(() => delayHeatMapFeatures(heatFeatures), [heatFeatures]);
+  // Recurring pins and heat circles are mutually exclusive: pins only in the recurring view, heat only in heatmap.
+  const mapInputs = useMemo(
+    () => mapLayerInputs(waitView.view, shownHotspots, heatView),
+    [waitView.view, shownHotspots, heatView],
+  );
+  const mapHeat = useMemo(() => delayHeatMapFeatures(mapInputs.heatFeatures), [mapInputs.heatFeatures]);
+  const hotspotMarkers = useMemo(
+    () => delayHotspotMapMarkers(mapInputs.markerHotspots),
+    [mapInputs.markerHotspots],
+  );
   const selectedHeat =
-    heatFeatures.find((item) => item.hotspotId === waitView.selectedHotspotId) ?? null;
-  const hotspotMarkers = useMemo(() => delayHotspotMapMarkers(shownHotspots), [shownHotspots]);
+    mapInputs.heatFeatures.find((item) => item.hotspotId === waitView.selectedHotspotId) ?? null;
+  // Pins exist only in the recurring view, so the selection highlight applies only there.
+  const selectedMarkerId = presentation.showRecurringList ? waitView.selectedHotspotId : null;
 
   const changeWaitView = (view: JourneyWaitView) => setWaitView((state) => selectWaitView(state, view));
   const selectHotspot = (hotspotId: string | null) =>
@@ -157,7 +165,7 @@ export function JourneyDetailScreen({
               finishZone={placeZone(destination)}
               checkpoints={[]}
               waitMarkers={hotspotMarkers}
-              selectedMarkerId={waitView.selectedHotspotId}
+              selectedMarkerId={selectedMarkerId}
               heat={mapHeat}
               onHeatPress={(hotspotId) => selectHotspot(hotspotId)}
               onWaitMarkerPress={(hotspotId) =>
