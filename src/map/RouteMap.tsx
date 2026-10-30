@@ -31,6 +31,14 @@ export type RouteMapWaitMarker = {
   tone?: RouteMapWaitMarkerTone;
 };
 
+export type RouteMapHeatFeature = {
+  id: string;
+  point: LatLng;
+  /** 0..1 after the documented clamp. */
+  intensity: number;
+  radiusMeters: number;
+};
+
 export type RouteMapDebugSample = MapPresentationDebugSample;
 
 export type RouteMapPathVariant = PathVariantMapLine;
@@ -42,6 +50,8 @@ export type RouteMapProps = {
   finishZone?: GeoZone | null;
   checkpoints?: RouteMapCheckpoint[];
   waitMarkers?: RouteMapWaitMarker[];
+  /** Optional analysis heat drawn under paths and pins; not drawn by the fallback preview. */
+  heat?: RouteMapHeatFeature[];
   previewPoint?: LatLng | null;
   selectedMarkerId?: string | null;
   recordedPath?: LatLng[];
@@ -51,6 +61,7 @@ export type RouteMapProps = {
   officialFinishPoint?: LatLng | null;
   onMapPress?: (point: LatLng) => void;
   onWaitMarkerPress?: (waitId: string) => void;
+  onHeatPress?: (heatId: string) => void;
   cameraGesturesEnabled?: boolean;
   style?: StyleProp<ViewStyle>;
 };
@@ -222,6 +233,36 @@ function toWaitGeoJson(
   };
 }
 
+type HeatCollection = {
+  type: 'FeatureCollection';
+  features: {
+    type: 'Feature';
+    properties: { heatId: string; intensity: number; pxAtZoom0: number };
+    geometry: { type: 'Point'; coordinates: number[] };
+  }[];
+};
+
+/** Web-mercator meters per pixel at zoom 0 and the equator for 512 px tiles. */
+const METERS_PER_PIXEL_ZOOM0 = 78_271.517;
+
+function toHeatGeoJson(heat: RouteMapHeatFeature[]): HeatCollection {
+  return {
+    type: 'FeatureCollection',
+    features: heat.map((item) => ({
+      type: 'Feature' as const,
+      properties: {
+        heatId: item.id,
+        intensity: item.intensity,
+        // Radius in pixels at zoom 0; doubles per zoom level so the footprint stays in meters.
+        pxAtZoom0:
+          item.radiusMeters /
+          (METERS_PER_PIXEL_ZOOM0 * Math.max(0.01, Math.cos((item.point.latitude * Math.PI) / 180))),
+      },
+      geometry: { type: 'Point' as const, coordinates: [item.point.longitude, item.point.latitude] },
+    })),
+  };
+}
+
 function toRecordedPathGeoJson(recordedPath: LatLng[]): FeatureCollection {
   if (recordedPath.length < 2) {
     return { type: 'FeatureCollection', features: [] };
@@ -322,6 +363,7 @@ function MapLibreRouteMap({
   finishZone,
   checkpoints = [],
   waitMarkers = [],
+  heat = [],
   previewPoint,
   selectedMarkerId,
   recordedPath = [],
@@ -331,6 +373,7 @@ function MapLibreRouteMap({
   officialFinishPoint = null,
   onMapPress,
   onWaitMarkerPress,
+  onHeatPress,
   cameraGesturesEnabled = true,
   onBasemapFailed,
 }: RouteMapProps & { onBasemapFailed: () => void }) {
@@ -342,6 +385,7 @@ function MapLibreRouteMap({
     () => toWaitGeoJson(waitMarkers, selectedMarkerId),
     [selectedMarkerId, waitMarkers],
   );
+  const heatData = useMemo(() => toHeatGeoJson(heat), [heat]);
   const previewData = useMemo(() => toPreviewGeoJson(previewPoint), [previewPoint]);
   const recordedData = useMemo(() => toRecordedPathGeoJson(recordedPath), [recordedPath]);
   const presentation = useMemo(
@@ -361,12 +405,13 @@ function MapLibreRouteMap({
       ...checkpoints,
       ...pathVariantCameraPoints(pathVariants),
       ...waitMarkers.map((marker) => ({ point: marker.point })),
+      ...heat.map((item) => ({ point: item.point })),
       ...recordedPath.map((point) => ({ point })),
       ...debugSamples.map((sample) => ({ point: sample.point })),
       ...(officialStartPoint ? [{ point: officialStartPoint }] : []),
       ...(officialFinishPoint ? [{ point: officialFinishPoint }] : []),
     ],
-    [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, pathVariants, recordedPath, waitMarkers],
+    [checkpoints, debugSamples, officialFinishPoint, officialStartPoint, pathVariants, recordedPath, waitMarkers, heat],
   );
   const initialBounds = useMemo(
     () => courseCameraBounds(path, startZone, finishZone, cameraPoints),
@@ -427,6 +472,54 @@ function MapLibreRouteMap({
           padding: COURSE_CAMERA_PADDING,
         }}
       />
+      {heat.length > 0 ? (
+        <GeoJSONSource
+          id="delay-heat"
+          data={heatData}
+          onPress={(event) => {
+            const features = event.nativeEvent.features as
+              | { properties?: { heatId?: unknown } | null }[]
+              | undefined;
+            for (const feature of features ?? []) {
+              const heatId = feature.properties?.heatId;
+              if (typeof heatId === 'string' && heatId.length > 0) {
+                onHeatPress?.(heatId);
+                return;
+              }
+            }
+          }}
+        >
+          <Layer
+            id="delay-heat-circle"
+            type="circle"
+            paint={{
+              // Footprint in meters (zoom-scaled), soft edge, semi-transparent so the path stays readable.
+              'circle-radius': [
+                'interpolate',
+                ['exponential', 2],
+                ['zoom'],
+                10,
+                ['max', 8, ['*', ['get', 'pxAtZoom0'], 1024]],
+                20,
+                ['max', 8, ['*', ['get', 'pxAtZoom0'], 1048576]],
+              ],
+              'circle-blur': 0.9,
+              'circle-color': [
+                'interpolate',
+                ['linear'],
+                ['get', 'intensity'],
+                0,
+                '#ffd54f',
+                0.5,
+                '#ff9800',
+                1,
+                '#e53935',
+              ],
+              'circle-opacity': ['+', 0.2, ['*', 0.4, ['get', 'intensity']]],
+            }}
+          />
+        </GeoJSONSource>
+      ) : null}
       <GeoJSONSource id="route-geometry" data={data}>
         <Layer
           id="start-zone-fill"
@@ -624,6 +717,7 @@ export function RouteMap({
   finishZone,
   checkpoints = [],
   waitMarkers = [],
+  heat = [],
   previewPoint = null,
   selectedMarkerId = null,
   recordedPath = [],
@@ -633,6 +727,7 @@ export function RouteMap({
   officialFinishPoint = null,
   onMapPress,
   onWaitMarkerPress,
+  onHeatPress,
   cameraGesturesEnabled = true,
   style,
 }: RouteMapProps) {
@@ -655,6 +750,11 @@ export function RouteMap({
         officialFinishPoint={officialFinishPoint}
       />
       <Text style={styles.fallbackNote}>Map tiles unavailable. Showing local path only.</Text>
+      {heat.length > 0 ? (
+        <Text style={styles.fallbackNote}>
+          Heatmap needs the street map and is not drawn on this simplified preview.
+        </Text>
+      ) : null}
       {onMapPress && !onWaitMarkerPress ? (
         <Text style={styles.fallbackNote}>Tap-to-place is unavailable without the street map.</Text>
       ) : null}
@@ -675,6 +775,7 @@ export function RouteMap({
             finishZone={finishZone}
             checkpoints={checkpoints}
             waitMarkers={waitMarkers}
+            heat={heat}
             previewPoint={previewPoint}
             selectedMarkerId={selectedMarkerId}
             recordedPath={recordedPath}
@@ -684,6 +785,7 @@ export function RouteMap({
             officialFinishPoint={officialFinishPoint}
             onMapPress={onMapPress}
             onWaitMarkerPress={onWaitMarkerPress}
+            onHeatPress={onHeatPress}
             cameraGesturesEnabled={cameraGesturesEnabled}
             onBasemapFailed={() => setUseFallback(true)}
           />
