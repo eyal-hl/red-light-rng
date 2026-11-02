@@ -38,7 +38,7 @@ Start with Expo's location/task APIs. If field testing shows that one platform r
 
 The initial application is a single local-first mobile system with several conceptual responsibilities:
 
-1. **Place model** — saved named endpoints with radius and archive state.
+1. **Place model** — saved named endpoints with independent departure and arrival radii and archive state.
 2. **Journey model** — directional origin + destination + transportation mode pools, official endpoint timing, PB/rank/history.
 3. **Route / path-variant model** — optional reference path, start/end zones, checkpoints used for compatible-path analytics only.
 4. **Run/recording recorder** — background location sampling and lifecycle state for path-variant creation and official attempts.

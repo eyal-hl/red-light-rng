@@ -4,7 +4,7 @@ This document describes the intended product journey and run lifecycle. It is de
 
 ## Saved places
 
-The user configures named places once from a Places surface: create from current location or the map, name them, adjust center and radius, rename, archive, and permanently delete (including associated run history).
+The user configures named places once from a Places surface: create from current location or the map, name them, adjust center and the separate departure and arrival radii (the editor previews both rings and explains that the clock starts on the outward departure crossing and stops on the inward arrival crossing; a radius change is refused while a run is armed or active), rename, archive, and permanently delete (including associated run history).
 
 Creating or editing places is not part of START.
 
@@ -47,7 +47,7 @@ or
 OUTSIDE START ZONE
 ```
 
-The armed screen also shows a map of the current position and all effective saved places, each with its name and configured detection radius. The user may pan, zoom and recenter; the camera is fitted once (current position plus up to 3 nearest places within 3 km) and is never forced back after the user moves it. The position marker is solid only when the fix is at most 15 seconds old and its reported accuracy passes the engine's 45 m gate; an unreported accuracy is accepted, as the engine accepts it, and the caption then says `accuracy unknown`; a poorer or older fix is shown as a muted last-known position with its accuracy and age, and with no fix the map says it is waiting. A place is highlighted as in-zone only when the start-zone status above is `IN START ZONE`, never while it is `LOCATING…`. Missing GPS, denied permission, no saved places, or unavailable map tiles never block Cancel, End & Inspect or recording.
+The armed screen also shows a map of the current position and all effective saved places, each with its name and its configured departure radius (its arrival radius once the run is active), with a one-line legend naming which radius the rings show. The user may pan, zoom and recenter; the camera is fitted once (current position plus up to 3 nearest places within 3 km) and is never forced back after the user moves it. The position marker is solid only when the fix is at most 15 seconds old and its reported accuracy passes the engine's 45 m gate; an unreported accuracy is accepted, as the engine accepts it, and the caption then says `accuracy unknown`; a poorer or older fix is shown as a muted last-known position with its accuracy and age, and with no fix the map says it is waiting. A place is highlighted as in-zone only when the start-zone status above is `IN START ZONE`, never while it is `LOCATING…`. Missing GPS, denied permission, no saved places, or unavailable map tiles never block Cancel, End & Inspect or recording.
 
 Overlapping places pick the nearest center, then the lowest stable place id. The candidate is re-evaluated on every accepted sample until a qualifying departure pins the origin.
 
@@ -55,8 +55,8 @@ Start detection is path-free:
 
 - accepted samples must pass the 45 m accuracy gate;
 - official `startedAtMs` is the interpolated outward radius crossing;
-- confirmation requires at least 4 accepted samples after that crossing and radial distance of `origin_radius + 18 m`;
-- returning inside the origin radius resets the candidate;
+- confirmation requires at least 4 accepted samples after that crossing and radial distance of `origin_departure_radius + 18 m`;
+- returning inside the origin departure radius resets the candidate;
 - there is no maximum confirmation-time or speed requirement, so walking qualifies.
 
 GPS drift alone should not begin an attempt. Time spent locking a door near Home should not count merely because START was pressed. Detection may confirm the start after the physical event; official `started_at` is reconstructed from recorded samples.
@@ -83,11 +83,11 @@ The active screen may additionally show an optional, passive, non-interactive, n
 
 The app records location in the background. Path divergence must not fail the attempt as the wrong route.
 
-An active attempt that lasts 2 hours from official start, or that returns to the origin and stays inside it for 30 seconds after previously reaching `max(50 m, 2 × origin_radius)`, ends as `DID NOT FINISH`.
+An active attempt that lasts 2 hours from official start, or that returns to the origin and stays inside it for 30 seconds (inside meaning within the origin's arrival radius) after previously reaching `max(50 m, 2 × max(origin_departure_radius, origin_arrival_radius))`, ends as `DID NOT FINISH`.
 
 ## Finish
 
-The attempt ends automatically when the first other saved place that has been seen at least `destination_radius + 10 m` outside is then crossed inbound and confirmed (3 inside samples spanning at least 2 seconds).
+The attempt ends automatically when the first other saved place that has been seen at least `destination_arrival_radius + 10 m` outside is then crossed inbound and confirmed (3 inside samples spanning at least 2 seconds).
 
 The origin is never a competitive destination.
 

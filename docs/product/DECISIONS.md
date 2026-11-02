@@ -258,3 +258,15 @@ Local history is exported to a single deterministic, versioned JSON file (`backu
 - Restore never trusts a backed-up armed/active attempt or active session as live: they are terminalized from stored evidence, leftover OS updates are stopped, and derived data is recomputed.
 - Restore is refused while the current device has an open attempt or active tracking session.
 - New durable columns must be added to the backup coverage map (a test enforces this).
+
+## DEC-014 — Independent Place departure and arrival radii
+
+**Status:** Accepted (issue #77)
+
+### Decision
+Each Place has a `departureRadiusMeters` (origin selection, outward-crossing start time, `+18 m` sustained departure) and an `arrivalRadiusMeters` (destination eligibility `+10 m`, inbound-crossing finish time, return-to-origin dwell). Both are 8-250 m and default to 30 m; existing Places migrate with the old radius in both fields (SQLite schema v12, backup format 2, with a 1 -> 2 backup adapter). The return-to-origin distance gate is `max(50 m, 2 × max(departure, arrival))`.
+
+### Consequences
+- Equal radii reproduce the previous single-radius behavior exactly.
+- Saving a changed radius is refused while any attempt is armed or active (the engine replays the stored trace against current Place records); no per-attempt radius snapshot is stored. Restore terminalizes open attempts with the radii in the backup.
+- Completed attempts keep stored official times; only the debug replay of a past run uses current radii and states that. Route/path-variant start/finish zones remain separate analytics configuration.
