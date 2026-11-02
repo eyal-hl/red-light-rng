@@ -38,6 +38,21 @@ export class MemoryAttemptStore implements AttemptStore {
     this.attempts.set(attempt.id, cloneAttempt(attempt));
   }
 
+  /**
+   * All-or-nothing bulk write: the whole batch is built first and swapped into the map in one
+   * synchronous step, the in-memory equivalent of a single SQL transaction.
+   */
+  async saveAttemptsAtomically(attempts: Attempt[]): Promise<void> {
+    const staged = new Map(this.attempts);
+    for (const attempt of attempts) {
+      staged.set(attempt.id, cloneAttempt(attempt));
+    }
+    this.attempts.clear();
+    for (const [id, attempt] of staged) {
+      this.attempts.set(id, attempt);
+    }
+  }
+
   async finalizeAttempt(attempt: Attempt, session: CompleteSessionInput): Promise<void> {
     this.attempts.set(attempt.id, cloneAttempt(attempt));
     if (this.sessions) {

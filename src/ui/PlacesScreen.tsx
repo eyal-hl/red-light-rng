@@ -3,6 +3,8 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { partitionPlacesByStatus, type Place } from '../domain/place';
 import { formatDistance } from '../domain/geo';
+import type { HistoryRecalculationService } from '../product/history-recalculation';
+import { HistoryRecalculationPanel } from './HistoryRecalculationPanel';
 import { styles } from './styles';
 
 type PlacesScreenProps = {
@@ -13,6 +15,9 @@ type PlacesScreenProps = {
   onCreate: () => void;
   onOpenPlace: (placeId: string) => void;
   onDeletePermanently: (placeId: string) => void;
+  recalculation?: HistoryRecalculationService;
+  radiiJustChanged?: boolean;
+  onRecalculationPublished?: () => void;
 };
 
 export function PlacesScreen({
@@ -23,6 +28,9 @@ export function PlacesScreen({
   onCreate,
   onOpenPlace,
   onDeletePermanently,
+  recalculation,
+  radiiJustChanged = false,
+  onRecalculationPublished,
 }: PlacesScreenProps) {
   const { active, archived } = partitionPlacesByStatus(places);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -81,6 +89,13 @@ export function PlacesScreen({
           </View>
         )}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {recalculation ? (
+          <HistoryRecalculationPanel
+            service={recalculation}
+            radiiJustChanged={radiiJustChanged}
+            onPublished={onRecalculationPublished ?? (() => {})}
+          />
+        ) : null}
         <View style={styles.actions}>
           <Pressable
             accessibilityRole="button"

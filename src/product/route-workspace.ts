@@ -11,6 +11,7 @@ import {
   validatePlaceInput,
   type Place,
 } from '../domain/place';
+import { PLACE_RECALCULATION_JOB_REASON, placeGeometryChanged } from '../domain/history-recalculation';
 import { ensurePlacesForRoute } from '../domain/place-seeding';
 import {
   inspectPlaceAttemptRecord,
@@ -90,6 +91,7 @@ import {
   SingleKeyedCache,
   type SampleIdentity,
 } from './derived-view-cache';
+import type { HistoryRecalculationService } from './history-recalculation';
 import {
   createNavigationLoadState,
   timeNavigationLoad,
@@ -176,7 +178,11 @@ export class RouteWorkspace {
     private readonly now: () => number = () => Date.now(),
     private readonly createRouteId: () => string = createId,
     private readonly createPlaceId: () => string = createId,
-  ) {}
+    /** Manual history recalculation (#77); its job blocks Place centre/radius edits. */
+    readonly recalculation?: HistoryRecalculationService,
+  ) {
+    recalculation?.setOnPublished(() => this.invalidateDerivedCaches());
+  }
 
   /** Drops every in-memory derived view, e.g. after a backup restore replaced the underlying data. */
   invalidateDerivedCaches(): void {
@@ -185,6 +191,7 @@ export class RouteWorkspace {
     this.focusCache.clear();
     this.debugCache.clear();
     this.routeAnalysisCache.clear();
+    this.hotspotCache.clear();
   }
 
   resetNavigationLoad(): void {
@@ -498,6 +505,10 @@ export class RouteWorkspace {
     if (!validation.valid) {
       return { ok: false, reason: validation.reason ?? 'This place cannot be saved.' };
     }
+    // A new Place changes the recalculation job's Places fingerprint, so it waits for the job too.
+    if (await this.recalculation?.hasBlockingJob()) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
+    }
     const place: Place = {
       id: this.createPlaceId(),
       name: input.name.trim(),
@@ -528,6 +539,11 @@ export class RouteWorkspace {
       if (open && isOpenAttempt(open)) {
         return { ok: false, reason: PLACE_RADIUS_OPEN_ATTEMPT_REASON };
       }
+    }
+    // A running (or unpublished) history recalculation holds a fixed snapshot of every Place's centre
+    // and radii; changing them would make its staged results stale. Enforced here, not only in the UI.
+    if (placeGeometryChanged(existing, place) && (await this.recalculation?.hasBlockingJob())) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
     }
     const next = clonePlace({
       ...existing,
@@ -562,6 +578,9 @@ export class RouteWorkspace {
     const open = await this.attempts.getOpenAttempt();
     if (openAttemptBlocksPlaceDeletion(open, existing)) {
       return { ok: false, reason: PLACE_LIVE_ATTEMPT_REASON };
+    }
+    if (await this.recalculation?.hasBlockingJob()) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
     }
 
     const referencing = (await this.attempts.listAttempts()).filter((attempt) =>

@@ -49,6 +49,7 @@ Eventually, the ideal experience is almost invisible during travel: **travel nor
 - A large live dashboard, speedometer, or interaction-heavy run screen.
 - AI-generated coaching as a prerequisite for useful insights.
 - Fully automatic recognition with no START in V0.1.
+- Automatic or silent rewriting of historical PBs or official times (a manual, confirmed, user-initiated recalculation of past runs under current Place radii is in scope; see DEC-015).
 
 ## Product constraints
 

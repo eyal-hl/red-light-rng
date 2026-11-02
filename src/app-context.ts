@@ -4,10 +4,12 @@ import { createExpoBackupFiles } from './persistence/expo-backup-files';
 import { SqliteAttemptStore } from './persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from './persistence/sqlite-location-sample-store';
 import { SqlitePlaceStore } from './persistence/sqlite-place-store';
+import { SqliteRecalculationJobStore } from './persistence/sqlite-recalculation-job-store';
 import { SqliteRouteStore } from './persistence/sqlite-route-store';
 import { SqliteSettingsStore } from './persistence/sqlite-settings-store';
 import { AttemptRuntime } from './product/attempt-runtime';
 import { BackupService } from './product/backup-service';
+import { HistoryRecalculationService } from './product/history-recalculation';
 import { RouteWorkspace } from './product/route-workspace';
 import { createExpoLocationPlatform } from './tracking/expo-location-platform';
 import { SharedLocationTracker } from './tracking/shared-location-tracker';
@@ -34,6 +36,14 @@ export const attemptRuntime = new AttemptRuntime(
   placeStore,
   settingsStore,
 );
+export const recalculationJobStore = new SqliteRecalculationJobStore(getSqlExecutor);
+export const historyRecalculation = new HistoryRecalculationService({
+  jobs: recalculationJobStore,
+  attempts: attemptStore,
+  sessions: locationSampleStore,
+  places: placeStore,
+  reassignPathVariant: (attempt, samples) => attemptRuntime.reassignPathVariant(attempt, samples),
+});
 export const routeWorkspace = new RouteWorkspace(
   locationTracker,
   locationSampleStore,
@@ -42,6 +52,10 @@ export const routeWorkspace = new RouteWorkspace(
   placeStore,
   settingsStore,
   locationPlatform,
+  undefined,
+  undefined,
+  undefined,
+  historyRecalculation,
 );
 
 export const backupService = new BackupService(

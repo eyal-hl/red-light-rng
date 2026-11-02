@@ -482,6 +482,52 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Manual, resumable history recalculation (#77): local operational job / staging / checkpoint
+    // tables. Purely additive: no existing table or row is touched. NOT part of the portable backup
+    // (restore wipes them). `slot` + the partial unique index enforce at most one running/ready job.
+    version: 13,
+    async up(sql) {
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS recalc_job (
+          id TEXT PRIMARY KEY NOT NULL,
+          slot INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL,
+          places_fingerprint TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          completed_at_ms INTEGER,
+          candidate_count INTEGER NOT NULL,
+          pre_skipped_missing_place INTEGER NOT NULL DEFAULT 0,
+          pre_skipped_no_trace INTEGER NOT NULL DEFAULT 0,
+          checkpoint_processed INTEGER NOT NULL DEFAULT 0,
+          message TEXT
+        );
+      `);
+      await sql.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_recalc_job_single_open
+        ON recalc_job(slot) WHERE status IN ('running', 'ready');
+      `);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS recalc_job_item (
+          job_id TEXT NOT NULL,
+          attempt_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending',
+          detail TEXT,
+          base_started_at_ms REAL,
+          base_finished_at_ms REAL,
+          staged_json TEXT,
+          PRIMARY KEY (job_id, attempt_id),
+          FOREIGN KEY (job_id) REFERENCES recalc_job(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_recalc_job_item_state
+        ON recalc_job_item(job_id, state, seq);
+      `);
+    },
+  },
 ];
 
 async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {

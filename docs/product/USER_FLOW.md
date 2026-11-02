@@ -8,6 +8,8 @@ The user configures named places once from a Places surface: create from current
 
 Creating or editing places is not part of START.
 
+**Recalculate history (manual).** After saving a changed radius, and any time later from the Places screen, the user can choose **Recalculate history**. A confirmation first explains that previous official times, PBs, rankings, segments and statistics may change, that runs without sufficient GPS cannot be updated, and that results use the current radii (no historical snapshot exists), and shows how many runs will be recalculated and how many were skipped up front. Only after the explicit confirmation does a resumable job re-time completed runs from their saved GPS, showing processed / updated / unchanged / skipped / error counts. While it runs, Place centre/radius edits are locked (cancel the job to edit); it pauses while a run is armed or active and continues afterwards; after an app restart it is offered with a Resume button. Results are published in one step and the final summary shows how many runs were updated versus skipped (kept at their original times). Nothing is rewritten automatically on save, upgrade, restore or browsing.
+
 ## Optional path-variant recording
 
 The user may still record a GPS path and save it as a named path variant (formerly a competitive route). That geometry can later supply splits and ghost analysis for compatible journeys. It is not required before START, and it is not selected in the live flow.

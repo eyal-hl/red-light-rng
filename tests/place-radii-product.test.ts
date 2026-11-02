@@ -348,7 +348,7 @@ describe('SQLite migration 12: separate departure and arrival radii', () => {
 
     const version = await sql.getFirst<{ user_version: number }>('PRAGMA user_version');
     assert.equal(version?.user_version, CURRENT_SCHEMA_VERSION);
-    assert.equal(CURRENT_SCHEMA_VERSION, 12);
+    assert.ok(CURRENT_SCHEMA_VERSION >= 12, 'radii migration 12 is applied by every later schema');
     const places = await sql.getAll<{
       id: string;
       radius_meters: number;

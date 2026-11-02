@@ -649,6 +649,15 @@ export class AttemptRuntime {
     return reconciled;
   }
 
+  /**
+   * Split/path-variant assignment for an attempt whose official window changed (history
+   * recalculation). Same matcher as post-run reconciliation; returns the attempt with its new
+   * routeId/crossings without saving it.
+   */
+  async reassignPathVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
+    return this.assignExistingVariant(attempt, samples);
+  }
+
   private async assignExistingVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
     if (
       attempt.originPlaceId == null ||

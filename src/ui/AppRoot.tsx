@@ -24,6 +24,7 @@ import {
 import { computeJourneyStatistics, type JourneyPoolStatistics } from '../domain/journey-statistics';
 import type { JourneyPathVariantSummary } from '../domain/path-variant-discovery';
 import { DEFAULT_PLACE_RADIUS_METERS, placePermanentDeletionMessage, type Place } from '../domain/place';
+import { placeGeometryChanged } from '../domain/history-recalculation';
 import { WAITING_GPS_READINESS, type GpsReadiness } from '../domain/gps-readiness';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import type { Route, TransportationMode } from '../domain/route';
@@ -171,6 +172,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [courseDraft, setCourseDraft] = useState<CourseEditorDraft | null>(null);
   const [placeDraft, setPlaceDraft] = useState<PlaceEditorDraft | null>(null);
+  const [radiiJustChanged, setRadiiJustChanged] = useState(false);
   const [originPlace, setOriginPlace] = useState<Place | null>(null);
   const [destinationPlace, setDestinationPlace] = useState<Place | null>(null);
   const [journeySummary, setJourneySummary] = useState<JourneyPoolSummary | null>(null);
@@ -1542,6 +1544,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
 
   const onOpenPlaces = useCallback(() => {
     setError(null);
+    setRadiiJustChanged(false);
     setScreen({ kind: 'places' });
     void workspace.listPlaces().then(setPlaces);
   }, [workspace]);
@@ -1586,6 +1589,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     setBusy(true);
     setError(null);
     try {
+      const before = placeDraft.id ? await workspace.getPlace(placeDraft.id) : null;
       const result = placeDraft.id
         ? await workspace.savePlace({
             id: placeDraft.id,
@@ -1608,6 +1612,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
       }
       setPlaceDraft(null);
       setPlaces(await workspace.listPlaces());
+      // Offer (never run) the manual recalculation after a radius or centre change.
+      setRadiiJustChanged(before != null && placeGeometryChanged(before, result.place));
       setScreen({ kind: 'places' });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not save place.');
@@ -1899,6 +1905,11 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           }}
           onDeletePermanently={(placeId) => {
             confirmPermanentPlaceDeletion(placeId);
+          }}
+          recalculation={workspace.recalculation}
+          radiiJustChanged={radiiJustChanged}
+          onRecalculationPublished={() => {
+            void refreshHome();
           }}
         />
       ) : null}

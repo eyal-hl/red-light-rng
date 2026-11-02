@@ -281,7 +281,7 @@ describe('backup format and deterministic serialization', () => {
     assert.equal(document.backup_format_version, CURRENT_BACKUP_FORMAT_VERSION);
     assert.equal(document.created_at_ms, CREATED_AT_MS);
     assert.equal(document.created_at_utc, new Date(CREATED_AT_MS).toISOString());
-    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 12 });
+    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 13 });
     assert.deepEqual(document.counts, {
       places: 3,
       routes: 2,

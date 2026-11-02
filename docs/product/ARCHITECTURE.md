@@ -69,6 +69,8 @@ Derived values such as a cleaned reference path, route distance, start/finish zo
 
 Recording sessions should carry a purpose/kind discriminator so route-creation recordings are distinguishable from future official attempts. Route-source telemetry and the reusable route/reference course are separate concepts: deleting or reprocessing derived route data should not silently destroy the source telemetry.
 
+History recalculation (#77, schema v13) is a product-layer service (`src/product/history-recalculation.ts`) over a `RecalculationJobStore` (SQLite and in-memory twins). The pure decision logic replays traces through `place-timing`; publication is one store-level atomic step (SQL transaction / atomic swap) that also writes split/variant reassignment. Its job and staging tables are local operational state outside the portable backup.
+
 SQLite schema evolution should use an explicit versioned migration mechanism once durable product data exists. Do not rely only on `CREATE TABLE IF NOT EXISTS` for future schema changes.
 
 A conceptual domain model is:

@@ -40,6 +40,7 @@ Every durable table and column: `place`, `tracking_session`, `location_sample`, 
 
 ### What is excluded
 
+- The manual history-recalculation tables `recalc_job` and `recalc_job_item` (schema v13; job, staging and checkpoint state of issue #77). They are local operational state, not user-authored history: they only exist to resume or atomically publish a user-started batch on this device, and a staged result is meaningless on another device or after the Places change. They are never exported, and a restore deletes every row of both tables inside the same atomic transaction (and verifies they are empty), so an orphaned or in-progress job can never survive a restore and half-committed results cannot be restored. Published results live in `attempt` / `attempt_checkpoint_crossing`, which are exported like any other history. `BACKUP_SCHEMA_COVERAGE` lists their columns as explicitly excluded. Backups from every earlier format still import unchanged.
 - `app_setting.path_variant_recompute_fingerprint` (recomputable cache key; restore clears it so discovery recomputes).
 - OS permission state, secrets (none are stored), in-memory derived-view caches.
 
