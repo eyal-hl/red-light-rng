@@ -33,7 +33,12 @@ export type PlaceDistanceDebug = {
   placeId: string;
   name: string;
   distanceMeters: number | null;
-  inside: boolean;
+  /** Inside the Place's departure radius (origin selection / outward crossing). */
+  insideDeparture: boolean;
+  /** Inside the Place's arrival radius (destination finish / return-to-origin dwell). */
+  insideArrival: boolean;
+  departureRadiusMeters: number;
+  arrivalRadiusMeters: number;
 };
 
 export type PlaceDestinationDebug = {
@@ -121,7 +126,7 @@ function destinationDebug(
     name: place?.name ?? watch.placeId,
     eligible: watch.seenEligibleOutside,
     maxDistanceMeters: watch.maxDistanceMeters,
-    requiredEligibleMeters: (place?.radiusMeters ?? 0) + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS,
+    requiredEligibleMeters: (place?.arrivalRadiusMeters ?? 0) + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS,
     arrivalCrossingAtMs: watch.arrivalCrossingAtMs,
     insideSampleCount: watch.insideSinceArrivalCount,
     confirmationSpanMs,
@@ -153,7 +158,8 @@ export function inspectPlaceAttempt(
         nearestDistanceMeters = distance;
         nearestPlaceId = place.id;
       }
-      if (distance <= place.radiusMeters) {
+      // Origin selection is departure-radius based.
+      if (distance <= place.departureRadiusMeters) {
         insidePlaceIds.push(place.id);
       }
     }
@@ -177,7 +183,10 @@ export function inspectPlaceAttempt(
       placeId: place.id,
       name: place.name,
       distanceMeters,
-      inside: distanceMeters != null && distanceMeters <= place.radiusMeters,
+      insideDeparture: distanceMeters != null && distanceMeters <= place.departureRadiusMeters,
+      insideArrival: distanceMeters != null && distanceMeters <= place.arrivalRadiusMeters,
+      departureRadiusMeters: place.departureRadiusMeters,
+      arrivalRadiusMeters: place.arrivalRadiusMeters,
     };
   });
 
@@ -195,9 +204,9 @@ export function inspectPlaceAttempt(
     samplesAfterDeparture: engine.samplesAfterDeparture,
     maxRadialFromOriginMeters: engine.maxRadialFromOriginMeters,
     requiredRadialMeters: origin
-      ? origin.radiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
+      ? origin.departureRadiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
       : latestCandidate
-        ? latestCandidate.place.radiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
+        ? latestCandidate.place.departureRadiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
         : null,
     departureMinSamples: PLACE_DEPARTURE_MIN_SAMPLES,
     qualifyingDeparture: engine.startedAtMs != null,

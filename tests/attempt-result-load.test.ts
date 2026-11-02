@@ -53,7 +53,8 @@ describe('attempt result secondary load', () => {
     const origin = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     assert.equal(origin.ok, true);
     if (!origin.ok) {
@@ -111,12 +112,14 @@ describe('attempt result secondary load', () => {
     const origin = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const dest = await workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(32.08, 34.78, 300, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     assert.equal(origin.ok && dest.ok, true);
     if (!origin.ok || !dest.ok) {

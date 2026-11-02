@@ -100,8 +100,8 @@ describe('journey path variant map', () => {
     const detail = readFileSync('src/ui/JourneyDetailScreen.tsx', 'utf8');
     assert.match(detail, /path=\{\[\]\}/);
     assert.match(detail, /pathVariants=\{variantMapLines\}/);
-    assert.match(detail, /startZone=\{placeZone\(origin\)\}/);
-    assert.match(detail, /finishZone=\{placeZone\(destination\)\}/);
+    assert.match(detail, /startZone=\{placeZone\(origin, 'departure'\)\}/);
+    assert.match(detail, /finishZone=\{placeZone\(destination, 'arrival'\)\}/);
     assert.doesNotMatch(detail, /pathVariants\.length === 1/);
   });
 
@@ -223,10 +223,10 @@ describe('journey path variant map', () => {
   });
 
   it('fits map bounds to every rendered variant plus start and finish', () => {
-    const startZone = placeZone(HOME);
+    const startZone = placeZone(HOME, 'departure');
     const finishZone = {
       center: offsetLatLng(HOME.center.latitude, HOME.center.longitude, 200, 0),
-      radiusMeters: HOME.radiusMeters,
+      radiusMeters: HOME.arrivalRadiusMeters,
     };
     const detour = [
       HOME.center,

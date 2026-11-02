@@ -6,6 +6,8 @@ import {
   clonePlace,
   openAttemptBlocksPlaceDeletion,
   PLACE_LIVE_ATTEMPT_REASON,
+  PLACE_RADIUS_OPEN_ATTEMPT_REASON,
+  placeRadiiEqual,
   validatePlaceInput,
   type Place,
 } from '../domain/place';
@@ -489,7 +491,8 @@ export class RouteWorkspace {
   async createPlace(input: {
     name: string;
     center: Place['center'];
-    radiusMeters: number;
+    departureRadiusMeters: number;
+    arrivalRadiusMeters: number;
   }): Promise<SavePlaceResult> {
     const validation = validatePlaceInput(input);
     if (!validation.valid) {
@@ -499,7 +502,8 @@ export class RouteWorkspace {
       id: this.createPlaceId(),
       name: input.name.trim(),
       center: { latitude: input.center.latitude, longitude: input.center.longitude },
-      radiusMeters: input.radiusMeters,
+      departureRadiusMeters: input.departureRadiusMeters,
+      arrivalRadiusMeters: input.arrivalRadiusMeters,
       status: 'active',
       createdAtMs: this.now(),
     };
@@ -516,11 +520,21 @@ export class RouteWorkspace {
     if (!existing) {
       return { ok: false, reason: 'This place is no longer available.' };
     }
+    // The place engine replays the stored trace against the current Place records, so changing a
+    // radius while a run is ARMED or ACTIVE would retroactively change that run's origin, start
+    // and finish. Block it before anything is written.
+    if (!placeRadiiEqual(existing, place)) {
+      const open = await this.attempts.getOpenAttempt();
+      if (open && isOpenAttempt(open)) {
+        return { ok: false, reason: PLACE_RADIUS_OPEN_ATTEMPT_REASON };
+      }
+    }
     const next = clonePlace({
       ...existing,
       name: place.name.trim(),
       center: place.center,
-      radiusMeters: place.radiusMeters,
+      departureRadiusMeters: place.departureRadiusMeters,
+      arrivalRadiusMeters: place.arrivalRadiusMeters,
       status: place.status,
     });
     await this.places.savePlace(next);

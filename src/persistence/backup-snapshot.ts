@@ -24,7 +24,10 @@ export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
     name: 'places[].name',
     latitude: 'places[].latitude',
     longitude: 'places[].longitude',
-    radius_meters: 'places[].radius_meters',
+    radius_meters:
+      'excluded: legacy single-radius column (pre schema v12); mirrors departure_radius_meters, which is exported',
+    departure_radius_meters: 'places[].departure_radius_meters',
+    arrival_radius_meters: 'places[].arrival_radius_meters',
     status: 'places[].status',
     created_at_ms: 'places[].created_at_ms',
   },
@@ -123,7 +126,8 @@ type Row = Record<string, string | number | null>;
 
 async function readPayload(sql: SqlExecutor): Promise<BackupPayload> {
   const places = await sql.getAll<BackupPlace>(
-    `SELECT id, name, latitude, longitude, radius_meters, status, created_at_ms
+    `SELECT id, name, latitude, longitude, departure_radius_meters, arrival_radius_meters,
+            status, created_at_ms
      FROM place ORDER BY id`,
   );
   const sessions = await sql.getAll<BackupTrackingSession>(

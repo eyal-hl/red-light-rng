@@ -20,17 +20,20 @@ async function createSeparatedPlaces(workspace: ReturnType<typeof createMemoryWo
   const home = await workspace.createPlace({
     name: 'Home',
     center: HOME_CENTER,
-    radiusMeters: 30,
+    departureRadiusMeters: 30,
+    arrivalRadiusMeters: 30,
   });
   const work = await workspace.createPlace({
     name: 'Work',
     center: offsetLatLng(HOME_CENTER.latitude, HOME_CENTER.longitude, 300, 0),
-    radiusMeters: 30,
+    departureRadiusMeters: 30,
+    arrivalRadiusMeters: 30,
   });
   const oldHome = await workspace.createPlace({
     name: 'Home',
     center: offsetLatLng(HOME_CENTER.latitude, HOME_CENTER.longitude, 0, 400),
-    radiusMeters: 30,
+    departureRadiusMeters: 30,
+    arrivalRadiusMeters: 30,
   });
   assert.equal(home.ok && work.ok && oldHome.ok, true);
   if (!home.ok || !work.ok || !oldHome.ok) {
@@ -42,8 +45,8 @@ async function createSeparatedPlaces(workspace: ReturnType<typeof createMemoryWo
 async function completeBetween(
   workspace: ReturnType<typeof createMemoryWorkspace>['workspace'],
   sessions: ReturnType<typeof createMemoryWorkspace>['sessions'],
-  origin: { id: string; center: { latitude: number; longitude: number }; radiusMeters: number },
-  destination: { id: string; center: { latitude: number; longitude: number }; radiusMeters: number },
+  origin: { id: string; center: { latitude: number; longitude: number }; departureRadiusMeters: number },
+  destination: { id: string; center: { latitude: number; longitude: number }; arrivalRadiusMeters: number },
 ) {
   const started = await workspace.startAttempt();
   assert.equal(started.ok, true);

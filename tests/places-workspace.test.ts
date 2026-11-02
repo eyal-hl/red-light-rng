@@ -15,7 +15,8 @@ describe('places workspace', () => {
     const created = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+      departureRadiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+      arrivalRadiusMeters: DEFAULT_PLACE_RADIUS_METERS,
     });
     assert.equal(created.ok, true);
     if (!created.ok) {
@@ -24,19 +25,21 @@ describe('places workspace', () => {
     const renamed = await workspace.savePlace({
       ...created.place,
       name: 'Home base',
-      radiusMeters: 40,
+      departureRadiusMeters: 40,
+      arrivalRadiusMeters: 40,
       center: offsetLatLng(32.08, 34.78, 4, 0),
     });
     assert.equal(renamed.ok, true);
     if (renamed.ok) {
       assert.equal(renamed.place.name, 'Home base');
-      assert.equal(renamed.place.radiusMeters, 40);
+      assert.equal(renamed.place.departureRadiusMeters, 40);
     }
 
     const unused = await workspace.createPlace({
       name: 'Cafe',
       center: offsetLatLng(32.08, 34.78, 0, 400),
-      radiusMeters: 25,
+      departureRadiusMeters: 25,
+      arrivalRadiusMeters: 25,
     });
     assert.equal(unused.ok, true);
     if (!unused.ok) {
@@ -52,7 +55,8 @@ describe('places workspace', () => {
     const work = await workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(32.08, 34.78, 300, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     assert.equal(work.ok, true);
     if (!work.ok) {
@@ -72,12 +76,14 @@ describe('places workspace', () => {
     const home = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const work = await workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(32.08, 34.78, 300, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     assert.equal(home.ok && work.ok, true);
     if (!home.ok || !work.ok) {
@@ -123,12 +129,14 @@ describe('places workspace', () => {
     const home = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const work = await workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(32.08, 34.78, 280, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     if (!home.ok || !work.ok) {
       return;
@@ -187,7 +195,8 @@ describe('places workspace', () => {
     await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const armed = await workspace.startAttempt();
     assert.equal(armed.ok, true);
@@ -206,12 +215,14 @@ describe('places workspace', () => {
     const origin = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const dest = await workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(32.08, 34.78, 300, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     if (!origin.ok || !dest.ok) {
       return;
@@ -235,12 +246,13 @@ describe('places workspace', () => {
     await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     await workspace.startAttempt();
     await sessions.appendSamples(
       departureOnlySamples({
-        origin: { center: { latitude: 32.08, longitude: 34.78 }, radiusMeters: 30 },
+        origin: { center: { latitude: 32.08, longitude: 34.78 }, departureRadiusMeters: 30 },
         sessionId: 'id-1',
       }),
     );
@@ -258,12 +270,14 @@ describe('places workspace', () => {
     const home = await workspace.createPlace({
       name: 'Home',
       center: homeCenter,
-      radiusMeters: 17,
+      departureRadiusMeters: 17,
+      arrivalRadiusMeters: 17,
     });
     const work = await workspace.createPlace({
       name: 'Work',
       center: workCenter,
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     assert.equal(home.ok && work.ok, true);
     if (!home.ok || !work.ok) {
@@ -279,7 +293,7 @@ describe('places workspace', () => {
         finishZone: { center: workCenter, radiusMeters: 10 },
       }),
     );
-    const resized = await workspace.savePlace({ ...home.place, radiusMeters: 40 });
+    const resized = await workspace.savePlace({ ...home.place, departureRadiusMeters: 40, arrivalRadiusMeters: 40 });
     assert.equal(resized.ok, true);
     await seedPlacesForRoute(
       places,
@@ -293,7 +307,7 @@ describe('places workspace', () => {
 
     const listed = await places.listPlaces();
     assert.equal(listed.length, 2);
-    assert.equal(listed.some((place) => place.id === home.place.id && place.radiusMeters === 40), true);
+    assert.equal(listed.some((place) => place.id === home.place.id && place.departureRadiusMeters === 40 && place.arrivalRadiusMeters === 40), true);
     assert.equal(listed.some((place) => place.id === work.place.id), true);
   });
 
@@ -302,12 +316,14 @@ describe('places workspace', () => {
     const home = await workspace.createPlace({
       name: 'Home',
       center: { latitude: 32.08, longitude: 34.78 },
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const gym = await workspace.createPlace({
       name: 'Gym',
       center: offsetLatLng(32.08, 34.78, 600, 0),
-      radiusMeters: 25,
+      departureRadiusMeters: 25,
+      arrivalRadiusMeters: 25,
     });
     assert.equal(home.ok && gym.ok, true);
     if (!home.ok || !gym.ok) {

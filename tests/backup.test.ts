@@ -13,6 +13,7 @@ import { applyMigrations } from '../src/persistence/migrations';
 import {
   BackupError,
   BACKUP_FORMAT_ID,
+  BACKUP_MIGRATIONS,
   CURRENT_BACKUP_FORMAT_VERSION,
   buildBackupDocument,
   canonicalStringify,
@@ -29,6 +30,7 @@ import {
 } from '../src/persistence/backup-snapshot';
 import { SqliteAttemptStore } from '../src/persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from '../src/persistence/sqlite-location-sample-store';
+import { SqlitePlaceStore } from '../src/persistence/sqlite-place-store';
 import { SqliteRouteStore } from '../src/persistence/sqlite-route-store';
 import type { SqlExecutor } from '../src/persistence/sql-executor';
 import {
@@ -132,8 +134,8 @@ async function expectBackupError(run: () => unknown | Promise<unknown>, code: Ba
 
 async function seedSecondHistory(sql: SqlExecutor): Promise<void> {
   await sql.run(
-    `INSERT INTO place (id, name, latitude, longitude, radius_meters, status, created_at_ms)
-     VALUES ('other-place', 'Elsewhere', 10, 10, 40, 'active', 7)`,
+    `INSERT INTO place (id, name, latitude, longitude, radius_meters, departure_radius_meters, arrival_radius_meters, status, created_at_ms)
+     VALUES ('other-place', 'Elsewhere', 10, 10, 40, 40, 25, 'active', 7)`,
   );
   await seedSession(sql, {
     id: 'other-session',
@@ -159,9 +161,9 @@ async function seedLiveHistory(sql: SqlExecutor, options: { routeRecording?: boo
   const places = [HOME, WORK];
   for (const place of places) {
     await sql.run(
-      `INSERT INTO place (id, name, latitude, longitude, radius_meters, status, created_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [place.id, place.name, place.center.latitude, place.center.longitude, place.radiusMeters, place.status, place.createdAtMs],
+      `INSERT INTO place (id, name, latitude, longitude, radius_meters, departure_radius_meters, arrival_radius_meters, status, created_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [place.id, place.name, place.center.latitude, place.center.longitude, place.departureRadiusMeters, place.departureRadiusMeters, place.arrivalRadiusMeters, place.status, place.createdAtMs],
     );
   }
   const attempts = new SqliteAttemptStore(async () => sql);
@@ -279,7 +281,7 @@ describe('backup format and deterministic serialization', () => {
     assert.equal(document.backup_format_version, CURRENT_BACKUP_FORMAT_VERSION);
     assert.equal(document.created_at_ms, CREATED_AT_MS);
     assert.equal(document.created_at_utc, new Date(CREATED_AT_MS).toISOString());
-    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 11 });
+    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 12 });
     assert.deepEqual(document.counts, {
       places: 3,
       routes: 2,
@@ -296,7 +298,7 @@ describe('backup format and deterministic serialization', () => {
     const { integrity, ...body } = document;
     assert.equal(integrity.digest, createHash('sha256').update(canonicalStringify(body)).digest('hex'));
     const parsed = parseBackup(JSON.stringify(document, null, 2));
-    assert.equal(parsed.preview.formatVersion, 1);
+    assert.equal(parsed.preview.formatVersion, CURRENT_BACKUP_FORMAT_VERSION);
     assert.equal(parsed.preview.createdAtMs, CREATED_AT_MS);
     assert.equal(parsed.preview.counts.attempts, 3);
     assert.equal(backupFileName(Date.UTC(2023, 10, 25, 8, 46, 40)), 'red-light-rng-backup-20231125T084640Z.json');
@@ -592,7 +594,7 @@ describe('backup validation rejects bad files with zero writes', () => {
     {
       name: 'future format version',
       code: 'unsupported_version',
-      make: (text) => text.replace('"backup_format_version":1', '"backup_format_version":2'),
+      make: (text) => text.replace('"backup_format_version":2', '"backup_format_version":3'),
     },
     {
       name: 'future format version with valid checksum',
@@ -690,7 +692,7 @@ describe('backup validation rejects bad files with zero writes', () => {
     {
       name: 'string where a number belongs',
       code: 'invalid_structure',
-      make: (text) => mutatePayload(text, (p) => { p.places[0].radius_meters = '50'; }),
+      make: (text) => mutatePayload(text, (p) => { p.places[0].departure_radius_meters = '50'; }),
     },
     {
       name: 'unknown enum value',
@@ -753,11 +755,12 @@ describe('older-format migration mechanism', () => {
     await seedRepresentativeHistory(source);
     const current = JSON.parse(await exportText(source)) as Record<string, any>;
 
-    // Synthetic format 0: places stored `lat`/`lng`/`radius` instead of the v1 field names.
+    // Synthetic format 0: places stored `lat`/`lng`/`radius` instead of the v1 field names; the
+    // production 1 -> 2 adapter then turns the single radius into departure and arrival radii.
     const legacy = structuredClone(current);
     legacy.backup_format_version = 0;
     legacy.payload.places = legacy.payload.places.map((place: Record<string, any>) => {
-      const { latitude, longitude, radius_meters: radius, ...rest } = place;
+      const { latitude, longitude, departure_radius_meters: radius, arrival_radius_meters: _arrival, ...rest } = place;
       return { ...rest, lat: latitude, lng: longitude, radius };
     });
     delete legacy.counts;
@@ -765,6 +768,7 @@ describe('older-format migration mechanism', () => {
     const legacyText = resign(legacy);
 
     const migrations = {
+      ...BACKUP_MIGRATIONS,
       0: (payload: unknown) => {
         const input = payload as Record<string, any>;
         return {
@@ -789,7 +793,7 @@ describe('older-format migration mechanism', () => {
     await restoreBackupPayload(target, first.payload);
     assert.equal(await exportText(target), await exportText(source));
 
-    // The production registry has no adapters yet, so format 0 is rejected cleanly without one.
+    // The production registry has no 0 -> 1 adapter, so format 0 is rejected cleanly without one.
     await expectBackupError(() => parseBackup(legacyText), 'unsupported_version');
     // Tampering is still caught before any adapter runs.
     await expectBackupError(
@@ -798,13 +802,10 @@ describe('older-format migration mechanism', () => {
     );
     // Multi-step chains need every step registered.
     await expectBackupError(
-      () => parseBackup(legacyText, { currentVersion: 2, migrations }),
+      () => parseBackup(legacyText, { currentVersion: 2, migrations: { 0: migrations[0] } }),
       'unsupported_version',
     );
-    const chained = parseBackup(legacyText, {
-      currentVersion: 2,
-      migrations: { ...migrations, 1: (payload: unknown) => payload },
-    });
+    const chained = parseBackup(legacyText, { currentVersion: 2, migrations });
     assert.equal(chained.preview.migratedFromVersion, 0);
     // And a file one version above the supported maximum is still refused.
     await expectBackupError(
@@ -1225,8 +1226,8 @@ describe('coherent snapshot', () => {
             injected += 1;
             // The app keeps working while the export runs: new place, deleted attempt, edited setting.
             writerDb.exec(`
-              INSERT INTO place (id, name, latitude, longitude, radius_meters, status, created_at_ms)
-              VALUES ('place-new', 'New', 1, 1, 50, 'active', 99);
+              INSERT INTO place (id, name, latitude, longitude, radius_meters, departure_radius_meters, arrival_radius_meters, status, created_at_ms)
+              VALUES ('place-new', 'New', 1, 1, 50, 50, 50, 'active', 99);
               DELETE FROM attempt_checkpoint_crossing;
               DELETE FROM attempt WHERE id = 'attempt-dnf';
               UPDATE app_setting SET value = 'walk' WHERE key = 'active_transportation_mode';
@@ -1328,5 +1329,157 @@ describe('export safety and privacy copy', () => {
     const document = buildBackupDocument(payload, { createdAtMs: CREATED_AT_MS, source: SOURCE });
     assert.equal(document.counts.location_samples, payload.location_samples.length);
     assert.equal(document.counts.attempts, 3);
+  });
+});
+
+describe('independent Place departure and arrival radii (#77)', () => {
+  function unequalPayload(payload: BackupPayload): BackupPayload {
+    return {
+      ...payload,
+      places: payload.places.map((place) =>
+        place.id === HOME.id
+          ? { ...place, departure_radius_meters: 100, arrival_radius_meters: 30 }
+          : place.id === WORK.id
+            ? { ...place, departure_radius_meters: 40, arrival_radius_meters: 65 }
+            : place,
+      ),
+    };
+  }
+
+  it('declares format version 2 and exports both radii (legacy column excluded)', async () => {
+    assert.equal(CURRENT_BACKUP_FORMAT_VERSION, 2);
+    const sql = await openMigratedDb();
+    await seedRepresentativeHistory(sql);
+    await sql.run(
+      `UPDATE place SET departure_radius_meters = 100, arrival_radius_meters = 30 WHERE id = ?`,
+      [HOME.id],
+    );
+    const document = JSON.parse(await exportText(sql));
+    const home = document.payload.places.find((place: { id: string }) => place.id === HOME.id);
+    assert.equal(home.departure_radius_meters, 100);
+    assert.equal(home.arrival_radius_meters, 30);
+    assert.equal('radius_meters' in home, false);
+    assert.match(BACKUP_SCHEMA_COVERAGE.place!.radius_meters!, /^excluded: legacy/);
+    assert.equal(BACKUP_SCHEMA_COVERAGE.place!.departure_radius_meters, 'places[].departure_radius_meters');
+    assert.equal(BACKUP_SCHEMA_COVERAGE.place!.arrival_radius_meters, 'places[].arrival_radius_meters');
+  });
+
+  it('round-trips both radii and location history through export, restore and re-export', async () => {
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    await source.run(`UPDATE place SET departure_radius_meters = 100, arrival_radius_meters = 30 WHERE id = ?`, [HOME.id]);
+    await source.run(`UPDATE place SET departure_radius_meters = 40, arrival_radius_meters = 65 WHERE id = ?`, [WORK.id]);
+    const text = await exportText(source);
+    const parsed = parseBackup(text);
+
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, parsed.payload);
+    const places = new SqlitePlaceStore(async () => target);
+    const home = (await places.getPlace(HOME.id))!;
+    const work = (await places.getPlace(WORK.id))!;
+    assert.deepEqual([home.departureRadiusMeters, home.arrivalRadiusMeters], [100, 30]);
+    assert.deepEqual([work.departureRadiusMeters, work.arrivalRadiusMeters], [40, 65]);
+    assert.equal(await exportText(target), text, 'byte-identical re-export');
+    assert.equal(parsed.payload.location_samples.length > 0, true);
+    const restoredSamples = await target.getFirst<{ n: number }>('SELECT COUNT(*) AS n FROM location_sample');
+    assert.equal(restoredSamples!.n, parsed.payload.location_samples.length);
+  });
+
+  it('imports a valid pre-feature (format 1, single radius) backup with both radii set to the old value', async () => {
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    const current = JSON.parse(await exportText(source)) as Record<string, any>;
+    const legacy = structuredClone(current);
+    legacy.backup_format_version = 1;
+    legacy.source.schema_version = 11;
+    legacy.payload.places = legacy.payload.places.map((place: Record<string, any>) => {
+      const { departure_radius_meters: radius, arrival_radius_meters: _arrival, ...rest } = place;
+      return { ...rest, radius_meters: radius };
+    });
+    const legacyText = resign(legacy);
+
+    const parsed = parseBackup(legacyText);
+    assert.equal(parsed.preview.formatVersion, 1);
+    assert.equal(parsed.preview.migratedFromVersion, 1);
+    for (const place of parsed.payload.places) {
+      const original = current.payload.places.find((item: { id: string }) => item.id === place.id);
+      assert.equal(place.departure_radius_meters, original.departure_radius_meters);
+      assert.equal(place.arrival_radius_meters, original.departure_radius_meters);
+    }
+    assert.deepEqual(plain(parsed.payload.attempts), plain(current.payload.attempts));
+    assert.equal(parsed.payload.location_samples.length, current.payload.location_samples.length);
+
+    // No checksum or format bypass: tampering with the legacy file is still rejected.
+    await expectBackupError(() => parseBackup(legacyText.replace('Home', 'Hxme')), 'checksum_mismatch');
+    // A legacy file may not smuggle in the new fields, nor lack the old one.
+    const mixed = structuredClone(legacy);
+    mixed.payload.places[0].departure_radius_meters = 50;
+    await expectBackupError(() => parseBackup(resign(mixed)), 'invalid_structure');
+    const missing = structuredClone(legacy);
+    delete missing.payload.places[0].radius_meters;
+    await expectBackupError(() => parseBackup(resign(missing)), 'invalid_structure');
+    // A format 2 file with only the old field is not accepted either.
+    const wrongVersion = structuredClone(legacy);
+    wrongVersion.backup_format_version = 2;
+    await expectBackupError(() => parseBackup(resign(wrongVersion)), 'invalid_structure');
+
+    const target = await openMigratedDb();
+    await restoreBackupPayload(target, parsed.payload);
+    const places = new SqlitePlaceStore(async () => target);
+    for (const place of await places.listPlaces()) {
+      assert.equal(place.departureRadiusMeters, place.arrivalRadiusMeters);
+    }
+  });
+
+  it('rejects non-positive or non-numeric radii in either field', async () => {
+    const source = await openMigratedDb();
+    await seedRepresentativeHistory(source);
+    const text = await exportText(source);
+    for (const [field, value] of [
+      ['departure_radius_meters', 0],
+      ['arrival_radius_meters', -3],
+      ['arrival_radius_meters', '30'],
+    ] as const) {
+      await expectBackupError(
+        () => parseBackup(mutatePayload(text, (p) => { p.places[0][field] = value; })),
+        'invalid_structure',
+      );
+    }
+  });
+
+  it('terminalizes restored open attempts using the radii contained in the backup', async () => {
+    const source = await openMigratedDb();
+    await seedLiveHistory(source);
+    const { payload } = parseBackup(await exportText(source));
+    const baseline = terminalizeRestoredLiveState(unequalPayload(payload));
+    const strong = (result: ReturnType<typeof terminalizeRestoredLiveState>) =>
+      result.payload.attempts.find((a) => a.id === 'attempt-armed-strong')!;
+    assert.equal(strong(baseline).lifecycle, 'completed');
+
+    const widerArrival = unequalPayload(payload);
+    const tighterArrival: BackupPayload = {
+      ...widerArrival,
+      places: widerArrival.places.map((place) =>
+        place.id === WORK.id ? { ...place, arrival_radius_meters: 12 } : place,
+      ),
+    };
+    const loose = strong(terminalizeRestoredLiveState(widerArrival));
+    const tight = strong(terminalizeRestoredLiveState(tighterArrival));
+    assert.equal(loose.lifecycle, 'completed');
+    assert.equal(tight.lifecycle, 'completed');
+    // The finish is the interpolated inbound crossing of the ARRIVAL radius stored in the backup.
+    assert.ok(tight.finished_at_ms! > loose.finished_at_ms!, 'a smaller arrival radius finishes later');
+    // Start is unaffected by the destination, and follows the origin DEPARTURE radius.
+    assert.equal(tight.started_at_ms, loose.started_at_ms);
+    const tighterDeparture: BackupPayload = {
+      ...widerArrival,
+      places: widerArrival.places.map((place) =>
+        place.id === HOME.id ? { ...place, departure_radius_meters: 30 } : place,
+      ),
+    };
+    assert.ok(
+      strong(terminalizeRestoredLiveState(tighterDeparture)).started_at_ms! < loose.started_at_ms!,
+      'a smaller departure radius starts earlier',
+    );
   });
 });

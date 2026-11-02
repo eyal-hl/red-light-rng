@@ -1558,7 +1558,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           id: place.id,
           name: place.name,
           center: place.center,
-          radiusMeters: place.radiusMeters,
+          departureRadiusMeters: place.departureRadiusMeters,
+          arrivalRadiusMeters: place.arrivalRadiusMeters,
           status: place.status,
         });
       } else {
@@ -1567,7 +1568,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           id: null,
           name: '',
           center: current ?? { latitude: 32.08, longitude: 34.78 },
-          radiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+          departureRadiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+          arrivalRadiusMeters: DEFAULT_PLACE_RADIUS_METERS,
           status: 'active',
         });
       }
@@ -1589,14 +1591,16 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
             id: placeDraft.id,
             name: placeDraft.name,
             center: placeDraft.center,
-            radiusMeters: placeDraft.radiusMeters,
+            departureRadiusMeters: placeDraft.departureRadiusMeters,
+            arrivalRadiusMeters: placeDraft.arrivalRadiusMeters,
             status: placeDraft.status,
             createdAtMs: 0,
           })
         : await workspace.createPlace({
             name: placeDraft.name,
             center: placeDraft.center,
-            radiusMeters: placeDraft.radiusMeters,
+            departureRadiusMeters: placeDraft.departureRadiusMeters,
+            arrivalRadiusMeters: placeDraft.arrivalRadiusMeters,
           });
       if (!result.ok) {
         setError(result.reason);

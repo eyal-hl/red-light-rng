@@ -46,21 +46,24 @@ describe('place duplicate repair', () => {
     const home10 = makePlace({
       id: 'home-10',
       name: 'Home',
-      radiusMeters: 10,
+      departureRadiusMeters: 10,
+      arrivalRadiusMeters: 10,
       status: 'archived',
       createdAtMs: 1,
     });
     const home30 = makePlace({
       id: 'home-30',
       name: 'Home',
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
       status: 'archived',
       createdAtMs: 2,
     });
     const home17 = makePlace({
       id: 'home-17',
       name: 'Home',
-      radiusMeters: 17,
+      departureRadiusMeters: 17,
+      arrivalRadiusMeters: 17,
       status: 'active',
       createdAtMs: 3,
     });
@@ -69,7 +72,7 @@ describe('place duplicate repair', () => {
     assert.equal(plan.canonicalIdByPlaceId.get('home-30'), 'home-17');
     assert.equal(plan.canonicalIdByPlaceId.get('home-17'), 'home-17');
     assert.deepEqual(plan.obsoletePlaceIds, ['home-10', 'home-30']);
-    assert.equal(selectCanonicalPlace([home10, home30, home17]).radiusMeters, 17);
+    assert.equal(selectCanonicalPlace([home10, home30, home17]).departureRadiusMeters, 17);
     assert.equal(selectCanonicalPlace([home10, home30, home17]).status, 'active');
   });
 
@@ -77,7 +80,8 @@ describe('place duplicate repair', () => {
     const activeWork = makePlace({
       id: 'work-active',
       name: 'Work',
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
       status: 'active',
       createdAtMs: 2,
       center: offsetLatLng(HOME.latitude, HOME.longitude, 300, 0),
@@ -85,7 +89,8 @@ describe('place duplicate repair', () => {
     const archivedWork = makePlace({
       id: 'work-archived',
       name: 'Work',
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
       status: 'archived',
       createdAtMs: 1,
       center: offsetLatLng(HOME.latitude, HOME.longitude, 312, 0),
@@ -100,7 +105,8 @@ describe('place duplicate repair', () => {
     const home3 = makePlace({
       id: 'home-3',
       name: 'Home 3',
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
       status: 'archived',
       createdAtMs: 2,
     });
@@ -174,14 +180,16 @@ describe('place duplicate repair', () => {
     const home10 = makePlace({
       id: 'home-10',
       name: 'Home',
-      radiusMeters: 10,
+      departureRadiusMeters: 10,
+      arrivalRadiusMeters: 10,
       status: 'archived',
       createdAtMs: 1,
     });
     const home17 = makePlace({
       id: 'home-17',
       name: 'Home',
-      radiusMeters: 17,
+      departureRadiusMeters: 17,
+      arrivalRadiusMeters: 17,
       createdAtMs: 2,
     });
     const first = planPlaceDuplicateRepair([home10, home17]);

@@ -21,6 +21,7 @@ import {
   type AttemptLiveMapData,
   type AttemptLiveMapPlace,
   type CurrentPositionMarker,
+  liveMapRadiusLegend,
 } from '../domain/attempt-live-map';
 import type { PlaceStartZoneStatus } from '../domain/place-timing';
 import { COURSE_CAMERA_PADDING } from './course-camera-bounds';
@@ -333,6 +334,9 @@ export function AttemptLiveMap(props: AttemptLiveMapProps) {
         </MapErrorBoundary>
       )}
       {mode !== 'hidden' && showCanvas ? <Text style={styles.caption}>{caption}</Text> : null}
+      {mode !== 'hidden' && liveMap.places.length > 0 ? (
+        <Text style={styles.legend}>{liveMapRadiusLegend(liveMap.places[0]!.radiusRole)}</Text>
+      ) : null}
     </View>
   );
 }
@@ -355,6 +359,16 @@ const styles = StyleSheet.create({
     right: 8,
     color: '#ffffff',
     fontSize: 12,
+    textShadowColor: '#111111',
+    textShadowRadius: 3,
+  },
+  legend: {
+    position: 'absolute',
+    left: 8,
+    top: 6,
+    right: 90,
+    color: '#ffffff',
+    fontSize: 11,
     textShadowColor: '#111111',
     textShadowRadius: 3,
   },

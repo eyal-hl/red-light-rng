@@ -1,5 +1,7 @@
 import { geoZoneExtentPoints, haversineMeters, type LatLng } from './geo';
 import { MAX_SAMPLE_ACCURACY_METERS } from './course-matching';
+import type { AttemptLifecycle } from './attempt';
+import { placeRadiusFor, type PlaceRadiusRole } from './place';
 import type { PlaceStartZoneStatus, PlaceTimingPlace } from './place-timing';
 
 /**
@@ -23,9 +25,25 @@ export type AttemptLiveMapPlace = {
   id: string;
   name: string;
   center: LatLng;
-  /** Configured detection radius only; no confirmation thresholds. */
+  /** Configured detection radius for `radiusRole` only; no confirmation thresholds. */
   radiusMeters: number;
+  /**
+   * Which saved radius `radiusMeters` shows: `departure` while armed (start zones),
+   * `arrival` once a run is active (destination / return zones).
+   */
+  radiusRole: PlaceRadiusRole;
 };
+
+/** Role of the rings drawn for a run in the given lifecycle. */
+export function liveMapRadiusRole(lifecycle: AttemptLifecycle): PlaceRadiusRole {
+  return lifecycle === 'armed' ? 'departure' : 'arrival';
+}
+
+export function liveMapRadiusLegend(role: PlaceRadiusRole): string {
+  return role === 'departure'
+    ? 'Rings show each place\u2019s departure radius: the clock starts when you leave one.'
+    : 'Rings show each place\u2019s arrival radius: the clock stops when you enter one.';
+}
 
 export type AttemptLiveMapFix = {
   latitude: number;
@@ -49,12 +67,16 @@ export const EMPTY_ATTEMPT_LIVE_MAP: AttemptLiveMapData = {
   observedAtMs: 0,
 };
 
-export function liveMapPlaces(places: PlaceTimingPlace[]): AttemptLiveMapPlace[] {
+export function liveMapPlaces(
+  places: PlaceTimingPlace[],
+  role: PlaceRadiusRole,
+): AttemptLiveMapPlace[] {
   return places.map((place) => ({
     id: place.id,
     name: place.name,
     center: { latitude: place.center.latitude, longitude: place.center.longitude },
-    radiusMeters: place.radiusMeters,
+    radiusMeters: placeRadiusFor(place, role),
+    radiusRole: role,
   }));
 }
 
@@ -169,7 +191,7 @@ export function formatLiveMapCaption(marker: CurrentPositionMarker): string {
 export function livePlacesStructuralKey(places: AttemptLiveMapPlace[], inZoneId: string | null): string {
   return JSON.stringify([
     inZoneId,
-    places.map((place) => [place.id, place.name, place.center.latitude, place.center.longitude, place.radiusMeters]),
+    places.map((place) => [place.id, place.name, place.center.latitude, place.center.longitude, place.radiusMeters, place.radiusRole]),
   ]);
 }
 

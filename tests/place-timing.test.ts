@@ -65,13 +65,15 @@ describe('origin candidate selection', () => {
       id: 'place-b',
       name: 'Nearer',
       center: offset(HOME.center.latitude, HOME.center.longitude, 5, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const farther = makePlace({
       id: 'place-a',
       name: 'Farther',
       center: offset(HOME.center.latitude, HOME.center.longitude, 12, 0),
-      radiusMeters: 30,
+      departureRadiusMeters: 30,
+      arrivalRadiusMeters: 30,
     });
     const nearest = selectOriginCandidate([farther, nearer], HOME.center);
     assert.equal(nearest?.place.id, 'place-b');
@@ -122,7 +124,7 @@ describe('path-free departure', () => {
     const expected = interpolateRadiusCrossing(
       { recordedAtMs: 2_000, distanceMeters: haversineMeters(inner, HOME.center) },
       { recordedAtMs: 3_000, distanceMeters: haversineMeters(outer, HOME.center) },
-      HOME.radiusMeters,
+      HOME.departureRadiusMeters,
     );
     const poor = sampleAt(offset(HOME.center.latitude, HOME.center.longitude, 80, 0), {
       sessionId: 's',
@@ -234,11 +236,11 @@ describe('path-free departure', () => {
       const current = samples[index]!;
       const previousDistance = haversineMeters(previous, HOME.center);
       const currentDistance = haversineMeters(current, HOME.center);
-      if (previousDistance <= HOME.radiusMeters && currentDistance > HOME.radiusMeters) {
+      if (previousDistance <= HOME.departureRadiusMeters && currentDistance > HOME.departureRadiusMeters) {
         crossing = interpolateRadiusCrossing(
           { recordedAtMs: previous.recordedAtMs, distanceMeters: previousDistance },
           { recordedAtMs: current.recordedAtMs, distanceMeters: currentDistance },
-          HOME.radiusMeters,
+          HOME.departureRadiusMeters,
         );
         break;
       }
@@ -356,9 +358,9 @@ describe('path-free destination and finish', () => {
   it('does not finish with fewer than 3 inside samples, under 2s confirmation, or after an exit', () => {
     const approach = completeJourneySamples({ origin: HOME, destination: WORK, sessionId: 's' });
     const beforeArrival = approach.filter((sample) => {
-      return haversineMeters(sample, WORK.center) > WORK.radiusMeters;
+      return haversineMeters(sample, WORK.center) > WORK.arrivalRadiusMeters;
     });
-    const firstInside = approach.find((sample) => haversineMeters(sample, WORK.center) <= WORK.radiusMeters);
+    const firstInside = approach.find((sample) => haversineMeters(sample, WORK.center) <= WORK.arrivalRadiusMeters);
     assert.ok(firstInside);
     const twoInside = [
       ...beforeArrival,
@@ -432,7 +434,7 @@ describe('path-free destination and finish', () => {
     assert.equal(state.destinationPlaceId, nearbyWork.id);
     const workWatch = state.destinations.find((item) => item.placeId === nearbyWork.id);
     assert.equal(workWatch?.seenEligibleOutside, true);
-    assert.ok((workWatch?.maxDistanceMeters ?? 0) >= nearbyWork.radiusMeters + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS);
+    assert.ok((workWatch?.maxDistanceMeters ?? 0) >= nearbyWork.arrivalRadiusMeters + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS);
     assert.ok(state.startedAtMs != null);
     assert.ok(state.finishedAtMs != null);
     assert.ok((state.finishedAtMs ?? 0) > (state.startedAtMs ?? 0));

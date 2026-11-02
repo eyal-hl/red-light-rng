@@ -59,7 +59,11 @@ function endpointSortKey(endpoint: SeedEndpoint): string {
 
 function matchingExistingPlace(places: Place[], endpoint: SeedEndpoint): Place | null {
   const matches = places.filter((place) =>
-    endpointsMatchForSeed(place, { center: endpoint.center, radiusMeters: endpoint.radiusMeters }),
+    endpointsMatchForSeed(
+      // Seeded places always carry equal radii; compare on the departure radius.
+      { center: place.center, radiusMeters: place.departureRadiusMeters },
+      { center: endpoint.center, radiusMeters: endpoint.radiusMeters },
+    ),
   );
   if (matches.length === 0) {
     return null;
@@ -144,7 +148,8 @@ export function ensurePlacesForRoute(
         id: createPlaceId(known.length),
         name: endpoint.name,
         center: { latitude: endpoint.center.latitude, longitude: endpoint.center.longitude },
-        radiusMeters: endpoint.radiusMeters,
+        departureRadiusMeters: endpoint.radiusMeters,
+        arrivalRadiusMeters: endpoint.radiusMeters,
         status: 'active',
         createdAtMs: nowMs + known.length,
       } satisfies Place);
@@ -210,7 +215,8 @@ export function seedPlacesFromRoutes(
         id: createPlaceId(places.length),
         name: endpoint.name,
         center: { latitude: endpoint.center.latitude, longitude: endpoint.center.longitude },
-        radiusMeters: endpoint.radiusMeters,
+        departureRadiusMeters: endpoint.radiusMeters,
+        arrivalRadiusMeters: endpoint.radiusMeters,
         status: 'active',
         createdAtMs: nowMs + places.length,
       } satisfies Place);

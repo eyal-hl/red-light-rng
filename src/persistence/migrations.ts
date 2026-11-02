@@ -222,7 +222,7 @@ export const MIGRATIONS: Migration[] = [
             place.name,
             place.center.latitude,
             place.center.longitude,
-            place.radiusMeters,
+            place.departureRadiusMeters,
             place.status,
             place.createdAtMs,
           ],
@@ -398,12 +398,13 @@ export const MIGRATIONS: Migration[] = [
         radius_meters: number;
         status: string;
         created_at_ms: number;
-      }>('SELECT * FROM place');
+      }>('SELECT id, name, latitude, longitude, radius_meters, status, created_at_ms FROM place');
       const places: Place[] = rows.map((row) => ({
         id: row.id,
         name: row.name,
         center: { latitude: row.latitude, longitude: row.longitude },
-        radiusMeters: row.radius_meters,
+        departureRadiusMeters: row.radius_meters,
+        arrivalRadiusMeters: row.radius_meters,
         status: row.status === 'archived' ? 'archived' : 'active',
         createdAtMs: row.created_at_ms,
       }));
@@ -457,6 +458,28 @@ export const MIGRATIONS: Migration[] = [
     version: 11,
     async up(sql) {
       await ensureAttemptHiddenIncompleteColumn(sql);
+    },
+  },
+  {
+    // Independent Place departure/arrival radii (#77). Every existing Place keeps its current
+    // behavior: the single radius is copied into both new columns. The legacy radius_meters column
+    // stays (NOT NULL, cannot be dropped portably) and mirrors the departure radius; no rows,
+    // attempts or location samples are rewritten or removed.
+    version: 12,
+    async up(sql) {
+      await addColumnIfMissing(sql, 'place',
+        'departure_radius_meters',
+        'departure_radius_meters REAL NOT NULL DEFAULT 30',
+      );
+      await addColumnIfMissing(sql, 'place',
+        'arrival_radius_meters',
+        'arrival_radius_meters REAL NOT NULL DEFAULT 30',
+      );
+      await sql.exec(`
+        UPDATE place
+        SET departure_radius_meters = radius_meters,
+            arrival_radius_meters = radius_meters
+      `);
     },
   },
 ];

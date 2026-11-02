@@ -116,7 +116,7 @@ function PlaceListCard({
       >
         <Text style={styles.cardTitle}>{place.name}</Text>
         <Text style={styles.cardMeta}>
-          {formatDistance(place.radiusMeters)} radius
+          Departure {formatDistance(place.departureRadiusMeters)} · Arrival {formatDistance(place.arrivalRadiusMeters)}
           {place.status === 'archived' ? ' · archived' : ''}
         </Text>
       </Pressable>

@@ -161,8 +161,8 @@ export function JourneyDetailScreen({
             <RouteMap
               path={[]}
               pathVariants={variantMapLines}
-              startZone={placeZone(origin)}
-              finishZone={placeZone(destination)}
+              startZone={placeZone(origin, 'departure')}
+              finishZone={placeZone(destination, 'arrival')}
               checkpoints={[]}
               waitMarkers={hotspotMarkers}
               selectedMarkerId={selectedMarkerId}

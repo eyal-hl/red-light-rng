@@ -12,6 +12,7 @@ import {
   EMPTY_ATTEMPT_LIVE_MAP,
   liveMapFix,
   liveMapPlaces,
+  liveMapRadiusRole,
   type AttemptLiveMapData,
 } from '../domain/attempt-live-map';
 import { createId } from '../domain/ids';
@@ -232,7 +233,7 @@ export class AttemptRuntime {
     const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
     // Same samples and exact place set the engine just evaluated: no extra query.
     const liveMap: AttemptLiveMapData = {
-      places: liveMapPlaces(places),
+      places: liveMapPlaces(places, liveMapRadiusRole(next.lifecycle)),
       latestFix: liveMapFix(samples[samples.length - 1]),
       observedAtMs: this.now(),
     };

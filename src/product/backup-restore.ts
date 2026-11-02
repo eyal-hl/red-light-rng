@@ -85,7 +85,8 @@ export function terminalizeRestoredLiveState(payload: BackupPayload): {
       id: place.id,
       name: place.name,
       center: { latitude: place.latitude, longitude: place.longitude },
-      radiusMeters: place.radius_meters,
+      departureRadiusMeters: place.departure_radius_meters,
+      arrivalRadiusMeters: place.arrival_radius_meters,
       status: place.status === 'archived' ? 'archived' : 'active',
     }));
     const samples = [...(samplesBySession.get(attempt.session_id) ?? [])]
@@ -229,8 +230,29 @@ async function writePayload(sql: SqlExecutor, payload: BackupPayload): Promise<v
   await insertRows(
     sql,
     'place',
-    ['id', 'name', 'latitude', 'longitude', 'radius_meters', 'status', 'created_at_ms'],
-    payload.places.map((p) => [p.id, p.name, p.latitude, p.longitude, p.radius_meters, p.status, p.created_at_ms]),
+    [
+      'id',
+      'name',
+      'latitude',
+      'longitude',
+      'radius_meters',
+      'departure_radius_meters',
+      'arrival_radius_meters',
+      'status',
+      'created_at_ms',
+    ],
+    payload.places.map((p) => [
+      p.id,
+      p.name,
+      p.latitude,
+      p.longitude,
+      // Legacy NOT NULL column mirrors the departure radius.
+      p.departure_radius_meters,
+      p.departure_radius_meters,
+      p.arrival_radius_meters,
+      p.status,
+      p.created_at_ms,
+    ]),
   );
   await insertRows(
     sql,
