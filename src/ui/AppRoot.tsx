@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, BackHandler, Pressable, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
@@ -12,6 +12,7 @@ import {
 import type { JourneyPoolId } from '../domain/journey';
 import {
   JourneyFocusStoppedError,
+  journeyRankedHistoryRows,
   type JourneyFocusAnalysis,
   type JourneyHistoryRow,
   type JourneyPoolSummary,
@@ -183,6 +184,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     emptyDepartureGrouping(),
   );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
+  const journeyRankedHistory = useMemo(() => journeyRankedHistoryRows(journeyHistory), [journeyHistory]);
   const [journeyPathVariants, setJourneyPathVariants] = useState<JourneyPathVariantSummary[]>([]);
   const [journeyHotspots, setJourneyHotspots] = useState<JourneyHotspotsState>({ status: 'idle' });
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
@@ -2113,7 +2115,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           statistics={journeyStatistics}
           grouping={journeyGrouping}
           rows={journeyHistory}
-          rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
+          rankedRows={journeyRankedHistory}
           mode={historyMode}
           groupFilter={historyGroupFilter}
           busy={busy}

@@ -231,6 +231,21 @@ export function journeyHistoryRows(
     });
 }
 
+/**
+ * Ranked-mode history: only eligible rows that carry a rank, ordered by that
+ * canonical rank (PB first). Ranks come from `journeyHistoryRows`, so no tie-break
+ * is recomputed here; attemptId is only a deterministic safety net.
+ */
+export function journeyRankedHistoryRows<T extends HistoryRow>(rows: readonly T[]): T[] {
+  return rows
+    .filter((row) => row.eligible && row.rank != null)
+    .sort(
+      (a, b) =>
+        (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER) ||
+        a.attemptId.localeCompare(b.attemptId),
+    );
+}
+
 function previousCompetitiveAttempt(competitive: Attempt[], focus: Attempt): Attempt | null {
   const earlier = competitive
     .filter((item) => item.id !== focus.id)
