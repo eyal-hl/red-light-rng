@@ -47,6 +47,70 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
   };
 }
 
+/** Upserts one attempt and replaces its crossings on `sql`; callers own the transaction. */
+export async function writeAttemptRecord(sql: SqlExecutor, attempt: Attempt): Promise<void> {
+  await sql.run(
+    `INSERT INTO attempt (
+       id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
+       lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
+       started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged,
+       hidden_incomplete, reconciliation_status, reconciliation_version
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       route_id = excluded.route_id,
+       origin_place_id = excluded.origin_place_id,
+       destination_place_id = excluded.destination_place_id,
+       transportation_mode = excluded.transportation_mode,
+       lifecycle = excluded.lifecycle,
+       validity = excluded.validity,
+       started_at_ms = excluded.started_at_ms,
+       finished_at_ms = excluded.finished_at_ms,
+       started_utc_offset_minutes = excluded.started_utc_offset_minutes,
+       started_timezone_id = excluded.started_timezone_id,
+       started_local_time_source = excluded.started_local_time_source,
+       result_acknowledged = excluded.result_acknowledged,
+       hidden_incomplete = excluded.hidden_incomplete,
+       reconciliation_status = excluded.reconciliation_status,
+       reconciliation_version = excluded.reconciliation_version`,
+    [
+      attempt.id,
+      attempt.routeId,
+      attempt.originPlaceId,
+      attempt.destinationPlaceId,
+      attempt.transportationMode,
+      attempt.sessionId,
+      attempt.lifecycle,
+      attempt.validity,
+      attempt.armedAtMs,
+      attempt.startedAtMs,
+      attempt.finishedAtMs,
+      attempt.startedUtcOffsetMinutes,
+      attempt.startedTimezoneId,
+      attempt.startedLocalTimeSource,
+      attempt.resultAcknowledged ? 1 : 0,
+      attempt.hiddenIncomplete === true ? 1 : 0,
+      parseAttemptReconciliationStatus(attempt.reconciliationStatus),
+      attempt.reconciliationVersion ?? 0,
+    ],
+  );
+  await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attempt.id]);
+  for (const crossing of attempt.crossings) {
+    await sql.run(
+      `INSERT INTO attempt_checkpoint_crossing (
+         id, attempt_id, checkpoint_id, checkpoint_name, checkpoint_progress_m, crossed_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        crossing.id,
+        attempt.id,
+        crossing.checkpointId,
+        crossing.checkpointName,
+        crossing.checkpointProgressMeters,
+        crossing.crossedAtMs,
+      ],
+    );
+  }
+}
+
 export class SqliteAttemptStore implements AttemptStore {
   constructor(private readonly getSql: () => Promise<SqlExecutor>) {}
 
@@ -232,66 +296,7 @@ export class SqliteAttemptStore implements AttemptStore {
   }
 
   private async writeAttempt(sql: SqlExecutor, attempt: Attempt): Promise<void> {
-    await sql.run(
-      `INSERT INTO attempt (
-         id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
-         lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
-         started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged,
-         hidden_incomplete, reconciliation_status, reconciliation_version
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         route_id = excluded.route_id,
-         origin_place_id = excluded.origin_place_id,
-         destination_place_id = excluded.destination_place_id,
-         transportation_mode = excluded.transportation_mode,
-         lifecycle = excluded.lifecycle,
-         validity = excluded.validity,
-         started_at_ms = excluded.started_at_ms,
-         finished_at_ms = excluded.finished_at_ms,
-         started_utc_offset_minutes = excluded.started_utc_offset_minutes,
-         started_timezone_id = excluded.started_timezone_id,
-         started_local_time_source = excluded.started_local_time_source,
-         result_acknowledged = excluded.result_acknowledged,
-         hidden_incomplete = excluded.hidden_incomplete,
-         reconciliation_status = excluded.reconciliation_status,
-         reconciliation_version = excluded.reconciliation_version`,
-      [
-        attempt.id,
-        attempt.routeId,
-        attempt.originPlaceId,
-        attempt.destinationPlaceId,
-        attempt.transportationMode,
-        attempt.sessionId,
-        attempt.lifecycle,
-        attempt.validity,
-        attempt.armedAtMs,
-        attempt.startedAtMs,
-        attempt.finishedAtMs,
-        attempt.startedUtcOffsetMinutes,
-        attempt.startedTimezoneId,
-        attempt.startedLocalTimeSource,
-        attempt.resultAcknowledged ? 1 : 0,
-        attempt.hiddenIncomplete === true ? 1 : 0,
-        parseAttemptReconciliationStatus(attempt.reconciliationStatus),
-        attempt.reconciliationVersion ?? 0,
-      ],
-    );
-    await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attempt.id]);
-    for (const crossing of attempt.crossings) {
-      await sql.run(
-        `INSERT INTO attempt_checkpoint_crossing (
-           id, attempt_id, checkpoint_id, checkpoint_name, checkpoint_progress_m, crossed_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          crossing.id,
-          attempt.id,
-          crossing.checkpointId,
-          crossing.checkpointName,
-          crossing.checkpointProgressMeters,
-          crossing.crossedAtMs,
-        ],
-      );
-    }
+    await writeAttemptRecord(sql, attempt);
   }
 
   private async loadCrossings(sql: SqlExecutor, attemptId: string): Promise<AttemptCheckpointCrossing[]> {

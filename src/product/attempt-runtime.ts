@@ -12,6 +12,7 @@ import {
   EMPTY_ATTEMPT_LIVE_MAP,
   liveMapFix,
   liveMapPlaces,
+  liveMapRadiusRole,
   type AttemptLiveMapData,
 } from '../domain/attempt-live-map';
 import { createId } from '../domain/ids';
@@ -232,7 +233,7 @@ export class AttemptRuntime {
     const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
     // Same samples and exact place set the engine just evaluated: no extra query.
     const liveMap: AttemptLiveMapData = {
-      places: liveMapPlaces(places),
+      places: liveMapPlaces(places, liveMapRadiusRole(next.lifecycle)),
       latestFix: liveMapFix(samples[samples.length - 1]),
       observedAtMs: this.now(),
     };
@@ -646,6 +647,15 @@ export class AttemptRuntime {
     const reconciled = withAttemptReconciliation(working, 'reconciled');
     await this.attempts.saveAttempt(reconciled);
     return reconciled;
+  }
+
+  /**
+   * Split/path-variant assignment for an attempt whose official window changed (history
+   * recalculation). Same matcher as post-run reconciliation; returns the attempt with its new
+   * routeId/crossings without saving it.
+   */
+  async reassignPathVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {
+    return this.assignExistingVariant(attempt, samples);
   }
 
   private async assignExistingVariant(attempt: Attempt, samples: LocationSample[]): Promise<Attempt> {

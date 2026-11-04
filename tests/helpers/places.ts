@@ -6,13 +6,19 @@ import type { PlaceStore } from '../../src/persistence/place-store';
 import type { Route } from '../../src/domain/route';
 import { offsetLatLng, sample } from './samples';
 
-export function makePlace(overrides: Partial<Place> & Pick<Place, 'id' | 'name'>): Place {
+/** `radiusMeters` is a test shorthand that sets both departure and arrival (equal-radii places). */
+export function makePlace(
+  overrides: Partial<Place> & Pick<Place, 'id' | 'name'> & { radiusMeters?: number },
+): Place {
+  const { radiusMeters, ...rest } = overrides;
+  const both = radiusMeters ?? DEFAULT_PLACE_RADIUS_METERS;
   return {
     center: { latitude: 32.08, longitude: 34.78 },
-    radiusMeters: DEFAULT_PLACE_RADIUS_METERS,
+    departureRadiusMeters: both,
+    arrivalRadiusMeters: both,
     status: 'active',
     createdAtMs: 1,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -109,8 +115,8 @@ export function dwellSamples(
 }
 
 export function completeJourneySamples(options: {
-  origin: Pick<Place, 'center' | 'radiusMeters'>;
-  destination: Pick<Place, 'center' | 'radiusMeters'>;
+  origin: Pick<Place, 'center'>;
+  destination: Pick<Place, 'center'>;
   sessionId: string;
   startMs?: number;
   intervalMs?: number;
@@ -153,7 +159,7 @@ export function completeJourneySamples(options: {
 }
 
 export function departureOnlySamples(options: {
-  origin: Pick<Place, 'center' | 'radiusMeters'>;
+  origin: Pick<Place, 'center' | 'departureRadiusMeters'>;
   sessionId: string;
   startMs?: number;
   intervalMs?: number;
@@ -165,7 +171,7 @@ export function departureOnlySamples(options: {
   const intervalMs = options.intervalMs ?? 1000;
   const speedMps = options.speedMps ?? 4;
   const extraMeters = options.extraMeters ?? 25;
-  const targetNorth = options.origin.radiusMeters + extraMeters;
+  const targetNorth = options.origin.departureRadiusMeters + extraMeters;
   const target = offsetLatLng(
     options.origin.center.latitude,
     options.origin.center.longitude,

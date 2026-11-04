@@ -81,12 +81,14 @@ async function createHomeAndWork(workspace: ReturnType<typeof createMemoryWorksp
   const home = await workspace.createPlace({
     name: 'Home',
     center: HOME.center,
-    radiusMeters: HOME.radiusMeters,
+    departureRadiusMeters: HOME.departureRadiusMeters,
+    arrivalRadiusMeters: HOME.arrivalRadiusMeters,
   });
   const work = await workspace.createPlace({
     name: 'Work',
     center: WORK.center,
-    radiusMeters: WORK.radiusMeters,
+    departureRadiusMeters: WORK.departureRadiusMeters,
+    arrivalRadiusMeters: WORK.arrivalRadiusMeters,
   });
   assert.equal(home.ok && work.ok, true);
   if (!home.ok || !work.ok) {
@@ -118,7 +120,7 @@ async function endDidNotStart(
 async function endDidNotFinish(
   workspace: ReturnType<typeof createMemoryWorkspace>['workspace'],
   sessions: ReturnType<typeof createMemoryWorkspace>['sessions'],
-  origin: { id: string; center: { latitude: number; longitude: number }; radiusMeters: number },
+  origin: { id: string; center: { latitude: number; longitude: number }; departureRadiusMeters: number },
 ) {
   const started = await workspace.startAttempt();
   assert.equal(started.ok, true);
@@ -283,12 +285,14 @@ describe('hiding incomplete attempts', () => {
     await workspace.createPlace({
       name: HOME.name,
       center: HOME.center,
-      radiusMeters: HOME.radiusMeters,
+      departureRadiusMeters: HOME.departureRadiusMeters,
+      arrivalRadiusMeters: HOME.arrivalRadiusMeters,
     });
     await workspace.createPlace({
       name: WORK.name,
       center: WORK.center,
-      radiusMeters: WORK.radiusMeters,
+      departureRadiusMeters: WORK.departureRadiusMeters,
+      arrivalRadiusMeters: WORK.arrivalRadiusMeters,
     });
     const official = completedAttempt('official', {
       originPlaceId: (await workspace.listPlaces()).find((place) => place.name === 'Home')!.id,

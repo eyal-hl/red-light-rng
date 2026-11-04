@@ -13,8 +13,8 @@ export const PATH_VARIANT_PROGRESS_COVERAGE_RATIO = 0.5;
 
 export function routeEndpointsMatchJourney(
   route: Pick<Route, 'startZone' | 'finishZone' | 'transportationMode'>,
-  origin: Pick<Place, 'center' | 'radiusMeters'>,
-  destination: Pick<Place, 'center' | 'radiusMeters'>,
+  origin: Pick<Place, 'center' | 'departureRadiusMeters'>,
+  destination: Pick<Place, 'center' | 'arrivalRadiusMeters'>,
   transportationMode: TransportationMode,
 ): boolean {
   if (route.transportationMode !== transportationMode) {
@@ -23,8 +23,8 @@ export function routeEndpointsMatchJourney(
   const startDistance = haversineMeters(route.startZone.center, origin.center);
   const finishDistance = haversineMeters(route.finishZone.center, destination.center);
   return (
-    startDistance <= origin.radiusMeters + route.startZone.radiusMeters &&
-    finishDistance <= destination.radiusMeters + route.finishZone.radiusMeters
+    startDistance <= origin.departureRadiusMeters + route.startZone.radiusMeters &&
+    finishDistance <= destination.arrivalRadiusMeters + route.finishZone.radiusMeters
   );
 }
 
@@ -82,8 +82,8 @@ export function isCompatiblePathVariant(
 
 export function pathVariantsForJourney(
   routes: Route[],
-  origin: Pick<Place, 'center' | 'radiusMeters'>,
-  destination: Pick<Place, 'center' | 'radiusMeters'>,
+  origin: Pick<Place, 'center' | 'departureRadiusMeters'>,
+  destination: Pick<Place, 'center' | 'arrivalRadiusMeters'>,
   transportationMode: TransportationMode,
   options?: { includeArchived?: boolean },
 ): Route[] {
@@ -101,8 +101,8 @@ export function pathVariantsForJourney(
 
 export function selectJourneyPathVariant(
   routes: Route[],
-  origin: Pick<Place, 'center' | 'radiusMeters'>,
-  destination: Pick<Place, 'center' | 'radiusMeters'>,
+  origin: Pick<Place, 'center' | 'departureRadiusMeters'>,
+  destination: Pick<Place, 'center' | 'arrivalRadiusMeters'>,
   transportationMode: TransportationMode,
 ): Route | null {
   return pathVariantsForJourney(routes, origin, destination, transportationMode, {

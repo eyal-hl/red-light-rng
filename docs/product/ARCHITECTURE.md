@@ -38,7 +38,7 @@ Start with Expo's location/task APIs. If field testing shows that one platform r
 
 The initial application is a single local-first mobile system with several conceptual responsibilities:
 
-1. **Place model** — saved named endpoints with radius and archive state.
+1. **Place model** — saved named endpoints with independent departure and arrival radii and archive state.
 2. **Journey model** — directional origin + destination + transportation mode pools, official endpoint timing, PB/rank/history.
 3. **Route / path-variant model** — optional reference path, start/end zones, checkpoints used for compatible-path analytics only.
 4. **Run/recording recorder** — background location sampling and lifecycle state for path-variant creation and official attempts.
@@ -68,6 +68,8 @@ A raw location sample should be able to represent at least:
 Derived values such as a cleaned reference path, route distance, start/finish zones, checkpoint crossing time, segment time, stopped time, route progress, and PB delta should be reproducible from stored telemetry when practical.
 
 Recording sessions should carry a purpose/kind discriminator so route-creation recordings are distinguishable from future official attempts. Route-source telemetry and the reusable route/reference course are separate concepts: deleting or reprocessing derived route data should not silently destroy the source telemetry.
+
+History recalculation (#77, schema v13) is a product-layer service (`src/product/history-recalculation.ts`) over a `RecalculationJobStore` (SQLite and in-memory twins). The pure decision logic replays traces through `place-timing`; publication is one store-level atomic step (SQL transaction / atomic swap) that also writes split/variant reassignment. Its job and staging tables are local operational state outside the portable backup.
 
 SQLite schema evolution should use an explicit versioned migration mechanism once durable product data exists. Do not rely only on `CREATE TABLE IF NOT EXISTS` for future schema changes.
 

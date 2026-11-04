@@ -15,12 +15,14 @@ async function seedHomeAndWork() {
   const home = await ctx.workspace.createPlace({
     name: 'Home',
     center: HOME_CENTER,
-    radiusMeters: 30,
+    departureRadiusMeters: 30,
+    arrivalRadiusMeters: 30,
   });
   const work = await ctx.workspace.createPlace({
     name: 'Work',
     center: offsetLatLng(HOME_CENTER.latitude, HOME_CENTER.longitude, 300, 0),
-    radiusMeters: 30,
+    departureRadiusMeters: 30,
+    arrivalRadiusMeters: 30,
   });
   assert.equal(home.ok && work.ok, true);
   if (!home.ok || !work.ok) {

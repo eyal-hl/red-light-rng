@@ -24,6 +24,7 @@ import {
   type AttemptDebugSample,
 } from '../domain/attempt-debug';
 import type { PlaceAttemptDebugReport, PlaceDebugSample } from '../domain/place-debug';
+import { PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS } from '../domain/place-timing';
 import { formatElapsed, formatPercent, formatRankAmong, formatSignedDelta, formatTimeOfDay } from '../domain/duration';
 import { type GhostChartSelection } from '../domain/ghost-chart';
 import { isMovementDisplayable, type MovementBreakdown } from '../domain/movement-analysis';
@@ -434,7 +435,7 @@ function PlaceDebugPanel({
         </Text>
       </View>
       <View style={styles.statRow}>
-        <Text style={styles.statLabel}>Departure samples / radial</Text>
+        <Text style={styles.statLabel}>Departure samples / radial (departure radius + 18 m)</Text>
         <Text style={styles.statValue}>
           {debug.samplesAfterDeparture}/{debug.departureMinSamples}
           {' · '}
@@ -454,7 +455,7 @@ function PlaceDebugPanel({
       {debug.destinations.map((destination) => (
         <View key={destination.placeId}>
           <View style={styles.statRow}>
-            <Text style={styles.statLabel}>{destination.name} eligible</Text>
+            <Text style={styles.statLabel}>{destination.name} eligible (arrival radius + {PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS} m = {formatMeters(destination.requiredEligibleMeters)})</Text>
             <Text style={styles.statValue}>{destination.eligible ? 'yes' : 'no'}</Text>
           </View>
           <View style={styles.statRow}>
@@ -465,6 +466,9 @@ function PlaceDebugPanel({
           </View>
         </View>
       ))}
+      <Text style={styles.mutedText}>
+        This replay uses the current departure and arrival radii of each place. Official start and finish times are stored with the run and do not change when a radius is edited.
+      </Text>
       <View style={styles.statRow}>
         <Text style={styles.statLabel}>Armed timeout</Text>
         <Text style={styles.statValue}>{debug.armedTimeout ? 'yes' : 'no'}</Text>

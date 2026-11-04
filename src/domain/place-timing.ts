@@ -16,7 +16,10 @@ export const PLACE_RETURN_TO_ORIGIN_MIN_DISTANCE_METERS = 50;
 
 export { MAX_SAMPLE_ACCURACY_METERS };
 
-export type PlaceTimingPlace = Pick<Place, 'id' | 'name' | 'center' | 'radiusMeters' | 'status'>;
+export type PlaceTimingPlace = Pick<
+  Place,
+  'id' | 'name' | 'center' | 'departureRadiusMeters' | 'arrivalRadiusMeters' | 'status'
+>;
 
 export type PlaceStartZoneStatus = {
   status: 'locating' | 'outside' | 'inside';
@@ -123,8 +126,18 @@ export function interpolateRadiusCrossing(
   return previous.recordedAtMs + clamped * (current.recordedAtMs - previous.recordedAtMs);
 }
 
-export function returnToOriginThresholdMeters(originRadiusMeters: number): number {
-  return Math.max(PLACE_RETURN_TO_ORIGIN_MIN_DISTANCE_METERS, 2 * originRadiusMeters);
+/**
+ * Return-to-origin distance gate on `maxDistanceFromOriginMeters`: the run must clearly have left
+ * both origin zones (departure and arrival) before a return can end it. With equal radii this is
+ * the original `max(50, 2 * radius)`.
+ */
+export function returnToOriginThresholdMeters(
+  origin: Pick<PlaceTimingPlace, 'departureRadiusMeters' | 'arrivalRadiusMeters'>,
+): number {
+  return Math.max(
+    PLACE_RETURN_TO_ORIGIN_MIN_DISTANCE_METERS,
+    2 * Math.max(origin.departureRadiusMeters, origin.arrivalRadiusMeters),
+  );
 }
 
 export function selectOriginCandidate(
@@ -141,7 +154,7 @@ export function selectOriginCandidate(
       place,
       distanceMeters: haversineMeters(point, place.center),
     }))
-    .filter((item) => item.distanceMeters <= item.place.radiusMeters);
+    .filter((item) => item.distanceMeters <= item.place.departureRadiusMeters);
   if (inside.length === 0) {
     return null;
   }
@@ -264,7 +277,7 @@ function maybeReturnToOrigin(
   if (state.lifecycle !== 'active' || state.insideOriginSinceMs == null) {
     return state;
   }
-  const threshold = returnToOriginThresholdMeters(origin.radiusMeters);
+  const threshold = returnToOriginThresholdMeters(origin);
   if (state.maxDistanceFromOriginMeters < threshold) {
     return state;
   }
@@ -401,7 +414,7 @@ function ingestArmed(
     next.departureCrossingAtMs = interpolateRadiusCrossing(
       { recordedAtMs: previous.recordedAtMs, distanceMeters: previousDistance },
       { recordedAtMs: accepted.recordedAtMs, distanceMeters },
-      origin.radiusMeters,
+      origin.departureRadiusMeters,
     );
     next.samplesAfterDeparture = 1;
     next.maxRadialFromOriginMeters = distanceMeters;
@@ -410,7 +423,8 @@ function ingestArmed(
     next.maxRadialFromOriginMeters = Math.max(next.maxRadialFromOriginMeters ?? 0, distanceMeters);
     if (
       next.samplesAfterDeparture >= PLACE_DEPARTURE_MIN_SAMPLES &&
-      (next.maxRadialFromOriginMeters ?? 0) >= origin.radiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
+      (next.maxRadialFromOriginMeters ?? 0) >=
+        origin.departureRadiusMeters + PLACE_DEPARTURE_SUSTAIN_METERS
     ) {
       next.lastInsideOrigin = false;
       return promoteToActive(next, origin, places, context);
@@ -451,7 +465,8 @@ function ingestActive(
   const next = cloneEngine(state);
   const originDistance = haversineMeters(samplePoint(accepted), origin.center);
   next.maxDistanceFromOriginMeters = Math.max(next.maxDistanceFromOriginMeters, originDistance);
-  const insideOrigin = originDistance <= origin.radiusMeters;
+  // Return-to-origin dwell uses the origin's ARRIVAL radius (a return is an arrival).
+  const insideOrigin = originDistance <= origin.arrivalRadiusMeters;
   if (insideOrigin) {
     if (next.insideOriginSinceMs == null) {
       next.insideOriginSinceMs = accepted.recordedAtMs;
@@ -472,10 +487,10 @@ function ingestActive(
     const watch = watchFor(afterReturn, place.id);
     const distanceMeters = haversineMeters(samplePoint(accepted), place.center);
     watch.maxDistanceMeters = Math.max(watch.maxDistanceMeters, distanceMeters);
-    if (distanceMeters >= place.radiusMeters + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS) {
+    if (distanceMeters >= place.arrivalRadiusMeters + PLACE_DESTINATION_ELIGIBILITY_MARGIN_METERS) {
       watch.seenEligibleOutside = true;
     }
-    const inside = distanceMeters <= place.radiusMeters;
+    const inside = distanceMeters <= place.arrivalRadiusMeters;
     const previous = afterReturn.lastAccepted;
     const previousDistance =
       previous != null ? haversineMeters(samplePoint(previous), place.center) : null;
@@ -485,12 +500,12 @@ function ingestActive(
       inside &&
       previous &&
       previousDistance != null &&
-      previousDistance > place.radiusMeters
+      previousDistance > place.arrivalRadiusMeters
     ) {
       watch.arrivalCrossingAtMs = interpolateRadiusCrossing(
         { recordedAtMs: previous.recordedAtMs, distanceMeters: previousDistance },
         { recordedAtMs: accepted.recordedAtMs, distanceMeters },
-        place.radiusMeters,
+        place.arrivalRadiusMeters,
       );
       watch.insideSinceArrivalCount = 1;
       watch.insideSinceArrivalFirstAtMs = accepted.recordedAtMs;

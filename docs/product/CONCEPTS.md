@@ -4,7 +4,7 @@ Canonical domain and speedrunning terminology. Future tickets and agents should 
 
 ## Place
 
-A first-class saved endpoint with a stable id, user-visible name, center coordinate, detection radius, and active/archived state.
+A first-class saved endpoint with a stable id, user-visible name, center coordinate, two independent detection radii (a **departure radius** and an **arrival radius**, 8-250 m each, both defaulting to 30 m), and active/archived state. The same Place uses its departure radius when it is the origin and its arrival radius when it is the destination, so Home -> Work uses Home departure and Work arrival, and Work -> Home uses Work departure and Home arrival.
 
 Examples: Home, Work, Gym. Places are configured from a management surface, not during START. Archiving a place keeps its history but removes it from live start/finish detection. Permanent deletion removes the place and every attempt whose origin or destination is that place, including related GPS/debug data. A live armed or active attempt blocks deletion until that run ends or is cancelled.
 
@@ -47,13 +47,28 @@ Competitive statistics are category-specific. Scooter and walking attempts betwe
 
 ## Start Zone
 
-The detection radius of a saved origin place, used as one signal for automatic start detection.
+The **departure radius** of a saved origin place, used as one signal for automatic start detection. The official start time is the interpolated outward crossing of this radius, and sustained departure is confirmed at `departure_radius + 18 m`. Route/path-variant start zones are separate optional analytics configuration and are not the authority for Place-to-Place timing.
 
 Being inside a start zone alone does not start timing. Overlapping places pick the nearest center, then the lowest stable place id.
 
 ## Finish Zone
 
-The detection radius of a saved destination place. A place cannot finish the attempt until the trace has first been seen at least `destination_radius + 10 m` outside it, then crossed inbound with confirmation. The origin is never a competitive destination.
+The **arrival radius** of a saved destination place. A place cannot finish the attempt until the trace has first been seen at least `arrival_radius + 10 m` outside it, then crossed inbound with confirmation; the official finish is the interpolated inward crossing of the arrival radius. The origin is never a competitive destination.
+
+Return to origin: while a run is active, "inside origin" uses the origin Place's arrival radius, and a return can only end the run (DID NOT FINISH) after the run has been at least `max(50 m, 2 × max(origin departure, origin arrival))` from the origin and then stays inside for 30 seconds. With equal radii this is the original single-radius rule.
+
+Editing a Place's departure or arrival radius is blocked while a run is armed or active, because the engine replays the stored trace against the current Place records. Completed runs keep their stored official times; editing or migrating a radius never rewrites them automatically (the debug replay on a past run uses the current radii and says so). The only way to apply new radii to past runs is the explicit, user-confirmed **Recalculate history** action (next section).
+
+## Recalculate history
+
+A manual, confirmed, resumable batch (issue #77) that re-times past COMPLETED runs from their stored raw GPS using the CURRENT departure radius of the run's original origin Place and the CURRENT arrival radius of its original destination Place. Earlier radii were never saved, so results are explicitly "under current settings".
+
+- Each stored trace is replayed through the same place-timing engine as live timing (accuracy gate, sustained confirmation, interpolation). A result is accepted only if the engine selects the stored origin and confirms a completed finish at the stored destination, with both crossings observed between real fixes (never extrapolated). Anything else is reported as `skipped — endpoint/geometry changed` or `skipped — insufficient GPS` and the original record, Place IDs, mode, ID and raw GPS stay untouched. A result equal to the stored time is `unchanged`; per-attempt failures are `errors` that keep the original.
+- Candidates are fixed at job start: completed runs with a stored trace whose origin and destination Places both exist (archived Places count, using their saved radii). Completed runs with a missing Place or no trace are counted as skipped up front.
+- Updated results are staged and published in ONE atomic step together with split/path-variant reassignment; personal bests, rankings and statistics are derived from attempts, so they are consistent after publication and caches are invalidated.
+- A job fingerprints every Place's ID, centre and both radii. A mismatch on resume or just before publication discards staged results and cancels the job. While a job is running or unpublished, changing a Place's centre or radii (and creating or deleting Places) is refused; the user cancels the job to edit.
+- A job cannot start while a run is armed or active, and pauses (neither processing nor publishing) if one opens; it resumes when none is open. There is no time limit; progress is checkpointed so a relaunch resumes without redoing completed work. It is never run automatically on save, migration, restore or browsing.
+- Job, staging and checkpoint tables are local operational state, not part of the portable backup; restore discards any job.
 
 ## Checkpoint
 

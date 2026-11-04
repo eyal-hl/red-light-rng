@@ -258,3 +258,28 @@ Local history is exported to a single deterministic, versioned JSON file (`backu
 - Restore never trusts a backed-up armed/active attempt or active session as live: they are terminalized from stored evidence, leftover OS updates are stopped, and derived data is recomputed.
 - Restore is refused while the current device has an open attempt or active tracking session.
 - New durable columns must be added to the backup coverage map (a test enforces this).
+
+## DEC-014 — Independent Place departure and arrival radii
+
+**Status:** Accepted (issue #77)
+
+### Decision
+Each Place has a `departureRadiusMeters` (origin selection, outward-crossing start time, `+18 m` sustained departure) and an `arrivalRadiusMeters` (destination eligibility `+10 m`, inbound-crossing finish time, return-to-origin dwell). Both are 8-250 m and default to 30 m; existing Places migrate with the old radius in both fields (SQLite schema v12, backup format 2, with a 1 -> 2 backup adapter). The return-to-origin distance gate is `max(50 m, 2 × max(departure, arrival))`.
+
+### Consequences
+- Equal radii reproduce the previous single-radius behavior exactly.
+- Saving a changed radius is refused while any attempt is armed or active (the engine replays the stored trace against current Place records); no per-attempt radius snapshot is stored. Restore terminalizes open attempts with the radii in the backup.
+- Completed attempts keep stored official times; only the debug replay of a past run uses current radii and states that. Route/path-variant start/finish zones remain separate analytics configuration.
+
+## DEC-015 — Manual, resumable historical recalculation
+
+**Status:** Accepted (issue #77, owner-approved scope extension 2026-11-02; amends the DEC-014 "never rewrites" consequence)
+
+### Decision
+Past official times are never rewritten as a side effect of editing a radius, migrating or restoring. Instead the user may explicitly run **Recalculate history** (Places screen, offered after a radius change) after a confirmation that names the risks: official times, PBs, rankings, segments and statistics may change; runs without sufficient GPS cannot be updated; results use the CURRENT radii because no historical snapshot exists. The job replays each completed run's raw trace through the live place-timing engine with the run's stored endpoints, stages results in local SQLite tables (schema v13: `recalc_job`, `recalc_job_item`), and publishes them in a single transaction (memory store: an atomic swap) together with split/variant reassignment. Skips (endpoint/geometry changed, insufficient GPS), unchanged results and per-attempt errors preserve the original record. A Places fingerprint, an edit lock on Place centre/radii while a job exists, and a pause while a run is armed/active prevent stale or concurrent publication. At most one job exists; a duplicate trigger shows it.
+
+### Consequences
+- No elapsed-time cutoff: bounded chunks with yields, a persisted checkpoint, resume on relaunch (offered as an explicit button, not started automatically), cancel before publication, retry of failed runs as a follow-up job.
+- Job tables are operational state outside the portable backup (see `docs/specs/backup-format.md`); restore deletes them.
+- PBs/rankings are derived from attempts at read time, so publication plus cache invalidation keeps them consistent; no stored PB is rewritten separately.
+- Archiving a Place does not change the fingerprint (centre/radii only); it can still change which Places compete as origins in a replay if done mid-job.

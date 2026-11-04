@@ -6,9 +6,12 @@ import {
   clonePlace,
   openAttemptBlocksPlaceDeletion,
   PLACE_LIVE_ATTEMPT_REASON,
+  PLACE_RADIUS_OPEN_ATTEMPT_REASON,
+  placeRadiiEqual,
   validatePlaceInput,
   type Place,
 } from '../domain/place';
+import { PLACE_RECALCULATION_JOB_REASON, placeGeometryChanged } from '../domain/history-recalculation';
 import { ensurePlacesForRoute } from '../domain/place-seeding';
 import {
   inspectPlaceAttemptRecord,
@@ -88,6 +91,7 @@ import {
   SingleKeyedCache,
   type SampleIdentity,
 } from './derived-view-cache';
+import type { HistoryRecalculationService } from './history-recalculation';
 import {
   createNavigationLoadState,
   timeNavigationLoad,
@@ -174,7 +178,11 @@ export class RouteWorkspace {
     private readonly now: () => number = () => Date.now(),
     private readonly createRouteId: () => string = createId,
     private readonly createPlaceId: () => string = createId,
-  ) {}
+    /** Manual history recalculation (#77); its job blocks Place centre/radius edits. */
+    readonly recalculation?: HistoryRecalculationService,
+  ) {
+    recalculation?.setOnPublished(() => this.invalidateDerivedCaches());
+  }
 
   /** Drops every in-memory derived view, e.g. after a backup restore replaced the underlying data. */
   invalidateDerivedCaches(): void {
@@ -183,6 +191,7 @@ export class RouteWorkspace {
     this.focusCache.clear();
     this.debugCache.clear();
     this.routeAnalysisCache.clear();
+    this.hotspotCache.clear();
   }
 
   resetNavigationLoad(): void {
@@ -489,17 +498,23 @@ export class RouteWorkspace {
   async createPlace(input: {
     name: string;
     center: Place['center'];
-    radiusMeters: number;
+    departureRadiusMeters: number;
+    arrivalRadiusMeters: number;
   }): Promise<SavePlaceResult> {
     const validation = validatePlaceInput(input);
     if (!validation.valid) {
       return { ok: false, reason: validation.reason ?? 'This place cannot be saved.' };
     }
+    // A new Place changes the recalculation job's Places fingerprint, so it waits for the job too.
+    if (await this.recalculation?.hasBlockingJob()) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
+    }
     const place: Place = {
       id: this.createPlaceId(),
       name: input.name.trim(),
       center: { latitude: input.center.latitude, longitude: input.center.longitude },
-      radiusMeters: input.radiusMeters,
+      departureRadiusMeters: input.departureRadiusMeters,
+      arrivalRadiusMeters: input.arrivalRadiusMeters,
       status: 'active',
       createdAtMs: this.now(),
     };
@@ -516,11 +531,26 @@ export class RouteWorkspace {
     if (!existing) {
       return { ok: false, reason: 'This place is no longer available.' };
     }
+    // The place engine replays the stored trace against the current Place records, so changing a
+    // radius while a run is ARMED or ACTIVE would retroactively change that run's origin, start
+    // and finish. Block it before anything is written.
+    if (!placeRadiiEqual(existing, place)) {
+      const open = await this.attempts.getOpenAttempt();
+      if (open && isOpenAttempt(open)) {
+        return { ok: false, reason: PLACE_RADIUS_OPEN_ATTEMPT_REASON };
+      }
+    }
+    // A running (or unpublished) history recalculation holds a fixed snapshot of every Place's centre
+    // and radii; changing them would make its staged results stale. Enforced here, not only in the UI.
+    if (placeGeometryChanged(existing, place) && (await this.recalculation?.hasBlockingJob())) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
+    }
     const next = clonePlace({
       ...existing,
       name: place.name.trim(),
       center: place.center,
-      radiusMeters: place.radiusMeters,
+      departureRadiusMeters: place.departureRadiusMeters,
+      arrivalRadiusMeters: place.arrivalRadiusMeters,
       status: place.status,
     });
     await this.places.savePlace(next);
@@ -548,6 +578,9 @@ export class RouteWorkspace {
     const open = await this.attempts.getOpenAttempt();
     if (openAttemptBlocksPlaceDeletion(open, existing)) {
       return { ok: false, reason: PLACE_LIVE_ATTEMPT_REASON };
+    }
+    if (await this.recalculation?.hasBlockingJob()) {
+      return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
     }
 
     const referencing = (await this.attempts.listAttempts()).filter((attempt) =>

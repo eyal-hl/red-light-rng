@@ -6,7 +6,7 @@ import { ACTIVE_TRANSPORTATION_MODE_KEY } from './settings-store';
  * the file is the contract, the database layout is not. See docs/specs/backup-format.md.
  */
 export const BACKUP_FORMAT_ID = 'red-light-rng-backup';
-export const CURRENT_BACKUP_FORMAT_VERSION = 1;
+export const CURRENT_BACKUP_FORMAT_VERSION = 2;
 export const BACKUP_INTEGRITY_ALGORITHM = 'sha256';
 
 /** Durable settings that materially change product behavior. Anything else in app_setting is a recomputable cache. */
@@ -39,7 +39,8 @@ export type BackupPlace = {
   name: string;
   latitude: number;
   longitude: number;
-  radius_meters: number;
+  departure_radius_meters: number;
+  arrival_radius_meters: number;
   status: string;
   created_at_ms: number;
 };
@@ -177,11 +178,33 @@ export type ParsedBackup = {
 
 /**
  * Older-format adapters. Entry `n` converts the payload of format version `n` into version `n + 1`.
- * Format 1 is the first version, so the production registry is empty; the mechanism is exercised in
- * tests with a synthetic legacy fixture. Migrations must be pure and deterministic.
+ * Migrations must be pure and deterministic.
+ *
+ * 1 -> 2 (#77): places had one `radius_meters`; they now carry independent
+ * `departure_radius_meters` / `arrival_radius_meters`. A format-1 place gets its old radius in both,
+ * preserving its behavior. Malformed input is passed through untouched so validation still rejects it.
  */
 export type BackupMigration = (payload: unknown) => unknown;
-export const BACKUP_MIGRATIONS: Readonly<Record<number, BackupMigration>> = {};
+
+function migratePlaceRadiiV1ToV2(payload: unknown): unknown {
+  if (!isPlainObject(payload) || !Array.isArray(payload.places)) {
+    return payload;
+  }
+  const places = payload.places.map((place: unknown) => {
+    const has = (key: string) => isPlainObject(place) && Object.prototype.hasOwnProperty.call(place, key);
+    // A format-1 place has exactly the old field; anything else is left for validation to reject.
+    if (!isPlainObject(place) || !has('radius_meters') || has('departure_radius_meters') || has('arrival_radius_meters')) {
+      return place;
+    }
+    const { radius_meters: radius, ...rest } = place;
+    return { ...rest, departure_radius_meters: radius, arrival_radius_meters: radius };
+  });
+  return { ...payload, places };
+}
+
+export const BACKUP_MIGRATIONS: Readonly<Record<number, BackupMigration>> = {
+  1: migratePlaceRadiiV1ToV2,
+};
 
 export type ParseBackupOptions = {
   currentVersion?: number;
@@ -314,7 +337,8 @@ const PLACE_FIELDS: FieldSpec = {
   name: isString,
   latitude: isLatitude,
   longitude: isLongitude,
-  radius_meters: isPositiveFinite,
+  departure_radius_meters: isPositiveFinite,
+  arrival_radius_meters: isPositiveFinite,
   status: oneOf('active', 'archived'),
   created_at_ms: isTimestamp,
 };

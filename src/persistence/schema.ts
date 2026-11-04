@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 export type AttemptRow = {
   id: string;
@@ -102,7 +102,10 @@ export type PlaceRow = {
   name: string;
   latitude: number;
   longitude: number;
+  /** Legacy single-radius column kept for NOT NULL compatibility; mirrors departure_radius_meters. */
   radius_meters: number;
+  departure_radius_meters: number;
+  arrival_radius_meters: number;
   status: string;
   created_at_ms: number;
 };
@@ -156,3 +159,29 @@ SELECT
   ) AS last_sample_at_ms
 FROM tracking_session s
 `;
+
+export type RecalcJobRow = {
+  id: string;
+  slot: number;
+  status: string;
+  places_fingerprint: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+  completed_at_ms: number | null;
+  candidate_count: number;
+  pre_skipped_missing_place: number;
+  pre_skipped_no_trace: number;
+  checkpoint_processed: number;
+  message: string | null;
+};
+
+export type RecalcJobItemRow = {
+  job_id: string;
+  attempt_id: string;
+  seq: number;
+  state: string;
+  detail: string | null;
+  base_started_at_ms: number | null;
+  base_finished_at_ms: number | null;
+  staged_json: string | null;
+};

@@ -18,13 +18,19 @@ import { runIsolated, type SqlExecutor } from './sql-executor';
  * the real migrated schema, so a future column cannot silently drop out of backups: it must be
  * exported here or explicitly excluded with a reason.
  */
+const RECALC_EXCLUDED =
+  'excluded: local operational state of the manual history recalculation (job/staging/checkpoint); never exported, wiped by restore';
+
 export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
   place: {
     id: 'places[].id',
     name: 'places[].name',
     latitude: 'places[].latitude',
     longitude: 'places[].longitude',
-    radius_meters: 'places[].radius_meters',
+    radius_meters:
+      'excluded: legacy single-radius column (pre schema v12); mirrors departure_radius_meters, which is exported',
+    departure_radius_meters: 'places[].departure_radius_meters',
+    arrival_radius_meters: 'places[].arrival_radius_meters',
     status: 'places[].status',
     created_at_ms: 'places[].created_at_ms',
   },
@@ -107,6 +113,34 @@ export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
     checkpoint_progress_m: 'attempts[].crossings[].checkpoint_progress_m',
     crossed_at_ms: 'attempts[].crossings[].crossed_at_ms',
   },
+  recalc_job: Object.fromEntries(
+    [
+      'id',
+      'slot',
+      'status',
+      'places_fingerprint',
+      'created_at_ms',
+      'updated_at_ms',
+      'completed_at_ms',
+      'candidate_count',
+      'pre_skipped_missing_place',
+      'pre_skipped_no_trace',
+      'checkpoint_processed',
+      'message',
+    ].map((column) => [column, RECALC_EXCLUDED]),
+  ),
+  recalc_job_item: Object.fromEntries(
+    [
+      'job_id',
+      'attempt_id',
+      'seq',
+      'state',
+      'detail',
+      'base_started_at_ms',
+      'base_finished_at_ms',
+      'staged_json',
+    ].map((column) => [column, RECALC_EXCLUDED]),
+  ),
   app_setting: {
     key: `settings: only keys ${BACKUP_SETTING_KEYS.join(', ')}`,
     value: `settings: only keys ${BACKUP_SETTING_KEYS.join(', ')}`,
@@ -123,7 +157,8 @@ type Row = Record<string, string | number | null>;
 
 async function readPayload(sql: SqlExecutor): Promise<BackupPayload> {
   const places = await sql.getAll<BackupPlace>(
-    `SELECT id, name, latitude, longitude, radius_meters, status, created_at_ms
+    `SELECT id, name, latitude, longitude, departure_radius_meters, arrival_radius_meters,
+            status, created_at_ms
      FROM place ORDER BY id`,
   );
   const sessions = await sql.getAll<BackupTrackingSession>(

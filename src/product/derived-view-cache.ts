@@ -92,7 +92,8 @@ export function fingerprintPlace(place: Place): string {
     place.id,
     place.name,
     fingerprintPoint(place.center),
-    String(place.radiusMeters),
+    String(place.departureRadiusMeters),
+    String(place.arrivalRadiusMeters),
     place.status,
     String(place.createdAtMs),
   ].join('|');

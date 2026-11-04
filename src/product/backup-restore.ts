@@ -85,7 +85,8 @@ export function terminalizeRestoredLiveState(payload: BackupPayload): {
       id: place.id,
       name: place.name,
       center: { latitude: place.latitude, longitude: place.longitude },
-      radiusMeters: place.radius_meters,
+      departureRadiusMeters: place.departure_radius_meters,
+      arrivalRadiusMeters: place.arrival_radius_meters,
       status: place.status === 'archived' ? 'archived' : 'active',
     }));
     const samples = [...(samplesBySession.get(attempt.session_id) ?? [])]
@@ -192,6 +193,10 @@ export async function assertNoLiveState(sql: SqlExecutor): Promise<void> {
 }
 
 const WIPE_ORDER = [
+  // Local history-recalculation job/staging/checkpoint state is not portable: any orphaned or
+  // in-progress job is discarded so no half-committed staged result can outlive a restore.
+  'recalc_job_item',
+  'recalc_job',
   'attempt_checkpoint_crossing',
   'attempt',
   'route_checkpoint',
@@ -229,8 +234,29 @@ async function writePayload(sql: SqlExecutor, payload: BackupPayload): Promise<v
   await insertRows(
     sql,
     'place',
-    ['id', 'name', 'latitude', 'longitude', 'radius_meters', 'status', 'created_at_ms'],
-    payload.places.map((p) => [p.id, p.name, p.latitude, p.longitude, p.radius_meters, p.status, p.created_at_ms]),
+    [
+      'id',
+      'name',
+      'latitude',
+      'longitude',
+      'radius_meters',
+      'departure_radius_meters',
+      'arrival_radius_meters',
+      'status',
+      'created_at_ms',
+    ],
+    payload.places.map((p) => [
+      p.id,
+      p.name,
+      p.latitude,
+      p.longitude,
+      // Legacy NOT NULL column mirrors the departure radius.
+      p.departure_radius_meters,
+      p.departure_radius_meters,
+      p.arrival_radius_meters,
+      p.status,
+      p.created_at_ms,
+    ]),
   );
   await insertRows(
     sql,
@@ -435,6 +461,9 @@ export async function restoreBackupPayload(sql: SqlExecutor, parsed: BackupPaylo
         attempt_checkpoint_crossing: await tableCount(tx, 'attempt_checkpoint_crossing'),
         app_setting: await tableCount(tx, 'app_setting'),
       };
+      if ((await tableCount(tx, 'recalc_job')) !== 0 || (await tableCount(tx, 'recalc_job_item')) !== 0) {
+        throw new BackupError('restore_failed', 'A history recalculation job survived the restore.');
+      }
       if (
         actual.place !== expected.places ||
         actual.route !== expected.routes ||

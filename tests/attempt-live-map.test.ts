@@ -48,6 +48,7 @@ function place(id: string, northMeters: number, eastMeters = 0, radiusMeters = 3
     name: id.toUpperCase(),
     center: offsetLatLng(HOME.latitude, HOME.longitude, northMeters, eastMeters),
     radiusMeters,
+    radiusRole: 'departure',
   };
 }
 
@@ -283,7 +284,7 @@ describe('foreground visibility', () => {
 
   it('background hides the map without involving tracking', async () => {
     const { workspace, platform, tracker } = createMemoryWorkspace({ now: () => NOW });
-    await workspace.createPlace({ name: 'Home', center: HOME, radiusMeters: 30 });
+    await workspace.createPlace({ name: 'Home', center: HOME, departureRadiusMeters: 30, arrivalRadiusMeters: 30 });
     const started = await workspace.startAttempt();
     assert.equal(started.ok, true);
     const app = fakeAppState('active');
@@ -398,11 +399,12 @@ describe('runtime snapshot', () => {
   async function seed() {
     const now = { value: NOW };
     const ctx = createMemoryWorkspace({ now: () => now.value });
-    const home = await ctx.workspace.createPlace({ name: 'Home', center: HOME, radiusMeters: 30 });
+    const home = await ctx.workspace.createPlace({ name: 'Home', center: HOME, departureRadiusMeters: 30, arrivalRadiusMeters: 30 });
     const work = await ctx.workspace.createPlace({
       name: 'Work',
       center: offsetLatLng(HOME.latitude, HOME.longitude, 300, 0),
-      radiusMeters: 45,
+      departureRadiusMeters: 45,
+      arrivalRadiusMeters: 45,
     });
     if (!home.ok || !work.ok) {
       throw new Error('expected places');
@@ -459,7 +461,7 @@ describe('runtime snapshot', () => {
     const processed = await workspace.processActiveAttemptWithStartZoneStatus();
     assert.deepEqual(
       processed.liveMap.places.map((item) => [item.id, item.radiusMeters]),
-      engineSet.map((item) => [item.id, item.radiusMeters]),
+      engineSet.map((item) => [item.id, item.departureRadiusMeters]),
     );
     assert.ok(processed.liveMap.places.some((item) => item.id === home.id), 'archived origin is an extra');
   });
@@ -498,7 +500,7 @@ describe('runtime snapshot', () => {
 
   it('keeps run control working with no GPS, no saved places and no samples', async () => {
     const ctx = createMemoryWorkspace({ now: () => NOW });
-    const seeded = await ctx.workspace.createPlace({ name: 'Home', center: HOME, radiusMeters: 30 });
+    const seeded = await ctx.workspace.createPlace({ name: 'Home', center: HOME, departureRadiusMeters: 30, arrivalRadiusMeters: 30 });
     assert.equal(seeded.ok, true);
     const started = await ctx.workspace.startAttempt();
     assert.equal(started.ok, true);

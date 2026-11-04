@@ -222,7 +222,7 @@ export const MIGRATIONS: Migration[] = [
             place.name,
             place.center.latitude,
             place.center.longitude,
-            place.radiusMeters,
+            place.departureRadiusMeters,
             place.status,
             place.createdAtMs,
           ],
@@ -398,12 +398,13 @@ export const MIGRATIONS: Migration[] = [
         radius_meters: number;
         status: string;
         created_at_ms: number;
-      }>('SELECT * FROM place');
+      }>('SELECT id, name, latitude, longitude, radius_meters, status, created_at_ms FROM place');
       const places: Place[] = rows.map((row) => ({
         id: row.id,
         name: row.name,
         center: { latitude: row.latitude, longitude: row.longitude },
-        radiusMeters: row.radius_meters,
+        departureRadiusMeters: row.radius_meters,
+        arrivalRadiusMeters: row.radius_meters,
         status: row.status === 'archived' ? 'archived' : 'active',
         createdAtMs: row.created_at_ms,
       }));
@@ -457,6 +458,74 @@ export const MIGRATIONS: Migration[] = [
     version: 11,
     async up(sql) {
       await ensureAttemptHiddenIncompleteColumn(sql);
+    },
+  },
+  {
+    // Independent Place departure/arrival radii (#77). Every existing Place keeps its current
+    // behavior: the single radius is copied into both new columns. The legacy radius_meters column
+    // stays (NOT NULL, cannot be dropped portably) and mirrors the departure radius; no rows,
+    // attempts or location samples are rewritten or removed.
+    version: 12,
+    async up(sql) {
+      await addColumnIfMissing(sql, 'place',
+        'departure_radius_meters',
+        'departure_radius_meters REAL NOT NULL DEFAULT 30',
+      );
+      await addColumnIfMissing(sql, 'place',
+        'arrival_radius_meters',
+        'arrival_radius_meters REAL NOT NULL DEFAULT 30',
+      );
+      await sql.exec(`
+        UPDATE place
+        SET departure_radius_meters = radius_meters,
+            arrival_radius_meters = radius_meters
+      `);
+    },
+  },
+  {
+    // Manual, resumable history recalculation (#77): local operational job / staging / checkpoint
+    // tables. Purely additive: no existing table or row is touched. NOT part of the portable backup
+    // (restore wipes them). `slot` + the partial unique index enforce at most one running/ready job.
+    version: 13,
+    async up(sql) {
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS recalc_job (
+          id TEXT PRIMARY KEY NOT NULL,
+          slot INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL,
+          places_fingerprint TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          completed_at_ms INTEGER,
+          candidate_count INTEGER NOT NULL,
+          pre_skipped_missing_place INTEGER NOT NULL DEFAULT 0,
+          pre_skipped_no_trace INTEGER NOT NULL DEFAULT 0,
+          checkpoint_processed INTEGER NOT NULL DEFAULT 0,
+          message TEXT
+        );
+      `);
+      await sql.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_recalc_job_single_open
+        ON recalc_job(slot) WHERE status IN ('running', 'ready');
+      `);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS recalc_job_item (
+          job_id TEXT NOT NULL,
+          attempt_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending',
+          detail TEXT,
+          base_started_at_ms REAL,
+          base_finished_at_ms REAL,
+          staged_json TEXT,
+          PRIMARY KEY (job_id, attempt_id),
+          FOREIGN KEY (job_id) REFERENCES recalc_job(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_recalc_job_item_state
+        ON recalc_job_item(job_id, state, seq);
+      `);
     },
   },
 ];

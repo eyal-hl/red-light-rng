@@ -1,3 +1,6 @@
+import { MemoryRecalculationJobStore } from '../../src/persistence/memory-recalculation-job-store';
+import { SqliteRecalculationJobStore } from '../../src/persistence/sqlite-recalculation-job-store';
+import { HistoryRecalculationService } from '../../src/product/history-recalculation';
 import { MemoryAttemptStore } from '../../src/persistence/memory-attempt-store';
 import { MemoryLocationSampleStore } from '../../src/persistence/memory-location-sample-store';
 import { MemoryPlaceStore } from '../../src/persistence/memory-place-store';
@@ -67,6 +70,7 @@ export function createMemoryWorkspace(options?: {
   placeId?: string;
   createAttemptId?: () => string;
   createPlaceId?: () => string;
+  recalcChunkSize?: number;
 }) {
   const sessions = new MemoryLocationSampleStore();
   const routes = new MemoryRouteStore();
@@ -77,6 +81,7 @@ export function createMemoryWorkspace(options?: {
   let nextId = 0;
   let nextPlace = 0;
   let nextAttempt = 0;
+  let nextJob = 0;
   const now = options?.now ?? (() => 1_700_000_000_000);
   const trackingSessions = new TrackingSessionService(sessions, () => `id-${++nextId}`);
   const tracker = new SharedLocationTracker(platform, trackingSessions, sessions, now);
@@ -91,6 +96,18 @@ export function createMemoryWorkspace(options?: {
     now,
     () => options?.createAttemptId?.() ?? options?.attemptId ?? `attempt-${++nextAttempt}`,
   );
+  const jobs = new MemoryRecalculationJobStore(attempts, places, routes);
+  const recalc = new HistoryRecalculationService({
+    jobs,
+    attempts,
+    sessions,
+    places,
+    reassignPathVariant: (attempt, samples) => attemptRuntime.reassignPathVariant(attempt, samples),
+    now,
+    createJobId: () => `job-${++nextJob}`,
+    yieldToIdle: async () => {},
+    chunkSize: options?.recalcChunkSize,
+  });
   const workspace = new RouteWorkspace(
     tracker,
     sessions,
@@ -102,8 +119,9 @@ export function createMemoryWorkspace(options?: {
     now,
     () => options?.routeId ?? 'route-1',
     () => options?.createPlaceId?.() ?? options?.placeId ?? `place-${++nextPlace}`,
+    recalc,
   );
-  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime };
+  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime, jobs, recalc };
 }
 
 export function createSqliteWorkspace(
@@ -116,6 +134,7 @@ export function createSqliteWorkspace(
     createAttemptId?: () => string;
     createPlaceId?: () => string;
     createSessionId?: () => string;
+    recalcChunkSize?: number;
   },
 ) {
   const sessions = new SqliteLocationSampleStore(async () => sql);
@@ -125,6 +144,7 @@ export function createSqliteWorkspace(
   const settings = new SqliteSettingsStore(async () => sql);
   const platform = new FakeLocationPlatform();
   let nextPlace = 0;
+  let nextJob = 0;
   const now = options?.now ?? (() => 1_700_000_000_000);
   const trackingSessions = new TrackingSessionService(
     sessions,
@@ -142,6 +162,18 @@ export function createSqliteWorkspace(
     now,
     () => options?.createAttemptId?.() ?? options?.attemptId ?? 'sql-attempt',
   );
+  const jobs = new SqliteRecalculationJobStore(async () => sql);
+  const recalc = new HistoryRecalculationService({
+    jobs,
+    attempts,
+    sessions,
+    places,
+    reassignPathVariant: (attempt, samples) => attemptRuntime.reassignPathVariant(attempt, samples),
+    now,
+    createJobId: () => `sql-job-${++nextJob}`,
+    yieldToIdle: async () => {},
+    chunkSize: options?.recalcChunkSize,
+  });
   const workspace = new RouteWorkspace(
     tracker,
     sessions,
@@ -153,6 +185,7 @@ export function createSqliteWorkspace(
     now,
     () => options?.routeId ?? 'sql-route',
     () => options?.createPlaceId?.() ?? `sql-place-${++nextPlace}`,
+    recalc,
   );
-  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime };
+  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime, jobs, recalc };
 }

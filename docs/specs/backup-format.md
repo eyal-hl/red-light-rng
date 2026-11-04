@@ -10,14 +10,14 @@ Settings -> Data:
 - **Restore backup** picks a file, parses and validates all of it without any database write, then shows format version, creation date, source app/schema version and counts (places, routes/path variants, attempts, tracking sessions, GPS samples). Nothing changes until the user presses the separate button **Replace local data with this backup**. Restore is replace-only, never a merge.
 - Restore is refused (before any mutation) while this device has an armed/active attempt or an active tracking session.
 
-## File format (`backup_format_version` 1)
+## File format (`backup_format_version` 2)
 
 One UTF-8 JSON file, deterministic: keys sorted recursively, no whitespace, arrays in a fixed order (records by id; samples by session then time; reference points by sequence). Equal data is byte-identical.
 
 ```
 {
   "format": "red-light-rng-backup",
-  "backup_format_version": 1,        // product format, independent of SQLite user_version
+  "backup_format_version": 2,        // product format, independent of SQLite user_version
   "created_at_ms": 1700000000000,
   "created_at_utc": "2023-11-14T22:13:20.000Z",
   "source": { "app_version": "0.1.0", "schema_version": 11 },   // informational only
@@ -40,6 +40,7 @@ Every durable table and column: `place`, `tracking_session`, `location_sample`, 
 
 ### What is excluded
 
+- The manual history-recalculation tables `recalc_job` and `recalc_job_item` (schema v13; job, staging and checkpoint state of issue #77). They are local operational state, not user-authored history: they only exist to resume or atomically publish a user-started batch on this device, and a staged result is meaningless on another device or after the Places change. They are never exported, and a restore deletes every row of both tables inside the same atomic transaction (and verifies they are empty), so an orphaned or in-progress job can never survive a restore and half-committed results cannot be restored. Published results live in `attempt` / `attempt_checkpoint_crossing`, which are exported like any other history. `BACKUP_SCHEMA_COVERAGE` lists their columns as explicitly excluded. Backups from every earlier format still import unchanged.
 - `app_setting.path_variant_recompute_fingerprint` (recomputable cache key; restore clears it so discovery recomputes).
 - OS permission state, secrets (none are stored), in-memory derived-view caches.
 
@@ -50,7 +51,7 @@ Supported version; digest; exact field sets (unknown fields are rejected, so not
 ### Versioning and migration
 
 - A file with a newer `backup_format_version` than the app supports is rejected with an "update the app" message.
-- Older versions are upgraded in memory by explicit adapters (`BACKUP_MIGRATIONS[n]` converts version `n` to `n + 1`), after the digest of the original file is verified and before validation. Adapters must be pure and deterministic. Version 1 is the first version, so the production registry is empty; the mechanism is covered by a synthetic legacy fixture test.
+- Older versions are upgraded in memory by explicit adapters (`BACKUP_MIGRATIONS[n]` converts version `n` to `n + 1`), after the digest of the original file is verified and before validation. Adapters must be pure and deterministic. Version 1 -> 2 (#77) replaces each place's single `radius_meters` with `departure_radius_meters` and `arrival_radius_meters`; a format-1 place gets its old radius in both, so pre-feature backups import with unchanged behavior. Format-1 places that already carry the new fields (or format-2 places that carry the old one) fail validation. The legacy SQLite `place.radius_meters` column is not exported.
 - A future format that changes the integrity scheme must keep verifying older files before migrating them.
 
 ## Export consistency
