@@ -614,6 +614,22 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Segment recalculation job kind (#81). Additive: the existing job slot gains a kind
+    // (legacy rows are 'history'), a JSON scope for segment jobs, and a staging column for derived
+    // segment rows. Job tables stay local operational state outside the backup. No row rewritten.
+    version: 15,
+    async up(sql) {
+      await addColumnIfMissing(
+        sql,
+        'recalc_job',
+        'kind',
+        `kind TEXT NOT NULL DEFAULT 'history' CHECK (kind IN ('history', 'segments'))`,
+      );
+      await addColumnIfMissing(sql, 'recalc_job', 'scope_json', `scope_json TEXT`);
+      await addColumnIfMissing(sql, 'recalc_job_item', 'staged_segments_json', `staged_segments_json TEXT`);
+    },
+  },
 ];
 
 async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {

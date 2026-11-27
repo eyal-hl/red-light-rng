@@ -31,6 +31,8 @@ export type SegmentResultBatchItem = {
  */
 export interface CompetitiveCheckpointStore {
   getCurrentConfig(pool: CompetitiveCheckpointPool): Promise<CompetitiveCheckpointConfig | null>;
+  /** The current configuration of every pool that has one (empty configurations included). */
+  listCurrentConfigs(): Promise<CompetitiveCheckpointConfig[]>;
   getConfig(pool: CompetitiveCheckpointPool, version: number): Promise<CompetitiveCheckpointConfig | null>;
   /** Every version of a pool, oldest first (version history; superseded versions stay readable). */
   listConfigs(pool: CompetitiveCheckpointPool): Promise<CompetitiveCheckpointConfig[]>;
@@ -50,6 +52,8 @@ export interface CompetitiveCheckpointStore {
     pool: CompetitiveCheckpointPool,
     configVersion: number,
   ): Promise<AttemptSegmentResult[]>;
+  /** Drops the derived rows of one attempt (e.g. after its official window was re-timed). */
+  deleteSegmentResultsForAttempt(attemptId: string): Promise<void>;
   /** Removes results of the pool computed for any configuration version other than `keepVersion`. */
   pruneStaleSegmentResults(pool: CompetitiveCheckpointPool, keepVersion: number): Promise<number>;
 }

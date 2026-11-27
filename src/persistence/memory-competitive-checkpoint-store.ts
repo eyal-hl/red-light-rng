@@ -36,6 +36,16 @@ export class MemoryCompetitiveCheckpointStore implements CompetitiveCheckpointSt
     return current ? cloneCompetitiveCheckpointConfig(current) : null;
   }
 
+  async listCurrentConfigs() {
+    return [...this.configs.values()]
+      .flatMap((list) => list.filter((config) => config.status === 'current'))
+      .map(cloneCompetitiveCheckpointConfig);
+  }
+
+  async deleteSegmentResultsForAttempt(attemptId: string) {
+    this.results = this.results.filter((result) => result.attemptId !== attemptId);
+  }
+
   async getConfig(pool: CompetitiveCheckpointPool, version: number) {
     const found = this.poolConfigs(pool).find((config) => config.version === version);
     return found ? cloneCompetitiveCheckpointConfig(found) : null;

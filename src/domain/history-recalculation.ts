@@ -2,6 +2,7 @@ import { sha256Hex } from './sha256';
 import type { Attempt, AttemptCheckpointCrossing } from './attempt';
 import type { LocationSample } from './location-sample';
 import type { Place } from './place';
+import type { TransportationMode } from './route';
 import { PLACE_ARRIVAL_MIN_INSIDE_SAMPLES, PLACE_DEPARTURE_MIN_SAMPLES, replayPlaceTrace, type PlaceTimingPlace } from './place-timing';
 
 /**
@@ -23,6 +24,34 @@ export type AttemptRecalculationOutcome =
   | { kind: 'skipped'; reason: RecalculationSkipReason };
 
 export type RecalculationJobStatus = 'running' | 'ready' | 'published' | 'cancelled';
+
+/**
+ * `history` is the #77 official-time recalculation; `segments` is the #81 manual Recalculate
+ * segments job (derived competitive segment rows only). Both share the single job slot, so at most
+ * one job of ANY kind exists at a time.
+ */
+export type RecalculationJobKind = 'history' | 'segments';
+
+/** Fixed at segment-job start: which pools (and exact configuration versions) the job derives. */
+export type SegmentRecalculationScope = {
+  pools: {
+    pool: { originPlaceId: string; destinationPlaceId: string; transportationMode: TransportationMode };
+    configVersion: number;
+  }[];
+};
+
+export const SEGMENT_JOB_BLOCKS_HISTORY_REASON =
+  'A segment recalculation is running or waiting to be published. Cancel or finish it before recalculating history.';
+export const HISTORY_JOB_BLOCKS_SEGMENTS_REASON =
+  'A history recalculation is running or waiting to be published. Cancel or finish it before recalculating segments.';
+export const SEGMENT_RECALCULATION_LIVE_ATTEMPT_REASON =
+  'Finish or cancel the current run before recalculating segments.';
+export const SEGMENT_RECALCULATION_NO_CANDIDATES_REASON =
+  'There are no completed runs on a journey with competitive checkpoints to recalculate.';
+export const SEGMENT_RECALCULATION_CONFIG_CHANGED_MESSAGE =
+  'Checkpoints changed while the segment recalculation was pending, so the staged results were discarded and nothing was changed. Start a new recalculation to use the current checkpoints.';
+export const SEGMENT_RECALCULATION_CONFIRM_WARNING =
+  'Recalculating segments re-reads each completed run\'s stored GPS trace and replaces its derived checkpoint segment results. Official run times, personal bests and full-route rankings are not changed. Runs without enough GPS evidence get "unavailable" only for the affected segments, and results use the CURRENT checkpoints and place radii.';
 
 /** A job in one of these states blocks Place centre/radius edits. */
 export function isBlockingRecalculationStatus(status: RecalculationJobStatus): boolean {

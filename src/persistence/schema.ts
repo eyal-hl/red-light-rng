@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 export type AttemptRow = {
   id: string;
@@ -177,6 +177,9 @@ export type RecalcJobRow = {
   pre_skipped_no_trace: number;
   checkpoint_processed: number;
   message: string | null;
+  /** 'history' | 'segments' (schema v15). */
+  kind: string;
+  scope_json: string | null;
 };
 
 export type RecalcJobItemRow = {
@@ -188,6 +191,7 @@ export type RecalcJobItemRow = {
   base_started_at_ms: number | null;
   base_finished_at_ms: number | null;
   staged_json: string | null;
+  staged_segments_json: string | null;
 };
 
 export type CompetitiveCheckpointConfigRow = {

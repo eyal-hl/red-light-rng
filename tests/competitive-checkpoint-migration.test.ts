@@ -45,8 +45,9 @@ async function populatedV13(): Promise<SqlExecutor> {
 
 describe('schema v14 competitive checkpoints migration (#81)', () => {
   it('is the latest migration and bumps the schema version', () => {
-    assert.equal(CURRENT_SCHEMA_VERSION, 14);
-    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 14);
+    assert.ok(CURRENT_SCHEMA_VERSION >= 14);
+    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, CURRENT_SCHEMA_VERSION);
+    assert.ok(MIGRATIONS.some((migration) => migration.version === 14));
   });
 
   it('upgrades a populated v13 database without rewriting any existing row', async () => {
@@ -55,7 +56,7 @@ describe('schema v14 competitive checkpoints migration (#81)', () => {
 
     await applyMigrations(sql, 5_000);
 
-    assert.equal((await sql.getFirst<{ user_version: number }>('PRAGMA user_version'))!.user_version, 14);
+    assert.equal((await sql.getFirst<{ user_version: number }>('PRAGMA user_version'))!.user_version, CURRENT_SCHEMA_VERSION);
     const after = await dumpDatabase(sql);
     for (const table of Object.keys(before)) {
       if (table === 'attempt') {
@@ -102,7 +103,7 @@ describe('schema v14 competitive checkpoints migration (#81)', () => {
   it('migrates a brand new database too', async () => {
     const sql = createMemorySqlExecutor();
     await applyMigrations(sql, 1);
-    assert.equal((await sql.getFirst<{ user_version: number }>('PRAGMA user_version'))!.user_version, 14);
+    assert.equal((await sql.getFirst<{ user_version: number }>('PRAGMA user_version'))!.user_version, CURRENT_SCHEMA_VERSION);
   });
 
   it('enforces the data-model invariants in SQL', async () => {
@@ -149,5 +150,53 @@ describe('schema v14 competitive checkpoints migration (#81)', () => {
     await sql.run(`DELETE FROM place WHERE id = 'work'`);
     assert.equal((await sql.getAll('SELECT id FROM competitive_checkpoint_config')).length, 0);
     assert.equal((await sql.getAll('SELECT config_id FROM competitive_checkpoint')).length, 0);
+  });
+});
+
+describe('schema v15 segment job kind migration (#81)', () => {
+  it('adds the job kind non-destructively: a legacy job stays a history job and the single-slot rule holds', async () => {
+    const sql = createMemorySqlExecutor();
+    await sql.exec('PRAGMA foreign_keys = ON;');
+    await sql.exec(LOCATION_SPIKE_SCHEMA);
+    await sql.exec('PRAGMA user_version = 0');
+    for (const migration of MIGRATIONS.filter((item) => item.version <= 14)) {
+      await migration.up(sql, 1_000);
+    }
+    await sql.exec('PRAGMA user_version = 14');
+    await sql.run(
+      `INSERT INTO recalc_job (id, status, places_fingerprint, created_at_ms, updated_at_ms, candidate_count)
+       VALUES ('legacy', 'running', 'f', 1, 1, 1)`,
+    );
+    await sql.run(`INSERT INTO recalc_job_item (job_id, attempt_id, seq) VALUES ('legacy', 'a1', 0)`);
+    const before = await dumpDatabase(sql);
+
+    await applyMigrations(sql, 5_000);
+
+    const job = await sql.getFirst<Record<string, unknown>>(`SELECT * FROM recalc_job WHERE id = 'legacy'`);
+    assert.equal(job!.kind, 'history');
+    assert.equal(job!.scope_json, null);
+    assert.equal(job!.status, 'running');
+    const item = await sql.getFirst<Record<string, unknown>>(`SELECT * FROM recalc_job_item WHERE job_id = 'legacy'`);
+    assert.equal(item!.staged_segments_json, null);
+    const after = await dumpDatabase(sql);
+    for (const table of Object.keys(before)) {
+      if (table === 'recalc_job' || table === 'recalc_job_item') {
+        continue;
+      }
+      assert.deepEqual(after[table], before[table], `${table} untouched`);
+    }
+    // One open job of ANY kind: a segments job cannot be opened next to the legacy one.
+    await assert.rejects(
+      () =>
+        sql.run(
+          `INSERT INTO recalc_job (id, status, places_fingerprint, created_at_ms, updated_at_ms, candidate_count, kind)
+           VALUES ('seg', 'running', 'f', 1, 1, 1, 'segments')`,
+        ),
+      /UNIQUE/,
+    );
+    await assert.rejects(
+      () => sql.run(`UPDATE recalc_job SET kind = 'bogus' WHERE id = 'legacy'`),
+      /CHECK/,
+    );
   });
 });

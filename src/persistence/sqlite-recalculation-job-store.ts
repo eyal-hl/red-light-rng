@@ -2,8 +2,10 @@ import {
   applyStagedUpdate,
   recalculationPlacesFingerprint,
   type RecalculationJobStatus,
+  type SegmentRecalculationScope,
   type StagedAttemptUpdate,
 } from '../domain/history-recalculation';
+import type { AttemptSegmentResult } from '../domain/segment-derivation';
 import type {
   CreateRecalculationJobResult,
   PublishRecalculationResult,
@@ -17,6 +19,11 @@ import type {
 import type { RecalcJobItemRow, RecalcJobRow } from './schema';
 import { runIsolated, type SqlExecutor } from './sql-executor';
 import { SqliteAttemptStore, writeAttemptRecord } from './sqlite-attempt-store';
+import {
+  pruneStaleSegmentResultsOn,
+  replaceSegmentResultsOn,
+  SqliteCompetitiveCheckpointStore,
+} from './sqlite-competitive-checkpoint-store';
 import { SqlitePlaceStore } from './sqlite-place-store';
 
 function parseStatus(value: string): RecalculationJobStatus {
@@ -26,6 +33,8 @@ function parseStatus(value: string): RecalculationJobStatus {
 function mapJob(row: RecalcJobRow): RecalculationJob {
   return {
     id: row.id,
+    kind: row.kind === 'segments' ? 'segments' : 'history',
+    scope: row.scope_json ? (JSON.parse(row.scope_json) as SegmentRecalculationScope) : null,
     status: parseStatus(row.status),
     placesFingerprint: row.places_fingerprint,
     createdAtMs: row.created_at_ms,
@@ -55,6 +64,9 @@ function mapItem(row: RecalcJobItemRow): RecalculationItem {
     baseStartedAtMs: row.base_started_at_ms,
     baseFinishedAtMs: row.base_finished_at_ms,
     staged: row.staged_json ? (JSON.parse(row.staged_json) as StagedAttemptUpdate) : null,
+    stagedSegments: row.staged_segments_json
+      ? (JSON.parse(row.staged_segments_json) as AttemptSegmentResult[])
+      : null,
   };
 }
 
@@ -84,8 +96,9 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
       await sql.run(
         `INSERT INTO recalc_job (
            id, slot, status, places_fingerprint, created_at_ms, updated_at_ms, completed_at_ms,
-           candidate_count, pre_skipped_missing_place, pre_skipped_no_trace, checkpoint_processed, message
-         ) VALUES (?, 1, ?, ?, ?, ?, NULL, ?, ?, ?, 0, NULL)`,
+           candidate_count, pre_skipped_missing_place, pre_skipped_no_trace, checkpoint_processed, message,
+           kind, scope_json
+         ) VALUES (?, 1, ?, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, ?, ?)`,
         [
           job.id,
           job.status,
@@ -95,6 +108,8 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
           job.candidateCount,
           job.preSkippedMissingPlace,
           job.preSkippedNoTrace,
+          job.kind,
+          job.scope ? JSON.stringify(job.scope) : null,
         ],
       );
       for (let index = 0; index < attemptIds.length; index += 1) {
@@ -182,7 +197,8 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
       for (const result of results) {
         await sql.run(
           `UPDATE recalc_job_item
-           SET state = ?, detail = ?, base_started_at_ms = ?, base_finished_at_ms = ?, staged_json = ?
+           SET state = ?, detail = ?, base_started_at_ms = ?, base_finished_at_ms = ?, staged_json = ?,
+               staged_segments_json = ?
            WHERE job_id = ? AND attempt_id = ? AND state = 'pending'`,
           [
             result.state,
@@ -190,6 +206,7 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
             result.baseStartedAtMs,
             result.baseFinishedAtMs,
             result.staged ? JSON.stringify(result.staged) : null,
+            result.stagedSegments ? JSON.stringify(result.stagedSegments) : null,
             jobId,
             result.attemptId,
           ],
@@ -265,6 +282,9 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
         `SELECT * FROM recalc_job_item WHERE job_id = ? AND state = 'updated' ORDER BY seq ASC`,
         [jobId],
       );
+      if (job.kind === 'segments') {
+        return this.publishSegments(tx, job, rows.map(mapItem), nowMs);
+      }
       for (const item of rows.map(mapItem)) {
         const current = await attempts.getAttempt(item.attemptId);
         if (
@@ -298,6 +318,8 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
           }
         }
         await writeAttemptRecord(tx, updated);
+        // The official window changed, so segment rows derived from the old window are stale.
+        await tx.run('DELETE FROM attempt_segment_result WHERE attempt_id = ?', [item.attemptId]);
         await tx.run('UPDATE recalc_job_item SET staged_json = NULL WHERE job_id = ? AND attempt_id = ?', [
           jobId,
           item.attemptId,
@@ -309,6 +331,58 @@ export class SqliteRecalculationJobStore implements RecalculationJobStore {
       );
       return { ok: true as const };
     });
+  }
+
+  /** Atomic publication of a segment job; runs inside the caller's (isolated) transaction. */
+  private async publishSegments(
+    tx: SqlExecutor,
+    job: RecalcJobRow,
+    items: RecalculationItem[],
+    nowMs: number,
+  ): Promise<PublishRecalculationResult> {
+    const scope = job.scope_json ? (JSON.parse(job.scope_json) as SegmentRecalculationScope) : { pools: [] };
+    const checkpoints = new SqliteCompetitiveCheckpointStore(async () => tx);
+    for (const entry of scope.pools) {
+      const current = await checkpoints.getCurrentConfig(entry.pool);
+      if (!current || current.version !== entry.configVersion) {
+        return { ok: false as const, reason: 'config_changed' as const };
+      }
+    }
+    const attempts = new SqliteAttemptStore(async () => tx);
+    for (const item of items) {
+      const current = await attempts.getAttempt(item.attemptId);
+      const rows = item.stagedSegments;
+      if (
+        !rows ||
+        rows.length === 0 ||
+        !current ||
+        current.lifecycle !== 'completed' ||
+        current.startedAtMs !== item.baseStartedAtMs ||
+        current.finishedAtMs !== item.baseFinishedAtMs
+      ) {
+        await tx.run(
+          `UPDATE recalc_job_item SET state = 'error', detail = ?, staged_segments_json = NULL
+           WHERE job_id = ? AND attempt_id = ?`,
+          ['Run changed or was removed during recalculation; original kept.', job.id, item.attemptId],
+        );
+        continue;
+      }
+      await replaceSegmentResultsOn(tx, [
+        { attemptId: item.attemptId, configVersion: rows[0]!.configVersion, results: rows },
+      ]);
+      await tx.run('UPDATE recalc_job_item SET staged_segments_json = NULL WHERE job_id = ? AND attempt_id = ?', [
+        job.id,
+        item.attemptId,
+      ]);
+    }
+    for (const entry of scope.pools) {
+      await pruneStaleSegmentResultsOn(tx, entry.pool, entry.configVersion);
+    }
+    await tx.run(
+      `UPDATE recalc_job SET status = 'published', updated_at_ms = ?, completed_at_ms = ? WHERE id = ?`,
+      [nowMs, nowMs, job.id],
+    );
+    return { ok: true as const };
   }
 
   async clearAll(): Promise<void> {

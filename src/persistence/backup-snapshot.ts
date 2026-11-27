@@ -165,6 +165,8 @@ export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
       'pre_skipped_no_trace',
       'checkpoint_processed',
       'message',
+      'kind',
+      'scope_json',
     ].map((column) => [column, RECALC_EXCLUDED]),
   ),
   recalc_job_item: Object.fromEntries(
@@ -177,6 +179,7 @@ export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
       'base_started_at_ms',
       'base_finished_at_ms',
       'staged_json',
+      'staged_segments_json',
     ].map((column) => [column, RECALC_EXCLUDED]),
   ),
   app_setting: {

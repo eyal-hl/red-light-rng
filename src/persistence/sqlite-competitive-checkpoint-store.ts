@@ -57,6 +57,57 @@ export function sameCheckpointLists(
   );
 }
 
+/** Transaction-free: the caller owns the transaction (used by atomic job publication). */
+export async function replaceSegmentResultsOn(sql: SqlExecutor, batch: SegmentResultBatchItem[]): Promise<void> {
+  for (const item of batch) {
+    await sql.run('DELETE FROM attempt_segment_result WHERE attempt_id = ? AND config_version = ?', [
+      item.attemptId,
+      item.configVersion,
+    ]);
+    for (const result of item.results) {
+      await sql.run(
+        `INSERT INTO attempt_segment_result (
+           id, attempt_id, config_version, derivation_version, from_checkpoint_id, to_checkpoint_id,
+           status, unavailable_reason, started_at_ms, ended_at_ms, duration_ms, derived_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          result.id,
+          item.attemptId,
+          item.configVersion,
+          result.derivationVersion,
+          result.fromCheckpointId,
+          result.toCheckpointId,
+          result.status,
+          result.unavailableReason,
+          result.startedAtMs,
+          result.endedAtMs,
+          result.durationMs,
+          result.derivedAtMs,
+        ],
+      );
+    }
+  }
+}
+
+/** Transaction-free prune of every result of the pool not computed for `keepVersion`. */
+export async function pruneStaleSegmentResultsOn(
+  sql: SqlExecutor,
+  pool: CompetitiveCheckpointPool,
+  keepVersion: number,
+): Promise<number> {
+  const rows = await sql.getAll<{ id: string }>(
+    `SELECT r.id FROM attempt_segment_result r
+     JOIN attempt a ON a.id = r.attempt_id
+     WHERE a.origin_place_id = ? AND a.destination_place_id = ? AND a.transportation_mode = ?
+       AND r.config_version != ?`,
+    [pool.originPlaceId, pool.destinationPlaceId, pool.transportationMode, keepVersion],
+  );
+  for (const row of rows) {
+    await sql.run('DELETE FROM attempt_segment_result WHERE id = ?', [row.id]);
+  }
+  return rows.length;
+}
+
 export class SqliteCompetitiveCheckpointStore implements CompetitiveCheckpointStore {
   constructor(private readonly getSql: () => Promise<SqlExecutor>) {}
 
@@ -196,36 +247,7 @@ export class SqliteCompetitiveCheckpointStore implements CompetitiveCheckpointSt
 
   async replaceSegmentResults(batch: SegmentResultBatchItem[]): Promise<void> {
     const sql = await this.getSql();
-    await sql.withTransaction(async () => {
-      for (const item of batch) {
-        await sql.run(
-          'DELETE FROM attempt_segment_result WHERE attempt_id = ? AND config_version = ?',
-          [item.attemptId, item.configVersion],
-        );
-        for (const result of item.results) {
-          await sql.run(
-            `INSERT INTO attempt_segment_result (
-               id, attempt_id, config_version, derivation_version, from_checkpoint_id, to_checkpoint_id,
-               status, unavailable_reason, started_at_ms, ended_at_ms, duration_ms, derived_at_ms
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              result.id,
-              item.attemptId,
-              item.configVersion,
-              result.derivationVersion,
-              result.fromCheckpointId,
-              result.toCheckpointId,
-              result.status,
-              result.unavailableReason,
-              result.startedAtMs,
-              result.endedAtMs,
-              result.durationMs,
-              result.derivedAtMs,
-            ],
-          );
-        }
-      }
-    });
+    await sql.withTransaction(() => replaceSegmentResultsOn(sql, batch));
   }
 
   async listSegmentResults(attemptId: string): Promise<AttemptSegmentResult[]> {
@@ -252,18 +274,16 @@ export class SqliteCompetitiveCheckpointStore implements CompetitiveCheckpointSt
 
   async pruneStaleSegmentResults(pool: CompetitiveCheckpointPool, keepVersion: number): Promise<number> {
     const sql = await this.getSql();
-    return sql.withTransaction(async () => {
-      const rows = await sql.getAll<{ id: string }>(
-        `SELECT r.id FROM attempt_segment_result r
-         JOIN attempt a ON a.id = r.attempt_id
-         WHERE a.origin_place_id = ? AND a.destination_place_id = ? AND a.transportation_mode = ?
-           AND r.config_version != ?`,
-        [...this.poolParams(pool), keepVersion],
-      );
-      for (const row of rows) {
-        await sql.run('DELETE FROM attempt_segment_result WHERE id = ?', [row.id]);
-      }
-      return rows.length;
-    });
+    return sql.withTransaction(() => pruneStaleSegmentResultsOn(sql, pool, keepVersion));
+  }
+
+  async deleteSegmentResultsForAttempt(attemptId: string): Promise<void> {
+    const sql = await this.getSql();
+    await sql.run('DELETE FROM attempt_segment_result WHERE attempt_id = ?', [attemptId]);
+  }
+
+  async listCurrentConfigs(): Promise<CompetitiveCheckpointConfig[]> {
+    const sql = await this.getSql();
+    return this.loadConfigs(sql, `status = 'current'`, []);
   }
 }

@@ -94,6 +94,10 @@ Timing boundaries (raw GPS that passes the existing accuracy gate, interpolated 
 - **Maximum interpolation gap: 10 s.** No crossing is interpolated across a larger gap between two raw samples (location is sampled at 1 s): the crossing, and every segment that needs it, is unavailable.
 - Near misses (never inside the radius), checkpoints skipped or passed out of configured order, bypassing routes and missing GPS make only the affected segments `unavailable` with a reason. A DNF or otherwise ineligible attempt yields no segments.
 
+### Recalculate segments
+
+A manual, confirmed, resumable job (issue #81) that derives competitive segment results for completed runs from their stored raw GPS under the CURRENT checkpoint configuration. It shares the single recalculation job slot with Recalculate history (one job of either kind at a time) and follows the same rules: never automatic, bounded chunks, resumable, cancellable before publication, one atomic publication. It only writes derived segment rows; official times, PBs and rankings never change. Creating or editing a checkpoint, or re-timing a run with Recalculate history, makes affected results stale until it is run.
+
 ### Partial attempt
 
 An attempt that starts at a competitive checkpoint instead of the origin Place (`kind = 'partial'`, with `start_checkpoint_id` and the checkpoint configuration version). It only competes on segment boards that start at its checkpoint or later and is never part of full-route ranking, PB, median, statistics or DNF accounting. All other attempts (including every pre-#81 attempt) are `full`.

@@ -115,6 +115,29 @@ export class AttemptRuntime {
     private readonly createRouteId: () => string = createId,
   ) {}
 
+  private onAttemptCompleted: ((attempt: Attempt) => void | Promise<void>) | null = null;
+
+  /**
+   * Registers a hook run AFTER a run finishes as a completed official result (competitive segment
+   * derivation, #81). It is scheduled on a later tick and its failures are swallowed, so it can
+   * never delay the result, back/done, or change the official attempt.
+   */
+  setOnAttemptCompleted(callback: ((attempt: Attempt) => void | Promise<void>) | null): void {
+    this.onAttemptCompleted = callback;
+  }
+
+  private notifyCompleted<T extends Attempt | null>(attempt: T): T {
+    const callback = this.onAttemptCompleted;
+    if (callback && attempt && attempt.lifecycle === 'completed') {
+      setTimeout(() => {
+        void Promise.resolve()
+          .then(() => callback(attempt))
+          .catch(() => {});
+      }, 0);
+    }
+    return attempt;
+  }
+
   async start(): Promise<ArmAttemptResult> {
     const active = await this.sessions.getActiveSession();
     if (active) {
@@ -194,11 +217,11 @@ export class AttemptRuntime {
       const pending = withAttemptReconciliation(next, 'pending', 0);
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
-        return await this.reconcileDerivedAttempt(pending, samples);
+        return this.notifyCompleted(await this.reconcileDerivedAttempt(pending, samples));
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return failed;
+        return this.notifyCompleted(failed);
       }
     }
     const ended: Attempt = {
@@ -243,12 +266,12 @@ export class AttemptRuntime {
       const pending = withAttemptReconciliation(next, 'pending', 0);
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
-        const derived = await this.reconcileDerivedAttempt(pending, samples);
+        const derived = this.notifyCompleted(await this.reconcileDerivedAttempt(pending, samples));
         return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness, liveMap };
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness, liveMap };
+        return { attempt: this.notifyCompleted(failed), startZoneStatus: armedStatus, gpsReadiness, liveMap };
       }
     }
     await this.attempts.saveAttempt(next);
