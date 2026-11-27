@@ -76,6 +76,28 @@ A geographic point/region along an optional path variant used to divide that var
 
 Checkpoints are editable product definitions. They are not the durable source data for runs; raw telemetry is. Checkpoint splits only appear when a compatible path variant is attached.
 
+## Competitive checkpoint
+
+A user-defined, ordered point scoped to a directional journey pool (origin + destination + mode), used to time **competitive segments** on their own boards (DEC-016, issue #81). It is NOT the path-variant checkpoint above: it needs no matched path variant, never finishes a journey, never changes official time, and may be crossed on any physical path. Each pool has a versioned configuration (`competitive_checkpoint_config` / `competitive_checkpoint`); every edit creates a new immutable version and derived results from older versions are stale. Radius 8-250 m (default 30 m); it may not overlap an active Place or another checkpoint of the pool.
+
+### Competitive segment
+
+The time between two boundaries of one attempt: `A -> Ci` (prefix), `Ci -> Ci+1` (adjacent) and `Ci -> finish` (suffix). For checkpoints `A, B, C` a full ride gives `A->B`, `B->C` and the existing official `A->C` board (not duplicated); a partial `B->C` attempt gives only `B->C`. Segment times are derived, can be unavailable, and need not sum to the official time.
+
+Timing boundaries (raw GPS that passes the existing accuracy gate, interpolated like Place crossings):
+
+- **Segment start at a checkpoint = outbound crossing** of its radius, confirmed like a Place departure: at least 4 samples after the crossing without re-entering, and a maximum distance of radius + 18 m. A through-ride and a checkpoint start use the same edge, so neither is unfairly shorter. A partial attempt's official start is this crossing.
+- **Segment end at a checkpoint = inbound crossing** of its radius. The +10 m arrival margin: the crossing only counts if, since the attempt's official start, a sample was seen at radius + 10 m or further from the checkpoint centre before it (the same "seen outside" watch Place destination eligibility uses); otherwise it is ignored as a jitter entry. There is no inside-dwell requirement because a rider passes through without stopping.
+- **Journey start / finish boundaries** are the attempt's stored official times (never recomputed).
+- The first valid directional crossing after the previous valid boundary is used; re-entries are ignored, so a repeated crossing can never be cherry-picked.
+- **Direction:** a pass that ends more than 5 m farther from the destination than where it began is wrong-direction and not timed.
+- **Maximum interpolation gap: 10 s.** No crossing is interpolated across a larger gap between two raw samples (location is sampled at 1 s): the crossing, and every segment that needs it, is unavailable.
+- Near misses (never inside the radius), checkpoints skipped or passed out of configured order, bypassing routes and missing GPS make only the affected segments `unavailable` with a reason. A DNF or otherwise ineligible attempt yields no segments.
+
+### Partial attempt
+
+An attempt that starts at a competitive checkpoint instead of the origin Place (`kind = 'partial'`, with `start_checkpoint_id` and the checkpoint configuration version). It only competes on segment boards that start at its checkpoint or later and is never part of full-route ranking, PB, median, statistics or DNF accounting. All other attempts (including every pre-#81 attempt) are `full`.
+
 ## Split
 
 A timing result associated with reaching a checkpoint on a compatible path variant. In UI language, "split" may refer to either cumulative elapsed time at a checkpoint or the segment between two adjacent checkpoints; when ambiguity matters, use **split elapsed time** and **segment time** explicitly.

@@ -47,7 +47,8 @@ The initial application is a single local-first mobile system with several conce
 7. **Timing engine** — path-free place start/finish plus optional variant checkpoint crossings re-anchored to the journey window.
 8. **Analytics engine** — journey PBs/ranking always; Gold/Sum-of-Best/ghost/wait when a compatible variant exists.
 9. **Local persistence** — stores places, settings, routes, runs/recordings, raw telemetry, and derived/cached results in SQLite.
-10. **UI** — place/settings management and journey analysis before/after a run. Active-run UI should remain minimal.
+10. **Competitive checkpoint / segment model (DEC-016)** — versioned per-pool checkpoint configurations and a pure, platform-free derivation (`src/domain/segment-derivation.ts`) that turns raw GPS plus an attempt into boundary times and segment results, stored as derived rows (`attempt_segment_result`); partial attempts carry `kind = 'partial'`. Every full-route query defaults to `kind = 'full'`.
+11. **UI** — place/settings management and journey analysis before/after a run. Active-run UI should remain minimal.
 11. **Map rendering** — renders project-owned geometry through an isolated `RouteMap`-style boundary; map-SDK types must not leak into domain/persistence/timing code.
 
 These are conceptual boundaries, not a requirement to create nine modules immediately.

@@ -133,6 +133,7 @@ The competitive product is endpoint speedrunning: get from A to B as fast as pos
 - Journey official time is always the path-free endpoint window.
 - Path-variant analytics are secondary and must not use a second hidden timing clock.
 - Automatic clustering of new path variants is out of scope until a later ticket.
+- Amended by DEC-016: a separate, versioned **competitive checkpoint** type may time segments of a journey pool on their own boards. It does not change the path-free official time or the path-variant analytics above.
 
 ---
 
@@ -283,3 +284,26 @@ Past official times are never rewritten as a side effect of editing a radius, mi
 - Job tables are operational state outside the portable backup (see `docs/specs/backup-format.md`); restore deletes them.
 - PBs/rankings are derived from attempts at read time, so publication plus cache invalidation keeps them consistent; no stored PB is rewritten separately.
 - Archiving a Place does not change the fingerprint (centre/radii only); it can still change which Places compete as origins in a replay if done mid-job.
+
+## DEC-016 — Competitive checkpoints and partial attempts (amends DEC-007)
+
+**Status:** Accepted (issue #81, owner-approved resolution of Disagreer round 1, 2026-11-27)
+
+### Decision
+A **competitive checkpoint** is a new, versioned, user-defined point scoped to a directional journey pool (`origin_place_id + destination_place_id + transportation_mode`). It is separate from the path-variant analytics checkpoints of DEC-007 (which are progress-along-a-path, only exist with a matched variant, and still sum to the official time). Competitive checkpoints exist so one ride can qualify for several boards (Work → Office junction, Office junction → Home) without the junction becoming a Place: a checkpoint can never start, finish or cancel a journey and never changes official timing.
+
+- **Derived only.** Segment times are computed from the retained raw GPS (DEC-004/005) into a derived table. The attempt's official start/finish, rank, PB and statistics are never read from or written by segment derivation. Missing or unusable checkpoints never invalidate an original full run.
+- **Versioned configurations.** Every create/edit/reorder/delete writes a new immutable configuration version for the pool; superseded versions stay readable. A derived result carries the configuration version and the derivation algorithm version it was computed with and is stale when either no longer matches the current one. Stale results are never mixed into a board.
+- **Attempt kind.** Every attempt is `full` (all pre-existing attempts) or `partial` (starts at a checkpoint; stores `start_checkpoint_id` and `checkpoint_config_version`). Every full-route ranking, PB, median, statistics, history, departure-grouping and reconciliation query defaults to `full` only; a partial is never a full-route DNF, rank or record. A partial DNF is retained as a clearly labeled non-result (`PARTIAL DID NOT START/FINISH`) with normal hide/delete behavior.
+- **Segment times need not sum to the official time**, because the outbound edge of one checkpoint and the inbound edge of the next differ.
+- **Segments generated** for a full attempt through ordered checkpoints `C1..Cn` between A and the destination: prefix `A->Ci`, adjacent `Ci->Ci+1` and suffix `Ci->finish`, deduplicated by endpoint pair, never `A->finish` (that is the existing official board). A partial starting at `Ck` only produces segments starting at `Ck` or later (adjacent and suffix).
+- **Timing rules** are in `docs/product/CONCEPTS.md` (Competitive checkpoint) and implemented once, in `src/domain/segment-derivation.ts`, reusing the place-timing crossing interpolation, accuracy gate and departure/arrival margins.
+- **No fabricated times.** If the evidence for a boundary is missing or ambiguous the segment is `unavailable` with a reason; a DNF or otherwise ineligible attempt yields no segments at all.
+- **Manual backfill.** Historical raw tracks are only processed by an explicit, user-confirmed, resumable *Recalculate segments* job (a later stage; DEC-015 constraints apply: one job at a time, bounded chunks, no automatic run on save/migration/restore). Creating a competitive checkpoint or changing its geometry only makes results stale.
+- **Edit lock.** Checkpoint configuration may not change while a run is armed/active or any recalculation job exists (`competitiveCheckpointEditBlockReason`).
+- **Validation at save time.** Radius 8-250 m; no checkpoint circle may overlap any active Place footprint (the larger of its departure/arrival radius) or another checkpoint of the same pool; at most 8 checkpoints per pool.
+
+### Consequences
+- SQLite schema v14 and backup format 3 (additive; a 2 -> 3 adapter imports older backups with every attempt `full`). New tables/columns are in the backup coverage map (DEC-013).
+- A place deletion removes that place's configurations (they only exist for pools of that place); attempts, partial included, are removed as before.
+- Later stages build on these APIs: manual recalculation job (as a distinct job kind in the existing job store), checkpoint editor and segment leaderboards, partial arming, and the hypothetical potential-record estimate (calculated on display from eligible full-run prefix samples, never persisted as an official result).
