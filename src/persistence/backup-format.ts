@@ -6,7 +6,7 @@ import { ACTIVE_TRANSPORTATION_MODE_KEY } from './settings-store';
  * the file is the contract, the database layout is not. See docs/specs/backup-format.md.
  */
 export const BACKUP_FORMAT_ID = 'red-light-rng-backup';
-export const CURRENT_BACKUP_FORMAT_VERSION = 2;
+export const CURRENT_BACKUP_FORMAT_VERSION = 3;
 export const BACKUP_INTEGRITY_ALGORITHM = 'sha256';
 
 /** Durable settings that materially change product behavior. Anything else in app_setting is a recomputable cache. */
@@ -100,6 +100,40 @@ export type BackupAttemptCrossing = {
   crossed_at_ms: number;
 };
 
+export type BackupAttemptSegmentResult = {
+  id: string;
+  config_version: number;
+  derivation_version: number;
+  from_checkpoint_id: string | null;
+  to_checkpoint_id: string | null;
+  status: string;
+  unavailable_reason: string | null;
+  started_at_ms: number | null;
+  ended_at_ms: number | null;
+  duration_ms: number | null;
+  derived_at_ms: number;
+};
+
+export type BackupCompetitiveCheckpoint = {
+  checkpoint_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+};
+
+/** One immutable, versioned competitive checkpoint configuration; `checkpoints` array order is the route order. */
+export type BackupCompetitiveCheckpointConfig = {
+  id: string;
+  origin_place_id: string;
+  destination_place_id: string;
+  transportation_mode: string;
+  version: number;
+  status: string;
+  created_at_ms: number;
+  checkpoints: BackupCompetitiveCheckpoint[];
+};
+
 export type BackupAttempt = {
   id: string;
   route_id: string | null;
@@ -119,7 +153,11 @@ export type BackupAttempt = {
   hidden_incomplete: number;
   reconciliation_status: string;
   reconciliation_version: number;
+  kind: string;
+  start_checkpoint_id: string | null;
+  checkpoint_config_version: number | null;
   crossings: BackupAttemptCrossing[];
+  segment_results: BackupAttemptSegmentResult[];
 };
 
 export type BackupSettings = Partial<Record<(typeof BACKUP_SETTING_KEYS)[number], string>>;
@@ -130,6 +168,7 @@ export type BackupPayload = {
   location_samples: BackupLocationSample[];
   routes: BackupRoute[];
   attempts: BackupAttempt[];
+  competitive_checkpoint_configs: BackupCompetitiveCheckpointConfig[];
   settings: BackupSettings;
 };
 
@@ -142,6 +181,9 @@ export type BackupCounts = {
   route_reference_points: number;
   route_checkpoints: number;
   attempt_checkpoint_crossings: number;
+  competitive_checkpoint_configs: number;
+  competitive_checkpoints: number;
+  attempt_segment_results: number;
   settings: number;
 };
 
@@ -202,8 +244,42 @@ function migratePlaceRadiiV1ToV2(payload: unknown): unknown {
   return { ...payload, places };
 }
 
+/**
+ * 2 -> 3 (#81): attempts gained `kind`, `start_checkpoint_id`, `checkpoint_config_version` and nested
+ * `segment_results`, and the payload gained `competitive_checkpoint_configs`. A format-2 attempt is a
+ * legacy full attempt with no checkpoint reference and no derived segment results; a format-2 payload
+ * has no competitive checkpoint configurations. Malformed input is passed through untouched so
+ * validation still rejects it.
+ */
+function migrateCompetitiveCheckpointsV2ToV3(payload: unknown): unknown {
+  if (!isPlainObject(payload) || !Array.isArray(payload.attempts)) {
+    return payload;
+  }
+  const attempts = payload.attempts.map((attempt: unknown) => {
+    if (!isPlainObject(attempt)) {
+      return attempt;
+    }
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(attempt, key);
+    if (has('kind') || has('start_checkpoint_id') || has('checkpoint_config_version') || has('segment_results')) {
+      return attempt;
+    }
+    return {
+      ...attempt,
+      kind: 'full',
+      start_checkpoint_id: null,
+      checkpoint_config_version: null,
+      segment_results: [],
+    };
+  });
+  if (Object.prototype.hasOwnProperty.call(payload, 'competitive_checkpoint_configs')) {
+    return { ...payload, attempts };
+  }
+  return { ...payload, attempts, competitive_checkpoint_configs: [] };
+}
+
 export const BACKUP_MIGRATIONS: Readonly<Record<number, BackupMigration>> = {
   1: migratePlaceRadiiV1ToV2,
+  2: migrateCompetitiveCheckpointsV2ToV3,
 };
 
 export type ParseBackupOptions = {
@@ -257,6 +333,12 @@ export function countBackupRecords(payload: BackupPayload): BackupCounts {
     route_reference_points: payload.routes.reduce((sum, route) => sum + route.reference_path.length, 0),
     route_checkpoints: payload.routes.reduce((sum, route) => sum + route.checkpoints.length, 0),
     attempt_checkpoint_crossings: payload.attempts.reduce((sum, attempt) => sum + attempt.crossings.length, 0),
+    competitive_checkpoint_configs: payload.competitive_checkpoint_configs.length,
+    competitive_checkpoints: payload.competitive_checkpoint_configs.reduce(
+      (sum, config) => sum + config.checkpoints.length,
+      0,
+    ),
+    attempt_segment_results: payload.attempts.reduce((sum, attempt) => sum + attempt.segment_results.length, 0),
     settings: Object.keys(payload.settings).length,
   };
 }
@@ -310,6 +392,7 @@ const isTimestamp: FieldCheck = (value) => typeof value === 'number' && Number.i
 const isInterpolatedTimestamp: FieldCheck = (value) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const isNonNegativeInt: FieldCheck = isTimestamp;
+const isPositiveInt: FieldCheck = (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 const isFinite_: FieldCheck = (value) => typeof value === 'number' && Number.isFinite(value);
 const isNonNegativeFinite: FieldCheck = (value) => isFinite_(value) && (value as number) >= 0;
 const isPositiveFinite: FieldCheck = (value) => isFinite_(value) && (value as number) > 0;
@@ -413,7 +496,57 @@ const ATTEMPT_FIELDS: FieldSpec = {
   hidden_incomplete: isBit,
   reconciliation_status: oneOf('pending', 'reconciled', 'failed'),
   reconciliation_version: isNonNegativeInt,
+  kind: oneOf('full', 'partial'),
+  start_checkpoint_id: nullable(isNonEmptyString),
+  checkpoint_config_version: nullable(isPositiveInt),
   crossings: (value) => Array.isArray(value),
+  segment_results: (value) => Array.isArray(value),
+};
+
+const SEGMENT_UNAVAILABLE_REASONS = oneOf(
+  'not_reached',
+  'out_of_order',
+  'no_arrival_margin',
+  'gap_too_large',
+  'wrong_direction',
+  'departure_unconfirmed',
+  'missing_telemetry',
+  'geometry_invalid',
+  'non_positive_duration',
+  'before_start_checkpoint',
+);
+
+const SEGMENT_RESULT_FIELDS: FieldSpec = {
+  id: isNonEmptyString,
+  config_version: isPositiveInt,
+  derivation_version: isPositiveInt,
+  from_checkpoint_id: nullable(isNonEmptyString),
+  to_checkpoint_id: nullable(isNonEmptyString),
+  status: oneOf('valid', 'unavailable'),
+  unavailable_reason: nullable(SEGMENT_UNAVAILABLE_REASONS),
+  started_at_ms: nullable(isInterpolatedTimestamp),
+  ended_at_ms: nullable(isInterpolatedTimestamp),
+  duration_ms: nullable(isNonNegativeFinite),
+  derived_at_ms: isTimestamp,
+};
+
+const COMPETITIVE_CONFIG_FIELDS: FieldSpec = {
+  id: isNonEmptyString,
+  origin_place_id: isNonEmptyString,
+  destination_place_id: isNonEmptyString,
+  transportation_mode: MODES,
+  version: isPositiveInt,
+  status: oneOf('current', 'superseded'),
+  created_at_ms: isTimestamp,
+  checkpoints: (value) => Array.isArray(value),
+};
+
+const COMPETITIVE_CHECKPOINT_FIELDS: FieldSpec = {
+  checkpoint_id: isNonEmptyString,
+  name: isString,
+  latitude: isLatitude,
+  longitude: isLongitude,
+  radius_meters: (value) => isFinite_(value) && (value as number) >= 8 && (value as number) <= 250,
 };
 
 const CROSSING_FIELDS: FieldSpec = {
@@ -478,7 +611,15 @@ export function validateBackupPayload(input: unknown): BackupPayload {
   if (!isPlainObject(input)) {
     return invalid('Backup payload must be an object.');
   }
-  const allowed = ['places', 'tracking_sessions', 'location_samples', 'routes', 'attempts', 'settings'];
+  const allowed = [
+    'places',
+    'tracking_sessions',
+    'location_samples',
+    'routes',
+    'attempts',
+    'competitive_checkpoint_configs',
+    'settings',
+  ];
   for (const key of Object.keys(input)) {
     if (!allowed.includes(key)) {
       return invalid(`Backup payload has an unexpected section "${key}".`);
@@ -506,6 +647,23 @@ export function validateBackupPayload(input: unknown): BackupPayload {
       attempt.crossings,
       CROSSING_FIELDS,
       `attempts[${attemptIndex}].crossings`,
+    );
+    attempt.segment_results = checkList<BackupAttemptSegmentResult>(
+      attempt.segment_results,
+      SEGMENT_RESULT_FIELDS,
+      `attempts[${attemptIndex}].segment_results`,
+    );
+  }
+  const configs = checkList<BackupCompetitiveCheckpointConfig>(
+    input.competitive_checkpoint_configs,
+    COMPETITIVE_CONFIG_FIELDS,
+    'competitive_checkpoint_configs',
+  );
+  for (const [configIndex, config] of configs.entries()) {
+    config.checkpoints = checkList<BackupCompetitiveCheckpoint>(
+      config.checkpoints,
+      COMPETITIVE_CHECKPOINT_FIELDS,
+      `competitive_checkpoint_configs[${configIndex}].checkpoints`,
     );
   }
   if (!isPlainObject(input.settings)) {
@@ -540,10 +698,53 @@ export function validateBackupPayload(input: unknown): BackupPayload {
     attempts.flatMap((attempt) => attempt.crossings.map((item) => item.id)),
     'attempt crossing id',
   );
+  assertUnique(configs.map((item) => item.id), 'competitive checkpoint config id');
+  assertUnique(
+    configs.map((item) => `${item.origin_place_id}|${item.destination_place_id}|${item.transportation_mode}|${item.version}`),
+    'competitive checkpoint config version',
+  );
+  assertUnique(
+    configs
+      .filter((item) => item.status === 'current')
+      .map((item) => `${item.origin_place_id}|${item.destination_place_id}|${item.transportation_mode}`),
+    'current competitive checkpoint config',
+  );
+  for (const config of configs) {
+    assertUnique(
+      config.checkpoints.map((item) => item.checkpoint_id),
+      'competitive checkpoint id',
+    );
+  }
+  assertUnique(
+    attempts.flatMap((attempt) => attempt.segment_results.map((item) => item.id)),
+    'attempt segment result id',
+  );
+  assertUnique(
+    attempts.flatMap((attempt) =>
+      attempt.segment_results.map(
+        (item) =>
+          `${attempt.id}|${item.config_version}|${item.from_checkpoint_id ?? ''}|${item.to_checkpoint_id ?? ''}`,
+      ),
+    ),
+    'attempt segment result pair',
+  );
 
   const placeIds = new Set(places.map((item) => item.id));
   const sessionIds = new Set(sessions.map((item) => item.id));
   const routeIds = new Set(routes.map((item) => item.id));
+  for (const config of configs) {
+    for (const placeId of [config.origin_place_id, config.destination_place_id]) {
+      if (!placeIds.has(placeId)) {
+        broken(`Competitive checkpoint config ${config.id} references a missing place.`);
+      }
+    }
+  }
+  const configByPoolVersion = new Map(
+    configs.map((item) => [
+      `${item.origin_place_id}|${item.destination_place_id}|${item.transportation_mode}|${item.version}`,
+      item,
+    ]),
+  );
   for (const sample of samples) {
     if (!sessionIds.has(sample.session_id)) {
       broken(`Location sample ${sample.id} references a missing tracking session.`);
@@ -576,6 +777,35 @@ export function validateBackupPayload(input: unknown): BackupPayload {
     if (attempt.started_at_ms == null && attempt.finished_at_ms != null) {
       invalid(`Attempt ${attempt.id} has a finish time but no start time.`);
     }
+    if (attempt.kind === 'full') {
+      if (attempt.start_checkpoint_id != null || attempt.checkpoint_config_version != null) {
+        invalid(`Full attempt ${attempt.id} must not reference a start checkpoint.`);
+      }
+    } else {
+      if (attempt.start_checkpoint_id == null || attempt.checkpoint_config_version == null) {
+        invalid(`Partial attempt ${attempt.id} must name its start checkpoint and configuration version.`);
+      }
+      const config = configByPoolVersion.get(
+        `${attempt.origin_place_id}|${attempt.destination_place_id}|${attempt.transportation_mode}|${attempt.checkpoint_config_version}`,
+      );
+      if (!config || !config.checkpoints.some((item) => item.checkpoint_id === attempt.start_checkpoint_id)) {
+        broken(`Partial attempt ${attempt.id} references a missing competitive checkpoint.`);
+      }
+    }
+    for (const result of attempt.segment_results) {
+      if (
+        result.status === 'valid' &&
+        (result.started_at_ms == null || result.ended_at_ms == null || result.duration_ms == null)
+      ) {
+        invalid(`Segment result ${result.id} is valid but has no times.`);
+      }
+      if (result.status === 'unavailable' && result.unavailable_reason == null) {
+        invalid(`Segment result ${result.id} is unavailable without a reason.`);
+      }
+      if (result.from_checkpoint_id == null && result.to_checkpoint_id == null) {
+        invalid(`Segment result ${result.id} duplicates the official full-route result.`);
+      }
+    }
   }
   // Tracking session start/stop times come from the device wall clock, which can be corrected
   // backwards mid-recording. A stop-before-start ordering check here would make export fail for
@@ -587,6 +817,7 @@ export function validateBackupPayload(input: unknown): BackupPayload {
     location_samples: samples,
     routes,
     attempts,
+    competitive_checkpoint_configs: configs,
     settings,
   };
 }

@@ -5,6 +5,14 @@ export type AttemptLifecycle = 'armed' | 'active' | 'completed' | 'cancelled' | 
 
 export type AttemptValidity = 'pending' | 'valid' | 'unranked';
 
+/**
+ * `full` is an ordinary origin-place -> destination-place attempt (every attempt that existed
+ * before #81). `partial` starts at a competitive checkpoint (DEC-016): it may only rank on
+ * competitive segment boards and must never appear in full-route ranking, PB, median, statistics
+ * or DNF accounting.
+ */
+export type AttemptKind = 'full' | 'partial';
+
 export type AttemptLocalTimeSource = 'captured' | 'reconstructed';
 
 export type AttemptLocalStartMetadata = {
@@ -48,7 +56,29 @@ export type Attempt = {
   crossings: AttemptCheckpointCrossing[];
   reconciliationStatus?: AttemptReconciliationStatus;
   reconciliationVersion?: number;
+  /** Absent means `full` (legacy rows and every attempt created before partial starts existed). */
+  kind?: AttemptKind;
+  /** Partial attempts only: the competitive checkpoint the run started at. */
+  startCheckpointId?: string | null;
+  /** Partial attempts only: the competitive checkpoint configuration version the start refers to. */
+  checkpointConfigVersion?: number | null;
 };
+
+export function attemptKind(attempt: Pick<Attempt, 'kind'>): AttemptKind {
+  return attempt.kind === 'partial' ? 'partial' : 'full';
+}
+
+export function isFullAttempt(attempt: Pick<Attempt, 'kind'>): boolean {
+  return attemptKind(attempt) === 'full';
+}
+
+export function isPartialAttempt(attempt: Pick<Attempt, 'kind'>): boolean {
+  return attemptKind(attempt) === 'partial';
+}
+
+export function parseAttemptKind(value: string | null | undefined): AttemptKind {
+  return value === 'partial' ? 'partial' : 'full';
+}
 
 export function isOpenAttempt(attempt: Attempt): boolean {
   return attempt.lifecycle === 'armed' || attempt.lifecycle === 'active';
@@ -62,11 +92,16 @@ export function officialTimeMs(attempt: Attempt): number | null {
 }
 
 export function isOfficialAttempt(attempt: Attempt): boolean {
-  return attempt.lifecycle === 'completed' && attempt.validity === 'valid';
+  return isFullAttempt(attempt) && attempt.lifecycle === 'completed' && attempt.validity === 'valid';
 }
 
+/**
+ * Full-route competitive eligibility (rank, PB, median, statistics). Partial attempts are never
+ * full-route competitive, whatever their lifecycle or validity (DEC-016).
+ */
 export function isJourneyCompetitive(attempt: Attempt): boolean {
   return (
+    isFullAttempt(attempt) &&
     attempt.lifecycle === 'completed' &&
     attempt.validity === 'valid' &&
     attempt.originPlaceId != null &&
@@ -76,13 +111,24 @@ export function isJourneyCompetitive(attempt: Attempt): boolean {
   );
 }
 
-export type IncompleteAttemptLabel = 'DID NOT START' | 'DID NOT FINISH';
+export type IncompleteAttemptLabel =
+  | 'DID NOT START'
+  | 'DID NOT FINISH'
+  | 'PARTIAL DID NOT START'
+  | 'PARTIAL DID NOT FINISH';
 
-export function incompleteAttemptLabel(attempt: Pick<Attempt, 'lifecycle' | 'startedAtMs'>): IncompleteAttemptLabel | null {
+/** A partial DNF is a clearly labeled non-result, never a full-route DNF. */
+export function incompleteAttemptLabel(
+  attempt: Pick<Attempt, 'lifecycle' | 'startedAtMs'> & Pick<Partial<Attempt>, 'kind'>,
+): IncompleteAttemptLabel | null {
   if (attempt.lifecycle !== 'ended') {
     return null;
   }
-  return attempt.startedAtMs == null ? 'DID NOT START' : 'DID NOT FINISH';
+  const started = attempt.startedAtMs != null;
+  if (isPartialAttempt(attempt)) {
+    return started ? 'PARTIAL DID NOT FINISH' : 'PARTIAL DID NOT START';
+  }
+  return started ? 'DID NOT FINISH' : 'DID NOT START';
 }
 
 export function isHiddenIncomplete(attempt: Pick<Attempt, 'lifecycle' | 'hiddenIncomplete'>): boolean {

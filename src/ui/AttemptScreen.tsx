@@ -86,17 +86,25 @@ export function AttemptScreen({
   onCancel,
 }: AttemptScreenProps) {
   const armed = attempt.lifecycle === 'armed';
+  // A checkpoint start (#81): `originName` is then the checkpoint's name.
+  const partial = attempt.kind === 'partial';
   const activeTitle = originName ? `${originName} → ?` : 'Journey';
   const readinessLabel = formatGpsReadinessLabel(gpsReadiness);
 
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.kicker}>{armed ? 'ARMED' : 'RUN ACTIVE'}</Text>
-        <Text style={styles.title}>{armed ? 'Waiting for start' : activeTitle}</Text>
+        <Text style={styles.kicker}>
+          {partial ? (armed ? 'ARMED · CHECKPOINT START' : 'RUN ACTIVE · CHECKPOINT START') : armed ? 'ARMED' : 'RUN ACTIVE'}
+        </Text>
+        <Text style={styles.title}>
+          {armed ? (partial && originName ? `Waiting to leave ${originName}` : 'Waiting for start') : activeTitle}
+        </Text>
         {armed ? (
           <Text style={styles.subtitle}>
-            Put the phone away. Official timing starts after genuine departure from a saved place.
+            {partial
+              ? 'Put the phone away. Timing starts when you leave the checkpoint toward your destination. The walk to it is not timed.'
+              : 'Put the phone away. Official timing starts after genuine departure from a saved place.'}
           </Text>
         ) : (
           <View>

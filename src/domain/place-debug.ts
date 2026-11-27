@@ -138,8 +138,10 @@ export function inspectPlaceAttempt(
   places: PlaceTimingPlace[],
   samples: LocationSample[],
   context: { armedAtMs: number; nowMs: number },
+  /** Pre-computed engine state (a partial attempt's checkpoint-start replay); default: the plain place replay. */
+  engineOverride?: PlaceEngineState,
 ): PlaceAttemptDebugReport {
-  const engine = replayPlaceTrace(places, samples, context);
+  const engine = engineOverride ?? replayPlaceTrace(places, samples, context);
   const inspected: PlaceDebugSample[] = [];
   const latest = samples[samples.length - 1] ?? null;
   const latestPoint = latest ? samplePoint(latest) : null;
@@ -228,13 +230,14 @@ export function inspectPlaceAttempt(
 }
 
 export function inspectPlaceAttemptRecord(
-  attempt: Pick<Attempt, 'lifecycle' | 'startedAtMs' | 'armedAtMs'>,
+  attempt: Pick<Attempt, 'lifecycle' | 'startedAtMs' | 'armedAtMs'> & Pick<Partial<Attempt>, 'kind'>,
   places: Place[] | PlaceTimingPlace[],
   samples: LocationSample[],
   nowMs: number,
+  engineOverride?: PlaceEngineState,
 ): PlaceAttemptDebugReport {
   return {
-    ...inspectPlaceAttempt(places, samples, { armedAtMs: attempt.armedAtMs, nowMs }),
+    ...inspectPlaceAttempt(places, samples, { armedAtMs: attempt.armedAtMs, nowMs }, engineOverride),
     incompleteLabel: incompleteAttemptLabel(attempt),
   };
 }

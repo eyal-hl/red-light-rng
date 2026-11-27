@@ -4,11 +4,13 @@ import { createExpoBackupFiles } from './persistence/expo-backup-files';
 import { SqliteAttemptStore } from './persistence/sqlite-attempt-store';
 import { SqliteLocationSampleStore } from './persistence/sqlite-location-sample-store';
 import { SqlitePlaceStore } from './persistence/sqlite-place-store';
+import { SqliteCompetitiveCheckpointStore } from './persistence/sqlite-competitive-checkpoint-store';
 import { SqliteRecalculationJobStore } from './persistence/sqlite-recalculation-job-store';
 import { SqliteRouteStore } from './persistence/sqlite-route-store';
 import { SqliteSettingsStore } from './persistence/sqlite-settings-store';
 import { AttemptRuntime } from './product/attempt-runtime';
 import { BackupService } from './product/backup-service';
+import { CompetitiveSegmentsService, SegmentRecalculationService } from './product/competitive-segments';
 import { HistoryRecalculationService } from './product/history-recalculation';
 import { RouteWorkspace } from './product/route-workspace';
 import { createExpoLocationPlatform } from './tracking/expo-location-platform';
@@ -44,6 +46,21 @@ export const historyRecalculation = new HistoryRecalculationService({
   places: placeStore,
   reassignPathVariant: (attempt, samples) => attemptRuntime.reassignPathVariant(attempt, samples),
 });
+export const competitiveCheckpointStore = new SqliteCompetitiveCheckpointStore(getSqlExecutor);
+const competitiveSegmentDeps = {
+  checkpoints: competitiveCheckpointStore,
+  attempts: attemptStore,
+  sessions: locationSampleStore,
+  places: placeStore,
+  jobs: recalculationJobStore,
+};
+attemptRuntime.setCompetitiveCheckpoints(competitiveCheckpointStore);
+export const competitiveSegments = new CompetitiveSegmentsService(competitiveSegmentDeps);
+export const segmentRecalculation = new SegmentRecalculationService(competitiveSegmentDeps);
+// Derive checkpoint segments off the critical path once a run finishes; failures never affect the result.
+attemptRuntime.setOnAttemptCompleted((attempt) => {
+  void competitiveSegments.deriveForAttempt(attempt.id);
+});
 export const routeWorkspace = new RouteWorkspace(
   locationTracker,
   locationSampleStore,
@@ -56,6 +73,8 @@ export const routeWorkspace = new RouteWorkspace(
   undefined,
   undefined,
   historyRecalculation,
+  competitiveSegments,
+  segmentRecalculation,
 );
 
 export const backupService = new BackupService(

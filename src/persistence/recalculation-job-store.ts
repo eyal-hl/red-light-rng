@@ -1,9 +1,19 @@
-import type { RecalculationJobStatus, StagedAttemptUpdate } from '../domain/history-recalculation';
+import type {
+  RecalculationJobKind,
+  RecalculationJobStatus,
+  SegmentRecalculationScope,
+  StagedAttemptUpdate,
+} from '../domain/history-recalculation';
+import type { AttemptSegmentResult } from '../domain/segment-derivation';
 
 export type RecalculationItemState = 'pending' | 'updated' | 'unchanged' | 'skipped' | 'error';
 
 export type RecalculationJob = {
   id: string;
+  /** Distinct job kinds share one slot; legacy rows are `history`. */
+  kind: RecalculationJobKind;
+  /** Segment jobs only: the pools and configuration versions fixed at start. */
+  scope: SegmentRecalculationScope | null;
   status: RecalculationJobStatus;
   /** Fingerprint of every Place's ID, centre and both radii when the job started. */
   placesFingerprint: string;
@@ -29,6 +39,8 @@ export type RecalculationItem = {
   baseStartedAtMs: number | null;
   baseFinishedAtMs: number | null;
   staged: StagedAttemptUpdate | null;
+  /** Segment jobs only: derived rows staged for atomic publication. */
+  stagedSegments: AttemptSegmentResult[] | null;
 };
 
 export type RecalculationItemResult = {
@@ -38,6 +50,7 @@ export type RecalculationItemResult = {
   baseStartedAtMs: number | null;
   baseFinishedAtMs: number | null;
   staged: StagedAttemptUpdate | null;
+  stagedSegments?: AttemptSegmentResult[] | null;
 };
 
 export type RecalculationCounts = {
@@ -58,7 +71,7 @@ export type CreateRecalculationJobResult =
 
 export type PublishRecalculationResult =
   | { ok: true }
-  | { ok: false; reason: 'no_job' | 'not_ready' | 'open_attempt' | 'places_changed' };
+  | { ok: false; reason: 'no_job' | 'not_ready' | 'open_attempt' | 'places_changed' | 'config_changed' };
 
 /**
  * Local operational state for the manual history recalculation. Never part of the portable backup.

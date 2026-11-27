@@ -24,13 +24,16 @@ import {
   type AttemptCaptureHealth,
   type GpsReadiness,
 } from '../domain/gps-readiness';
-import { replayPlaceTrace, type PlaceStartZoneStatus } from '../domain/place-timing';
+import { replayPlaceTrace, type PlaceEngineState, type PlaceStartZoneStatus } from '../domain/place-timing';
+import { partialTimingPlaces, replayPartialTrace } from '../domain/partial-timing';
+import type { CompetitiveCheckpointPool } from '../domain/competitive-checkpoint';
+import type { CompetitiveCheckpointStore } from '../persistence/competitive-checkpoint-store';
 import type { JourneyPoolId } from '../domain/journey';
 import { attemptJourneyPool } from '../domain/journey-analysis';
 import { PATH_VARIANT_CLASSIFICATION_VERSION, planPathVariantRecompute } from '../domain/path-variant-discovery';
 import type { TransportationMode } from '../domain/route';
 import { timingCourseFromRoute } from '../domain/attempt-analysis';
-import type { AttemptStore } from '../persistence/attempt-store';
+import type { AttemptListOptions, AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
@@ -45,6 +48,9 @@ import {
   type AttemptReconciliationReport,
 } from '../domain/attempt-reconciliation';
 import { findCompatiblePathVariant } from '../domain/path-variant';
+
+/** Arms a PARTIAL attempt at a competitive checkpoint of `pool` (#81) instead of the plain START. */
+export type PartialStartRequest = { pool: CompetitiveCheckpointPool; startCheckpointId: string };
 
 export type ArmAttemptResult =
   | { ok: true; attempt: Attempt }
@@ -115,7 +121,41 @@ export class AttemptRuntime {
     private readonly createRouteId: () => string = createId,
   ) {}
 
-  async start(): Promise<ArmAttemptResult> {
+  private onAttemptCompleted: ((attempt: Attempt) => void | Promise<void>) | null = null;
+
+  /**
+   * Registers a hook run AFTER a run finishes as a completed official result (competitive segment
+   * derivation, #81). It is scheduled on a later tick and its failures are swallowed, so it can
+   * never delay the result, back/done, or change the official attempt.
+   */
+  setOnAttemptCompleted(callback: ((attempt: Attempt) => void | Promise<void>) | null): void {
+    this.onAttemptCompleted = callback;
+  }
+
+  private notifyCompleted<T extends Attempt | null>(attempt: T): T {
+    const callback = this.onAttemptCompleted;
+    if (callback && attempt && attempt.lifecycle === 'completed') {
+      setTimeout(() => {
+        void Promise.resolve()
+          .then(() => callback(attempt))
+          .catch(() => {});
+      }, 0);
+    }
+    return attempt;
+  }
+
+  private checkpoints: CompetitiveCheckpointStore | null = null;
+
+  /** Competitive checkpoint configurations, needed only to arm and time partial attempts. */
+  setCompetitiveCheckpoints(store: CompetitiveCheckpointStore | null): void {
+    this.checkpoints = store;
+  }
+
+  async start(options: { partial?: PartialStartRequest } = {}): Promise<ArmAttemptResult> {
+    const partialSetup = options.partial ? await this.resolvePartialStart(options.partial) : null;
+    if (partialSetup && 'reason' in partialSetup) {
+      return { ok: false, reason: partialSetup.reason };
+    }
     const active = await this.sessions.getActiveSession();
     if (active) {
       return { ok: false, reason: 'Finish or cancel the current recording before starting a run.' };
@@ -135,12 +175,16 @@ export class AttemptRuntime {
       return { ok: false, reason: 'Could not start attempt tracking.' };
     }
 
-    const transportationMode = await this.settings.getActiveTransportationMode();
+    const transportationMode = partialSetup
+      ? partialSetup.pool.transportationMode
+      : await this.settings.getActiveTransportationMode();
     const attempt: Attempt = {
       id: this.createAttemptId(),
       routeId: null,
-      originPlaceId: null,
-      destinationPlaceId: null,
+      // A partial attempt carries its journey identity from arming (so even a partial DNF belongs to
+      // the journey's partial list); a full attempt learns its endpoints from the timing engine.
+      originPlaceId: partialSetup ? partialSetup.pool.originPlaceId : null,
+      destinationPlaceId: partialSetup ? partialSetup.pool.destinationPlaceId : null,
       transportationMode,
       sessionId: session.id,
       lifecycle: 'armed',
@@ -154,6 +198,13 @@ export class AttemptRuntime {
       crossings: [],
       reconciliationStatus: 'pending',
       reconciliationVersion: 0,
+      ...(partialSetup
+        ? {
+            kind: 'partial' as const,
+            startCheckpointId: partialSetup.startCheckpointId,
+            checkpointConfigVersion: partialSetup.configVersion,
+          }
+        : {}),
     };
     try {
       await this.attempts.createAttempt(attempt);
@@ -162,6 +213,79 @@ export class AttemptRuntime {
       throw error;
     }
     return { ok: true, attempt };
+  }
+
+  private async resolvePartialStart(
+    request: PartialStartRequest,
+  ): Promise<
+    | { pool: CompetitiveCheckpointPool; startCheckpointId: string; configVersion: number }
+    | { reason: string }
+  > {
+    const config = this.checkpoints ? await this.checkpoints.getCurrentConfig(request.pool) : null;
+    const checkpoint = config?.checkpoints.find((item) => item.id === request.startCheckpointId);
+    if (!config || !checkpoint) {
+      return { reason: 'This checkpoint is no longer available. Pick a start again.' };
+    }
+    const [origin, destination] = await Promise.all([
+      this.places.getPlace(request.pool.originPlaceId),
+      this.places.getPlace(request.pool.destinationPlaceId),
+    ]);
+    if (!origin || !destination || origin.status !== 'active' || destination.status !== 'active') {
+      return { reason: 'This journey is no longer available.' };
+    }
+    return { pool: request.pool, startCheckpointId: checkpoint.id, configVersion: config.version };
+  }
+
+  /**
+   * Timing context of a partial attempt: [checkpoint as origin, journey destination], resolved from
+   * the immutable configuration version stored on the attempt, so a replay never depends on later
+   * edits. Null when the configuration or destination no longer exists.
+   */
+  private async partialTimingContext(attempt: Attempt): Promise<{ places: Place[]; destination: Place } | null> {
+    const pool = attemptJourneyPool(attempt);
+    if (!pool || !this.checkpoints || attempt.startCheckpointId == null || attempt.checkpointConfigVersion == null) {
+      return null;
+    }
+    const config = await this.checkpoints.getConfig(pool, attempt.checkpointConfigVersion);
+    const checkpoint = config?.checkpoints.find((item) => item.id === attempt.startCheckpointId);
+    const destination = await this.places.getPlace(pool.destinationPlaceId);
+    if (!checkpoint || !destination) {
+      return null;
+    }
+    return { places: partialTimingPlaces(checkpoint, destination), destination };
+  }
+
+  /** Debug/inspection replay of a partial attempt with the exact timing context live timing used. */
+  async inspectPartialEngine(
+    attempt: Attempt,
+    samples: LocationSample[],
+    nowMs: number,
+  ): Promise<{ places: Place[]; engine: PlaceEngineState } | null> {
+    if (attempt.kind !== 'partial') {
+      return null;
+    }
+    const context = await this.partialTimingContext(attempt);
+    if (!context) {
+      return null;
+    }
+    return { places: context.places, engine: this.replayEngine(attempt, context.places, samples, nowMs) };
+  }
+
+  /** Same replay as live timing: the plain place engine, or the partial (checkpoint start) engine. */
+  private replayEngine(
+    attempt: Attempt,
+    places: Place[],
+    samples: LocationSample[],
+    nowMs: number,
+  ): PlaceEngineState {
+    const context = { armedAtMs: attempt.armedAtMs, nowMs };
+    if (attempt.kind === 'partial') {
+      const destination = places.find((place) => place.id === attempt.destinationPlaceId);
+      return destination
+        ? replayPartialTrace(places, destination.center, samples, context)
+        : replayPlaceTrace(places, samples, context);
+    }
+    return replayPlaceTrace(places, samples, context);
   }
 
   async cancel(): Promise<Attempt | null> {
@@ -194,11 +318,11 @@ export class AttemptRuntime {
       const pending = withAttemptReconciliation(next, 'pending', 0);
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
-        return await this.reconcileDerivedAttempt(pending, samples);
+        return this.notifyCompleted(await this.reconcileDerivedAttempt(pending, samples));
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return failed;
+        return this.notifyCompleted(failed);
       }
     }
     const ended: Attempt = {
@@ -227,7 +351,7 @@ export class AttemptRuntime {
     const samples = await this.sessions.listSamples(open.sessionId);
     const places = await this.placesForAttempt(open);
     const next = await this.applyPlaceEngine(open, samples, places);
-    const engine = replayPlaceTrace(places, samples, { armedAtMs: open.armedAtMs, nowMs: this.now() });
+    const engine = this.replayEngine(open, places, samples, this.now());
     const presented = presentArmedAttemptStatus(places, samples, engine, await this.readAttemptCaptureHealth());
     const armedStatus = next.lifecycle === 'armed' ? presented.startZoneStatus : LOCATING_START_ZONE;
     const gpsReadiness = next.lifecycle === 'armed' ? presented.gpsReadiness : WAITING_GPS_READINESS;
@@ -243,12 +367,12 @@ export class AttemptRuntime {
       const pending = withAttemptReconciliation(next, 'pending', 0);
       await this.attempts.finalizeAttempt(pending, terminalSessionInput(pending, this.now()));
       try {
-        const derived = await this.reconcileDerivedAttempt(pending, samples);
+        const derived = this.notifyCompleted(await this.reconcileDerivedAttempt(pending, samples));
         return { attempt: derived, startZoneStatus: armedStatus, gpsReadiness, liveMap };
       } catch {
         const failed = withAttemptReconciliation(pending, 'failed', 0);
         await this.attempts.saveAttempt(failed);
-        return { attempt: failed, startZoneStatus: armedStatus, gpsReadiness, liveMap };
+        return { attempt: this.notifyCompleted(failed), startZoneStatus: armedStatus, gpsReadiness, liveMap };
       }
     }
     await this.attempts.saveAttempt(next);
@@ -317,8 +441,9 @@ export class AttemptRuntime {
     return this.attempts.getAttempt(attemptId);
   }
 
-  async listAttempts(): Promise<Attempt[]> {
-    return this.attempts.listAttempts();
+  /** Defaults to full attempts only (DEC-016); pass `{ kind: 'all' }` for history that includes partials. */
+  async listAttempts(options?: AttemptListOptions): Promise<Attempt[]> {
+    return this.attempts.listAttempts(options);
   }
 
   async peekFailedReconciliationAttemptId(): Promise<string | null> {
@@ -331,16 +456,22 @@ export class AttemptRuntime {
     return this.attempts.listAttemptsNeedingReconciliation(currentVersion);
   }
 
-  async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
-    return this.attempts.listAttemptsForRoute(routeId);
+  async listAttemptsForRoute(routeId: string, options?: AttemptListOptions): Promise<Attempt[]> {
+    return this.attempts.listAttemptsForRoute(routeId, options);
   }
 
   async listAttemptsForJourney(
     originPlaceId: string,
     destinationPlaceId: string,
     transportationMode: TransportationMode,
+    options?: AttemptListOptions,
   ): Promise<Attempt[]> {
-    return this.attempts.listAttemptsForJourney(originPlaceId, destinationPlaceId, transportationMode);
+    return this.attempts.listAttemptsForJourney(
+      originPlaceId,
+      destinationPlaceId,
+      transportationMode,
+      options,
+    );
   }
 
   async countAttemptsReferencingPlace(placeId: string): Promise<number> {
@@ -582,6 +713,11 @@ export class AttemptRuntime {
   }
 
   private async placesForAttempt(attempt: Attempt): Promise<Place[]> {
+    if (attempt.kind === 'partial') {
+      // Only the checkpoint (origin) and the journey destination: other places and checkpoints can
+      // neither start nor finish a partial run.
+      return (await this.partialTimingContext(attempt))?.places ?? [];
+    }
     const active = await this.places.listActivePlaces();
     const extraIds = [attempt.originPlaceId, attempt.destinationPlaceId].filter(
       (id): id is string => id != null && !active.some((place) => place.id === id),
@@ -602,16 +738,15 @@ export class AttemptRuntime {
     places?: Place[],
   ): Promise<Attempt> {
     const resolvedPlaces = places ?? (await this.placesForAttempt(attempt));
-    const engine = replayPlaceTrace(resolvedPlaces, samples, {
-      armedAtMs: attempt.armedAtMs,
-      nowMs: this.now(),
-    });
+    const engine = this.replayEngine(attempt, resolvedPlaces, samples, this.now());
+    const isPartial = attempt.kind === 'partial';
     const next: Attempt = attachAttemptLocalStart(attempt, {
       ...attempt,
       lifecycle: engine.lifecycle,
       validity: engine.validity,
-      originPlaceId: engine.originPlaceId,
-      destinationPlaceId: engine.destinationPlaceId,
+      // The engine's origin is the checkpoint for a partial attempt; the journey identity set at arming stays.
+      originPlaceId: isPartial ? attempt.originPlaceId : engine.originPlaceId,
+      destinationPlaceId: isPartial ? attempt.destinationPlaceId : engine.destinationPlaceId,
       startedAtMs: engine.startedAtMs,
       finishedAtMs: engine.finishedAtMs,
     });
@@ -628,7 +763,9 @@ export class AttemptRuntime {
     }
     let working = attempt;
     let loaded = samples;
+    // A partial run starts mid-route, so it never matches a path variant (those are full-route paths).
     const needsPathAssignment =
+      working.kind !== 'partial' &&
       working.lifecycle === 'completed' &&
       working.originPlaceId != null &&
       working.destinationPlaceId != null &&

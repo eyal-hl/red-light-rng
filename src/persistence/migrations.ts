@@ -528,6 +528,108 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // Competitive checkpoints and partial attempts (#81, DEC-016). Purely additive and
+    // non-destructive: three new tables plus three new attempt columns. Every existing attempt
+    // becomes kind = 'full' with no checkpoint reference, so rankings/PB/statistics are unchanged.
+    // No raw sample, official time, attempt, place or route row is rewritten. Derived segment
+    // results are produced only by an explicit user-started recalculation, never by this migration.
+    version: 14,
+    async up(sql) {
+      await addColumnIfMissing(
+        sql,
+        'attempt',
+        'kind',
+        `kind TEXT NOT NULL DEFAULT 'full' CHECK (kind IN ('full', 'partial'))`,
+      );
+      await addColumnIfMissing(sql, 'attempt', 'start_checkpoint_id', `start_checkpoint_id TEXT`);
+      await addColumnIfMissing(
+        sql,
+        'attempt',
+        'checkpoint_config_version',
+        `checkpoint_config_version INTEGER`,
+      );
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS competitive_checkpoint_config (
+          id TEXT PRIMARY KEY NOT NULL,
+          origin_place_id TEXT NOT NULL,
+          destination_place_id TEXT NOT NULL,
+          transportation_mode TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL,
+          UNIQUE (origin_place_id, destination_place_id, transportation_mode, version),
+          FOREIGN KEY (origin_place_id) REFERENCES place(id) ON DELETE CASCADE,
+          FOREIGN KEY (destination_place_id) REFERENCES place(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_competitive_checkpoint_config_single_current
+        ON competitive_checkpoint_config(origin_place_id, destination_place_id, transportation_mode)
+        WHERE status = 'current';
+      `);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS competitive_checkpoint (
+          config_id TEXT NOT NULL,
+          checkpoint_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          latitude REAL NOT NULL,
+          longitude REAL NOT NULL,
+          radius_meters REAL NOT NULL,
+          PRIMARY KEY (config_id, checkpoint_id),
+          FOREIGN KEY (config_id) REFERENCES competitive_checkpoint_config(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_competitive_checkpoint_seq
+        ON competitive_checkpoint(config_id, seq);
+      `);
+      await sql.exec(`
+        CREATE TABLE IF NOT EXISTS attempt_segment_result (
+          id TEXT PRIMARY KEY NOT NULL,
+          attempt_id TEXT NOT NULL,
+          config_version INTEGER NOT NULL,
+          derivation_version INTEGER NOT NULL,
+          from_checkpoint_id TEXT,
+          to_checkpoint_id TEXT,
+          status TEXT NOT NULL,
+          unavailable_reason TEXT,
+          started_at_ms REAL,
+          ended_at_ms REAL,
+          duration_ms REAL,
+          derived_at_ms INTEGER NOT NULL,
+          FOREIGN KEY (attempt_id) REFERENCES attempt(id) ON DELETE CASCADE
+        );
+      `);
+      await sql.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_segment_result_pair
+        ON attempt_segment_result(
+          attempt_id, config_version, COALESCE(from_checkpoint_id, ''), COALESCE(to_checkpoint_id, '')
+        );
+      `);
+      await sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_attempt_segment_result_attempt
+        ON attempt_segment_result(attempt_id);
+      `);
+    },
+  },
+  {
+    // Segment recalculation job kind (#81). Additive: the existing job slot gains a kind
+    // (legacy rows are 'history'), a JSON scope for segment jobs, and a staging column for derived
+    // segment rows. Job tables stay local operational state outside the backup. No row rewritten.
+    version: 15,
+    async up(sql) {
+      await addColumnIfMissing(
+        sql,
+        'recalc_job',
+        'kind',
+        `kind TEXT NOT NULL DEFAULT 'history' CHECK (kind IN ('history', 'segments'))`,
+      );
+      await addColumnIfMissing(sql, 'recalc_job', 'scope_json', `scope_json TEXT`);
+      await addColumnIfMissing(sql, 'recalc_job_item', 'staged_segments_json', `staged_segments_json TEXT`);
+    },
+  },
 ];
 
 async function listTableColumns(sql: SqlExecutor, table: string): Promise<Set<string>> {

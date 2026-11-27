@@ -4,6 +4,7 @@ import {
 } from '../domain/history-recalculation';
 import type { Attempt } from '../domain/attempt';
 import type { MemoryAttemptStore } from './memory-attempt-store';
+import type { CompetitiveCheckpointStore } from './competitive-checkpoint-store';
 import type { PlaceStore } from './place-store';
 import type {
   CreateRecalculationJobResult,
@@ -21,6 +22,7 @@ function cloneItem(item: RecalculationItem): RecalculationItem {
   return {
     ...item,
     staged: item.staged ? { ...item.staged, crossings: item.staged.crossings.map((c) => ({ ...c })) } : null,
+    stagedSegments: item.stagedSegments ? item.stagedSegments.map((row) => ({ ...row })) : null,
   };
 }
 
@@ -33,6 +35,8 @@ export class MemoryRecalculationJobStore implements RecalculationJobStore {
     private readonly attempts: MemoryAttemptStore,
     private readonly places: PlaceStore,
     private readonly routes?: RouteStore,
+    /** Needed for segment jobs and to clear stale segment rows when a history job re-times a run. */
+    private readonly checkpoints?: CompetitiveCheckpointStore,
   ) {}
 
   async getJob(): Promise<RecalculationJob | null> {
@@ -53,6 +57,7 @@ export class MemoryRecalculationJobStore implements RecalculationJobStore {
       baseStartedAtMs: null,
       baseFinishedAtMs: null,
       staged: null,
+      stagedSegments: null,
     }));
     return { created: true, job: { ...this.job } };
   }
@@ -115,6 +120,7 @@ export class MemoryRecalculationJobStore implements RecalculationJobStore {
         item.baseStartedAtMs = result.baseStartedAtMs;
         item.baseFinishedAtMs = result.baseFinishedAtMs;
         item.staged = result.staged ? cloneItem({ ...item, staged: result.staged }).staged : null;
+        item.stagedSegments = result.stagedSegments ? result.stagedSegments.map((row) => ({ ...row })) : null;
       }
     }
     this.job.checkpointProcessed = this.items.filter((item) => item.jobId === jobId && item.state !== 'pending').length;
@@ -160,6 +166,9 @@ export class MemoryRecalculationJobStore implements RecalculationJobStore {
     if (recalculationPlacesFingerprint(await this.places.listPlaces()) !== job.placesFingerprint) {
       return { ok: false, reason: 'places_changed' };
     }
+    if (job.kind === 'segments') {
+      return this.publishSegments(job, nowMs);
+    }
     // Build the complete new state first; nothing is visible until the single atomic swap below.
     const writes: Attempt[] = [];
     const itemUpdates: { item: RecalculationItem; error: string | null }[] = [];
@@ -183,12 +192,54 @@ export class MemoryRecalculationJobStore implements RecalculationJobStore {
       itemUpdates.push({ item, error: null });
     }
     await this.attempts.saveAttemptsAtomically(writes);
+    for (const write of writes) {
+      await this.checkpoints?.deleteSegmentResultsForAttempt(write.id);
+    }
     for (const { item, error } of itemUpdates) {
       if (error) {
         item.state = 'error';
         item.detail = error;
       }
       item.staged = null;
+    }
+    this.job = { ...job, status: 'published', updatedAtMs: nowMs, completedAtMs: nowMs };
+    return { ok: true };
+  }
+
+  private async publishSegments(job: RecalculationJob, nowMs: number): Promise<PublishRecalculationResult> {
+    const checkpoints = this.checkpoints;
+    if (!checkpoints) {
+      return { ok: false, reason: 'config_changed' };
+    }
+    for (const entry of job.scope?.pools ?? []) {
+      const current = await checkpoints.getCurrentConfig(entry.pool);
+      if (!current || current.version !== entry.configVersion) {
+        return { ok: false, reason: 'config_changed' };
+      }
+    }
+    const batch: { attemptId: string; configVersion: number; results: NonNullable<RecalculationItem['stagedSegments']> }[] = [];
+    for (const item of this.items.filter((c) => c.jobId === job.id && c.state === 'updated')) {
+      const current = await this.attempts.getAttempt(item.attemptId);
+      const rows = item.stagedSegments;
+      if (
+        !rows ||
+        rows.length === 0 ||
+        !current ||
+        current.lifecycle !== 'completed' ||
+        current.startedAtMs !== item.baseStartedAtMs ||
+        current.finishedAtMs !== item.baseFinishedAtMs
+      ) {
+        item.state = 'error';
+        item.detail = 'Run changed or was removed during recalculation; original kept.';
+        item.stagedSegments = null;
+        continue;
+      }
+      batch.push({ attemptId: item.attemptId, configVersion: rows[0]!.configVersion, results: rows });
+      item.stagedSegments = null;
+    }
+    await checkpoints.replaceSegmentResults(batch);
+    for (const entry of job.scope?.pools ?? []) {
+      await checkpoints.pruneStaleSegmentResults(entry.pool, entry.configVersion);
     }
     this.job = { ...job, status: 'published', updatedAtMs: nowMs, completedAtMs: nowMs };
     return { ok: true };

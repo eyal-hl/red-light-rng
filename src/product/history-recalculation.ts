@@ -7,6 +7,7 @@ import {
   RECALCULATION_LIVE_ATTEMPT_REASON,
   RECALCULATION_NO_CANDIDATES_REASON,
   RECALCULATION_PLACES_CHANGED_MESSAGE,
+  SEGMENT_JOB_BLOCKS_HISTORY_REASON,
   recalculationPlacesFingerprint,
   type RecalculationJobStatus,
 } from '../domain/history-recalculation';
@@ -93,13 +94,20 @@ export class HistoryRecalculationService {
     this.onPublished = callback;
   }
 
+  /** The shared job slot's job, but only when it is a history job (segment jobs have their own service). */
+  private async historyJob(): Promise<RecalculationJob | null> {
+    const job = await this.deps.jobs.getJob();
+    return job && job.kind === 'history' ? job : null;
+  }
+
+  /** True while a job of ANY kind (history or segments) runs or awaits publication. */
   async hasBlockingJob(): Promise<boolean> {
     const job = await this.deps.jobs.getJob();
     return job != null && isBlockingRecalculationStatus(job.status);
   }
 
   async getProgress(): Promise<RecalculationProgress | null> {
-    const job = await this.deps.jobs.getJob();
+    const job = await this.historyJob();
     return job ? this.progressFor(job) : null;
   }
 
@@ -121,6 +129,9 @@ export class HistoryRecalculationService {
    */
   async start(options: { onlyAttemptIds?: string[] } = {}): Promise<StartRecalculationResult> {
     const existing = await this.deps.jobs.getJob();
+    if (existing && existing.kind !== 'history' && isBlockingRecalculationStatus(existing.status)) {
+      return { ok: false, reason: SEGMENT_JOB_BLOCKS_HISTORY_REASON };
+    }
     if (existing && isBlockingRecalculationStatus(existing.status)) {
       return { ok: true, alreadyExists: true, progress: await this.progressFor(existing) };
     }
@@ -136,6 +147,8 @@ export class HistoryRecalculationService {
     const created = await this.deps.jobs.createJob(
       {
         id: this.createJobId(),
+        kind: 'history',
+        scope: null,
         status: 'running',
         placesFingerprint: recalculationPlacesFingerprint(places),
         createdAtMs: nowMs,
@@ -154,7 +167,7 @@ export class HistoryRecalculationService {
 
   /** Starts a follow-up job for exactly the attempts that errored in the last job. */
   async retryFailed(): Promise<StartRecalculationResult> {
-    const job = await this.deps.jobs.getJob();
+    const job = await this.historyJob();
     if (!job) {
       return { ok: false, reason: 'There is no recalculation to retry.' };
     }
@@ -170,7 +183,7 @@ export class HistoryRecalculationService {
 
   /** Cancels before publication; staged results are discarded and nothing is changed. */
   async cancel(): Promise<{ ok: boolean; progress: RecalculationProgress | null }> {
-    const job = await this.deps.jobs.getJob();
+    const job = await this.historyJob();
     if (!job || !isBlockingRecalculationStatus(job.status)) {
       return { ok: false, progress: job ? await this.progressFor(job) : null };
     }
@@ -193,7 +206,7 @@ export class HistoryRecalculationService {
     this.running = true;
     try {
       for (;;) {
-        const job = await this.deps.jobs.getJob();
+        const job = await this.historyJob();
         if (!job || !isBlockingRecalculationStatus(job.status)) {
           return job ? { status: 'cancelled', progress: await this.progressFor(job) } : { status: 'none' };
         }

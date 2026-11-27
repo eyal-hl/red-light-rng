@@ -578,4 +578,37 @@ export const styles = StyleSheet.create({
     gap: 8,
     marginTop: 12,
   },
+  endpointRow: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#4caf50',
+    paddingLeft: 10,
+    paddingVertical: 6,
+    marginTop: 8,
+  },
+  endpointRowFinish: {
+    borderLeftColor: '#e53935',
+  },
+  checkpointCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffb300',
+    backgroundColor: '#1b1b1b',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 8,
+  },
+  checkpointCardSelected: {
+    backgroundColor: '#262626',
+  },
+  sourceBadge: {
+    color: '#c5c8ce',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  segmentChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
 });

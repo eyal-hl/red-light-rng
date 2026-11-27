@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { segmentEndpointLabel } from '../domain/attempt-analysis';
@@ -51,6 +51,10 @@ import {
 } from '../domain/wait-comparison';
 import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
 import { DeferredMapSlot } from './DeferredMapSlot';
+import { AttemptSegmentsPanel } from './AttemptSegmentsPanel';
+import { PotentialRecordPanel } from './PotentialRecordPanel';
+import type { CompetitiveSegmentsService } from '../product/competitive-segments';
+import { segmentHighlightPath, type AttemptSegmentsView } from '../product/competitive-segments-view';
 import { GhostDeltaChart } from './GhostDeltaChart';
 import { styles } from './styles';
 
@@ -73,6 +77,12 @@ type AttemptResultScreenProps = {
   onHideIncomplete?: () => void;
   onRestoreIncomplete?: () => void;
   onChangeMode?: (mode: TransportationMode) => void;
+  /** Competitive segment times (#81); omitted for callers without the feature. */
+  segments?: CompetitiveSegmentsService;
+  /** True only on the just-finished result screen: derive this run's segments if not stored yet. */
+  deriveSegmentsIfMissing?: boolean;
+  /** Segment to highlight on the map when opened from a segment board entry. */
+  initialSegmentKey?: string | null;
 };
 
 function qualityLabel(quality: AttemptDebugSample['match']['quality']): string {
@@ -733,6 +743,9 @@ export function AttemptResultScreen({
   onHideIncomplete,
   onRestoreIncomplete,
   onChangeMode,
+  segments,
+  deriveSegmentsIfMissing = false,
+  initialSegmentKey = null,
 }: AttemptResultScreenProps) {
   const completed = attempt.lifecycle === 'completed';
   const canHide = onHideIncomplete != null && canHideIncompleteAttempt(attempt);
@@ -757,6 +770,25 @@ export function AttemptResultScreen({
     point: GhostChartSelection;
   } | null>(null);
   const [pageScrollEnabled, setPageScrollEnabled] = useState(true);
+  const [segmentKeyState, setSegmentKeyState] = useState<{ attemptId: string; key: string | null } | null>(null);
+  const [segmentLoad, setSegmentLoad] = useState<{ attemptId: string; view: AttemptSegmentsView } | null>(null);
+  const segmentView = segmentLoad?.attemptId === attempt.id ? segmentLoad.view : null;
+  const onSegmentsLoaded = useCallback(
+    (attemptId: string, view: AttemptSegmentsView) => setSegmentLoad({ attemptId, view }),
+    [],
+  );
+  const highlightedSegmentKey =
+    segmentKeyState?.attemptId === attempt.id ? segmentKeyState.key : initialSegmentKey;
+  const highlightedRow = segmentView?.rows.find((row) => row.key === highlightedSegmentKey) ?? null;
+  const segmentHighlight = segmentHighlightPath(
+    debug?.place.samples.map((entry) => entry.sample) ?? [],
+    highlightedRow?.startedAtMs ?? null,
+    highlightedRow?.endedAtMs ?? null,
+  );
+  const segmentHighlightLines =
+    segmentHighlight.length >= 2 && highlightedRow
+      ? [{ id: 'segment-highlight', name: highlightedRow.label, path: segmentHighlight, color: '#ffb300' }]
+      : [];
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const selectedWaitId = selection?.attemptId === attempt.id ? selection.markerId : null;
   const selectedComparisonId = selection?.attemptId === attempt.id ? selection.comparisonId : null;
@@ -895,6 +927,7 @@ export function AttemptResultScreen({
             <DeferredMapSlot style={styles.attemptMap} label="Loading map…">
               <RouteMap
             path={route?.referencePath ?? []}
+            pathVariants={segmentHighlightLines}
             startZone={route?.startZone}
             finishZone={route?.finishZone}
             checkpoints={checkpoints}
@@ -976,7 +1009,16 @@ export function AttemptResultScreen({
         </View>
       ) : null}
 
-        {!competitive ? (
+        {!competitive && attempt.kind === 'partial' && completed ? (
+          <View>
+            <Text style={styles.kicker}>PARTIAL RUN</Text>
+            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.subtitle}>
+              This run started at a checkpoint. It counts on segment boards only, never on the full-route board or
+              personal best.
+            </Text>
+          </View>
+        ) : !competitive ? (
           <View>
             <Text style={styles.kicker}>{completed ? 'ATTEMPT COMPLETE' : 'ATTEMPT ENDED'}</Text>
             <Text style={styles.title}>
@@ -1019,6 +1061,20 @@ export function AttemptResultScreen({
             selectedComparisonId={selectedComparisonId}
             onSelectLocation={selectComparison}
           />
+        ) : null}
+        {segments ? (
+          <AttemptSegmentsPanel
+            key={attempt.id}
+            service={segments}
+            attempt={attempt}
+            deriveIfMissing={deriveSegmentsIfMissing}
+            highlightKey={highlightedSegmentKey}
+            onSelectSegment={(key) => setSegmentKeyState({ attemptId: attempt.id, key })}
+            onLoaded={onSegmentsLoaded}
+          />
+        ) : null}
+        {segments && attempt.kind === 'partial' && completed ? (
+          <PotentialRecordPanel key={`potential-${attempt.id}`} service={segments} attempt={attempt} />
         ) : null}
         {onChangeMode ? (
           <View>

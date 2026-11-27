@@ -9,6 +9,7 @@ import {
   JourneyStatisticsDashboard,
   type JourneyStatsView,
 } from './JourneyStatisticsDashboard';
+import type { PartialRunRow } from '../product/competitive-segments-view';
 import { styles } from './styles';
 
 type HistoryMode = 'chronological' | 'ranked';
@@ -27,6 +28,8 @@ type HistoryScreenProps = {
   onSelectGroup: (group: JourneyDepartureGroup | null) => void;
   onBack: () => void;
   onOpenAttempt: (attemptId: string) => void;
+  /** Partial (checkpoint-start) runs: shown separately, never ranked or counted (#81). Omitted/empty: unchanged. */
+  partialRows?: PartialRunRow[];
 };
 
 export function HistoryScreen({
@@ -43,6 +46,7 @@ export function HistoryScreen({
   onSelectGroup,
   onBack,
   onOpenAttempt,
+  partialRows = [],
 }: HistoryScreenProps) {
   const [statsView, setStatsView] = useState<JourneyStatsView>(
     groupFilter?.weekday != null ? 'weekday' : groupFilter?.hourBucket != null ? 'time-of-day' : 'overall',
@@ -114,6 +118,30 @@ export function HistoryScreen({
             </Pressable>
           ))
         )}
+        {partialRows.length > 0 ? (
+          <View accessibilityLabel="Partial runs">
+            <Text style={styles.sectionLabel}>PARTIAL RUNS</Text>
+            <Text style={styles.mutedText}>
+              These started at a checkpoint. They are not part of the full-route ranking, personal best or statistics.
+            </Text>
+            {partialRows.map((row) => (
+              <Pressable
+                key={row.attemptId}
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => onOpenAttempt(row.attemptId)}
+                style={styles.card}
+              >
+                <Text style={styles.cardTitle}>{formatAttemptStamp(row.finishedAtMs ?? row.armedAtMs)}</Text>
+                <Text style={styles.cardMeta}>
+                  {row.label}
+                  {row.startCheckpointName ? ` · from ${row.startCheckpointName}` : ''}
+                  {row.officialTimeMs != null ? ` · ${formatElapsed(row.officialTimeMs)}` : ''}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
       </ScrollView>
     </View>

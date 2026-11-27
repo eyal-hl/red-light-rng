@@ -1,3 +1,6 @@
+import { MemoryCompetitiveCheckpointStore } from '../../src/persistence/memory-competitive-checkpoint-store';
+import { SqliteCompetitiveCheckpointStore } from '../../src/persistence/sqlite-competitive-checkpoint-store';
+import { CompetitiveSegmentsService, SegmentRecalculationService } from '../../src/product/competitive-segments';
 import { MemoryRecalculationJobStore } from '../../src/persistence/memory-recalculation-job-store';
 import { SqliteRecalculationJobStore } from '../../src/persistence/sqlite-recalculation-job-store';
 import { HistoryRecalculationService } from '../../src/product/history-recalculation';
@@ -96,7 +99,8 @@ export function createMemoryWorkspace(options?: {
     now,
     () => options?.createAttemptId?.() ?? options?.attemptId ?? `attempt-${++nextAttempt}`,
   );
-  const jobs = new MemoryRecalculationJobStore(attempts, places, routes);
+  const checkpoints = new MemoryCompetitiveCheckpointStore(attempts);
+  const jobs = new MemoryRecalculationJobStore(attempts, places, routes, checkpoints);
   const recalc = new HistoryRecalculationService({
     jobs,
     attempts,
@@ -107,6 +111,23 @@ export function createMemoryWorkspace(options?: {
     createJobId: () => `job-${++nextJob}`,
     yieldToIdle: async () => {},
     chunkSize: options?.recalcChunkSize,
+  });
+  const segmentDeps = {
+    checkpoints,
+    attempts,
+    sessions,
+    places,
+    jobs,
+    now,
+    createJobId: () => `seg-job-${++nextJob}`,
+    yieldToIdle: async () => {},
+    chunkSize: options?.recalcChunkSize,
+  };
+  const segments = new CompetitiveSegmentsService(segmentDeps);
+  const segmentRecalc = new SegmentRecalculationService(segmentDeps);
+  attemptRuntime.setCompetitiveCheckpoints(checkpoints);
+  attemptRuntime.setOnAttemptCompleted((attempt) => {
+    void segments.deriveForAttempt(attempt.id);
   });
   const workspace = new RouteWorkspace(
     tracker,
@@ -120,8 +141,25 @@ export function createMemoryWorkspace(options?: {
     () => options?.routeId ?? 'route-1',
     () => options?.createPlaceId?.() ?? options?.placeId ?? `place-${++nextPlace}`,
     recalc,
+    segments,
+    segmentRecalc,
   );
-  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime, jobs, recalc };
+  return {
+    workspace,
+    sessions,
+    routes,
+    attempts,
+    places,
+    settings,
+    platform,
+    tracker,
+    attemptRuntime,
+    jobs,
+    recalc,
+    checkpoints,
+    segments,
+    segmentRecalc,
+  };
 }
 
 export function createSqliteWorkspace(
@@ -162,6 +200,7 @@ export function createSqliteWorkspace(
     now,
     () => options?.createAttemptId?.() ?? options?.attemptId ?? 'sql-attempt',
   );
+  const checkpoints = new SqliteCompetitiveCheckpointStore(async () => sql);
   const jobs = new SqliteRecalculationJobStore(async () => sql);
   const recalc = new HistoryRecalculationService({
     jobs,
@@ -173,6 +212,23 @@ export function createSqliteWorkspace(
     createJobId: () => `sql-job-${++nextJob}`,
     yieldToIdle: async () => {},
     chunkSize: options?.recalcChunkSize,
+  });
+  const segmentDeps = {
+    checkpoints,
+    attempts,
+    sessions,
+    places,
+    jobs,
+    now,
+    createJobId: () => `sql-seg-job-${++nextJob}`,
+    yieldToIdle: async () => {},
+    chunkSize: options?.recalcChunkSize,
+  };
+  const segments = new CompetitiveSegmentsService(segmentDeps);
+  const segmentRecalc = new SegmentRecalculationService(segmentDeps);
+  attemptRuntime.setCompetitiveCheckpoints(checkpoints);
+  attemptRuntime.setOnAttemptCompleted((attempt) => {
+    void segments.deriveForAttempt(attempt.id);
   });
   const workspace = new RouteWorkspace(
     tracker,
@@ -186,6 +242,23 @@ export function createSqliteWorkspace(
     () => options?.routeId ?? 'sql-route',
     () => options?.createPlaceId?.() ?? `sql-place-${++nextPlace}`,
     recalc,
+    segments,
+    segmentRecalc,
   );
-  return { workspace, sessions, routes, attempts, places, settings, platform, tracker, attemptRuntime, jobs, recalc };
+  return {
+    workspace,
+    sessions,
+    routes,
+    attempts,
+    places,
+    settings,
+    platform,
+    tracker,
+    attemptRuntime,
+    jobs,
+    recalc,
+    checkpoints,
+    segments,
+    segmentRecalc,
+  };
 }

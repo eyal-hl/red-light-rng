@@ -108,6 +108,9 @@ import { SettingsScreen } from './SettingsScreen';
 import { styles } from './styles';
 import { resolveAttemptDisplayRoute } from './attempt-display-route';
 import { handleSystemBack, type AppScreenKind } from './system-back';
+import { CheckpointsScreen } from './CheckpointsScreen';
+import { CheckpointStartPanel } from './CheckpointStartPanel';
+import type { PartialRunRow } from '../product/competitive-segments-view';
 
 function beginPathAnalyticsSignal(
   current: AbortController | null,
@@ -126,13 +129,14 @@ const LOCATING_ZONE: PlaceStartZoneStatus = {
 };
 
 type AppScreen =
-  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor' | 'history' | 'attempt-detail' | 'journey' | 'place-editor'> }
+  | { kind: Exclude<AppScreenKind, 'review' | 'detail' | 'editor' | 'history' | 'attempt-detail' | 'journey' | 'place-editor' | 'checkpoints'> }
   | { kind: 'review'; sessionId: string }
   | { kind: 'journey'; pool: JourneyPoolId }
   | { kind: 'detail'; routeId: string }
   | { kind: 'editor'; routeId: string }
   | { kind: 'history'; pool: JourneyPoolId }
-  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string; returnTo?: 'journey' }
+  | { kind: 'attempt-detail'; pool: JourneyPoolId; attemptId: string; returnTo?: 'journey'; segmentKey?: string }
+  | { kind: 'checkpoints'; pool: JourneyPoolId }
   | { kind: 'place-editor'; placeId: string | null };
 
 type AppRootProps = {
@@ -183,6 +187,9 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     emptyDepartureGrouping(),
   );
   const [journeyHistory, setJourneyHistory] = useState<JourneyHistoryRow[]>([]);
+  const [journeyPartialRuns, setJourneyPartialRuns] = useState<PartialRunRow[]>([]);
+  // Bumped when checkpoints or segment results change, so the journey's segment boards reload.
+  const [segmentsRefreshKey, setSegmentsRefreshKey] = useState(0);
   const [journeyPathVariants, setJourneyPathVariants] = useState<JourneyPathVariantSummary[]>([]);
   const [journeyHotspots, setJourneyHotspots] = useState<JourneyHotspotsState>({ status: 'idle' });
   const [activeAttempt, setActiveAttempt] = useState<Attempt | null>(null);
@@ -235,6 +242,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     setJourneyStatistics(loaded.statistics);
     setJourneyGrouping(loaded.departureGrouping);
     setJourneyHistory(loaded.history);
+    setJourneyPartialRuns(loaded.partialRuns);
     setJourneyPathVariants(loaded.pathVariants);
   }, []);
 
@@ -348,7 +356,14 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
 
   const showAttempt = useCallback(
     async (attempt: Attempt, signal?: AbortSignal) => {
-      if (attempt.originPlaceId) {
+      if (attempt.kind === 'partial') {
+        // A checkpoint start shows the checkpoint, not the journey's origin place.
+        const name = await workspace.segments?.resolveStartCheckpointName(attempt);
+        if (signal?.aborted) {
+          return;
+        }
+        setOriginName(name ?? null);
+      } else if (attempt.originPlaceId) {
         const origin = await workspace.getPlace(attempt.originPlaceId);
         if (signal?.aborted) {
           return;
@@ -608,7 +623,9 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
         setStartZoneStatus(processed.startZoneStatus);
         setGpsReadiness(processed.gpsReadiness);
         setLiveMap(processed.liveMap);
-        if (processed.attempt.originPlaceId) {
+        if (processed.attempt.kind === 'partial') {
+          setOriginName((await workspace.segments?.resolveStartCheckpointName(processed.attempt)) ?? null);
+        } else if (processed.attempt.originPlaceId) {
           const origin = await workspace.getPlace(processed.attempt.originPlaceId);
           setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
         } else {
@@ -783,6 +800,31 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
       setBusy(false);
     }
   }, [showAttempt, workspace]);
+
+  const onStartAtCheckpoint = useCallback(
+    async (pool: JourneyPoolId, startCheckpointId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.startAttempt({ partial: { pool, startCheckpointId } });
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        await showAttempt(result.attempt);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not start.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [showAttempt, workspace],
+  );
+
+  const getStartPosition = useCallback(async () => {
+    const fix = await workspace.getCurrentPosition();
+    return fix ? { latitude: fix.latitude, longitude: fix.longitude } : null;
+  }, [workspace]);
 
   const onCancelAttempt = useCallback(async () => {
     setBusy(true);
@@ -1343,6 +1385,56 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
     void loadJourney(pool);
   }, [loadJourney, screen]);
 
+  const onOpenCheckpoints = useCallback(() => {
+    if (screen.kind !== 'journey' || !workspace.segments) {
+      return;
+    }
+    setError(null);
+    const next = { kind: 'checkpoints' as const, pool: screen.pool };
+    screenRef.current = next;
+    setScreen(next);
+  }, [screen, workspace]);
+
+  const leaveCheckpointsToJourney = useCallback(() => {
+    if (screen.kind !== 'checkpoints') {
+      return;
+    }
+    const pool = screen.pool;
+    const next = { kind: 'journey' as const, pool };
+    screenRef.current = next;
+    setScreen(next);
+    void loadJourney(pool);
+  }, [loadJourney, screen]);
+
+  const onOpenSegmentAttempt = useCallback(
+    async (attemptId: string, segmentKey: string) => {
+      if (screen.kind !== 'journey') {
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const attempt = await workspace.getAttempt(attemptId);
+        if (!attempt) {
+          setError('This attempt is no longer available.');
+          return;
+        }
+        await showAttemptResult(attempt, undefined, {
+          kind: 'attempt-detail',
+          pool: screen.pool,
+          attemptId,
+          returnTo: 'journey',
+          segmentKey,
+        });
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not open this attempt.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [screen, showAttemptResult, workspace],
+  );
+
   const onOpenHotspotAttempt = useCallback(
     async (attemptId: string) => {
       if (screen.kind !== 'journey') {
@@ -1756,10 +1848,12 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
         leaveAttemptDetailToHistory: () => {
           void onBackFromHistoryDetail();
         },
+        leaveCheckpointsToJourney,
       }),
     );
     return () => sub.remove();
   }, [
+    leaveCheckpointsToJourney,
     leaveDetailToJourney,
     leavePlaceEditor,
     leaveToHome,
@@ -1834,6 +1928,19 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           onStart={() => {
             void onStartAttempt();
           }}
+          startPanel={
+            workspace.segments ? (
+              <CheckpointStartPanel
+                segments={workspace.segments}
+                mode={activeMode}
+                getCurrentPosition={getStartPosition}
+                disabled={busy || !canStartAttempt}
+                onStartAtCheckpoint={(pool, checkpointId) => {
+                  void onStartAtCheckpoint(pool, checkpointId);
+                }}
+              />
+            ) : undefined
+          }
           onOpenJourney={(originPlaceId, destinationPlaceId, mode) => {
             void onOpenJourney(originPlaceId, destinationPlaceId, mode);
           }}
@@ -2032,10 +2139,32 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           onOpenHotspotAttempt={(attemptId) => {
             void onOpenHotspotAttempt(attemptId);
           }}
+          segments={workspace.segments}
+          segmentsRefreshKey={segmentsRefreshKey}
+          onOpenCheckpoints={workspace.segments ? onOpenCheckpoints : undefined}
+          onOpenSegmentAttempt={(attemptId, segmentKey) => {
+            void onOpenSegmentAttempt(attemptId, segmentKey);
+          }}
         />
         ) : (
           <JourneyLoadingShell onBack={leaveToHome} error={error} />
         )
+      ) : null}
+      {screen.kind === 'checkpoints' && workspace.segments && workspace.segmentRecalculation && originPlace && destinationPlace ? (
+        <CheckpointsScreen
+          pool={screen.pool}
+          origin={originPlace}
+          destination={destinationPlace}
+          places={places}
+          segments={workspace.segments}
+          recalculation={workspace.segmentRecalculation}
+          getCurrentPosition={async () => {
+            const fix = await workspace.getCurrentPosition();
+            return fix ? { latitude: fix.latitude, longitude: fix.longitude } : null;
+          }}
+          onBack={leaveCheckpointsToJourney}
+          onChanged={() => setSegmentsRefreshKey((key) => key + 1)}
+        />
       ) : null}
       {screen.kind === 'detail' && selectedRoute ? (
         <RouteDetailScreen
@@ -2088,6 +2217,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           busy={busy}
           error={error}
           onRetryPathAnalytics={retryPathAnalytics}
+          segments={workspace.segments}
+          deriveSegmentsIfMissing
           onDone={() => {
             void onAcknowledgeAttempt();
           }}
@@ -2114,6 +2245,7 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           grouping={journeyGrouping}
           rows={journeyHistory}
           rankedRows={journeyHistory.filter((row) => row.eligible && row.rank != null)}
+          partialRows={journeyPartialRuns}
           mode={historyMode}
           groupFilter={historyGroupFilter}
           busy={busy}
@@ -2145,6 +2277,8 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           error={error}
           onRetryPathAnalytics={retryPathAnalytics}
           doneLabel="BACK"
+          segments={workspace.segments}
+          initialSegmentKey={screen.kind === 'attempt-detail' ? (screen.segmentKey ?? null) : null}
           onDone={() => {
             void onBackFromHistoryDetail();
           }}

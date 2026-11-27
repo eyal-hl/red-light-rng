@@ -11,6 +11,17 @@ export class OpenAttemptExistsError extends Error {
   }
 }
 
+/**
+ * Which attempt kinds a list query returns. Every list that feeds full-route ranking, PB, median,
+ * statistics or history DEFAULTS to `full` (DEC-016): a partial attempt only appears when a caller
+ * asks for `partial` or `all` explicitly.
+ */
+export type AttemptKindFilter = 'full' | 'partial' | 'all';
+
+export type AttemptListOptions = {
+  kind?: AttemptKindFilter;
+};
+
 export interface AttemptStore {
   createAttempt(attempt: Attempt): Promise<void>;
   saveAttempt(attempt: Attempt): Promise<void>;
@@ -19,12 +30,13 @@ export interface AttemptStore {
   getAttemptBySessionId(sessionId: string): Promise<Attempt | null>;
   getOpenAttempt(): Promise<Attempt | null>;
   getUnacknowledgedResult(): Promise<Attempt | null>;
-  listAttempts(): Promise<Attempt[]>;
-  listAttemptsForRoute(routeId: string): Promise<Attempt[]>;
+  listAttempts(options?: AttemptListOptions): Promise<Attempt[]>;
+  listAttemptsForRoute(routeId: string, options?: AttemptListOptions): Promise<Attempt[]>;
   listAttemptsForJourney(
     originPlaceId: string,
     destinationPlaceId: string,
     transportationMode: string,
+    options?: AttemptListOptions,
   ): Promise<Attempt[]>;
   isPlaceReferenced(placeId: string): Promise<boolean>;
   countAttemptsReferencingPlace(placeId: string): Promise<number>;

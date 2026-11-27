@@ -1,6 +1,7 @@
 import { EMPTY_ATTEMPT_LOCAL_START, type Attempt } from '../domain/attempt';
 import { reconstructAttemptLocalStart } from '../domain/attempt-local-time';
 import { CURRENT_ATTEMPT_RECONCILIATION_VERSION } from '../domain/attempt-reconciliation';
+import { partialTimingPlaces, replayPartialTrace } from '../domain/partial-timing';
 import { replayPlaceTrace, type PlaceTimingPlace } from '../domain/place-timing';
 import {
   BackupError,
@@ -76,6 +77,78 @@ export function terminalizeRestoredLiveState(payload: BackupPayload): {
       return attempt;
     }
     const stoppedAtMs = stopTimeFor(attempt.session_id, attempt.armed_at_ms);
+    if (attempt.kind === 'partial') {
+      // Replay a checkpoint start with the immutable configuration version stored on the attempt
+      // (the same engine as live timing). Without that configuration or destination it is a labeled
+      // partial non-result.
+      const config = payload.competitive_checkpoint_configs.find(
+        (item) =>
+          item.origin_place_id === attempt.origin_place_id &&
+          item.destination_place_id === attempt.destination_place_id &&
+          item.transportation_mode === attempt.transportation_mode &&
+          item.version === attempt.checkpoint_config_version,
+      );
+      const checkpoint = config?.checkpoints.find((item) => item.checkpoint_id === attempt.start_checkpoint_id);
+      const destinationRow = attempt.destination_place_id ? placesById.get(attempt.destination_place_id) : undefined;
+      let completedPartial = false;
+      let startedMs: number | null = null;
+      let finishedMs: number | null = null;
+      if (checkpoint && destinationRow) {
+        const partialPlaces = partialTimingPlaces(
+          {
+            id: checkpoint.checkpoint_id,
+            name: checkpoint.name,
+            center: { latitude: checkpoint.latitude, longitude: checkpoint.longitude },
+            radiusMeters: checkpoint.radius_meters,
+          },
+          {
+            id: destinationRow.id,
+            name: destinationRow.name,
+            center: { latitude: destinationRow.latitude, longitude: destinationRow.longitude },
+            departureRadiusMeters: destinationRow.departure_radius_meters,
+            arrivalRadiusMeters: destinationRow.arrival_radius_meters,
+          },
+        );
+        const partialSamples = [...(samplesBySession.get(attempt.session_id) ?? [])]
+          .sort((a, b) => a.recorded_at_ms - b.recorded_at_ms || a.id.localeCompare(b.id))
+          .map(mapLocationSampleRow);
+        const partialEngine = replayPartialTrace(
+          partialPlaces,
+          { latitude: destinationRow.latitude, longitude: destinationRow.longitude },
+          partialSamples,
+          { armedAtMs: attempt.armed_at_ms, nowMs: stoppedAtMs },
+        );
+        completedPartial =
+          partialEngine.lifecycle === 'completed' &&
+          partialEngine.validity === 'valid' &&
+          partialEngine.startedAtMs != null &&
+          partialEngine.finishedAtMs != null;
+        startedMs = partialEngine.startedAtMs;
+        finishedMs = completedPartial ? partialEngine.finishedAtMs : null;
+      }
+      const lifecycle: Attempt['lifecycle'] = completedPartial ? 'completed' : 'ended';
+      lifecycleBySession.set(attempt.session_id, lifecycle);
+      report.attempts.push({ attemptId: attempt.id, outcome: completedPartial ? 'completed' : 'incomplete' });
+      const local = startedMs == null ? EMPTY_ATTEMPT_LOCAL_START : reconstructAttemptLocalStart(startedMs);
+      return {
+        ...attempt,
+        lifecycle,
+        validity: completedPartial ? 'valid' : 'unranked',
+        started_at_ms: startedMs,
+        finished_at_ms: finishedMs,
+        started_utc_offset_minutes: local.startedUtcOffsetMinutes,
+        started_timezone_id: local.startedTimezoneId,
+        started_local_time_source: local.startedLocalTimeSource,
+        result_acknowledged: completedPartial ? attempt.result_acknowledged : 1,
+        hidden_incomplete: 0,
+        route_id: null,
+        crossings: [],
+        segment_results: [],
+        // Partial runs never take part in path-variant reconciliation.
+        reconciliation_status: 'reconciled',
+        reconciliation_version: CURRENT_ATTEMPT_RECONCILIATION_VERSION,
+      };
+    }
     const knownIds = new Set(activePlaces.map((place) => place.id));
     const extras = [attempt.origin_place_id, attempt.destination_place_id]
       .filter((id): id is string => id != null && !knownIds.has(id))
@@ -137,6 +210,7 @@ export function terminalizeRestoredLiveState(payload: BackupPayload): {
       hidden_incomplete: 0,
       route_id: null,
       crossings: [],
+      segment_results: [],
       // Derived path/checkpoint assignment is recomputed from the stored samples on next startup.
       reconciliation_status: completed ? 'pending' : 'reconciled',
       reconciliation_version: completed ? 0 : CURRENT_ATTEMPT_RECONCILIATION_VERSION,
@@ -197,8 +271,11 @@ const WIPE_ORDER = [
   // in-progress job is discarded so no half-committed staged result can outlive a restore.
   'recalc_job_item',
   'recalc_job',
+  'attempt_segment_result',
   'attempt_checkpoint_crossing',
   'attempt',
+  'competitive_checkpoint',
+  'competitive_checkpoint_config',
   'route_checkpoint',
   'route_reference_point',
   'route',
@@ -382,6 +459,9 @@ async function writePayload(sql: SqlExecutor, payload: BackupPayload): Promise<v
       'hidden_incomplete',
       'reconciliation_status',
       'reconciliation_version',
+      'kind',
+      'start_checkpoint_id',
+      'checkpoint_config_version',
     ],
     payload.attempts.map((a) => [
       a.id,
@@ -402,7 +482,74 @@ async function writePayload(sql: SqlExecutor, payload: BackupPayload): Promise<v
       a.hidden_incomplete,
       a.reconciliation_status,
       a.reconciliation_version,
+      a.kind,
+      a.start_checkpoint_id,
+      a.checkpoint_config_version,
     ]),
+  );
+  await insertRows(
+    sql,
+    'competitive_checkpoint_config',
+    [
+      'id',
+      'origin_place_id',
+      'destination_place_id',
+      'transportation_mode',
+      'version',
+      'status',
+      'created_at_ms',
+    ],
+    payload.competitive_checkpoint_configs.map((c) => [
+      c.id,
+      c.origin_place_id,
+      c.destination_place_id,
+      c.transportation_mode,
+      c.version,
+      c.status,
+      c.created_at_ms,
+    ]),
+  );
+  await insertRows(
+    sql,
+    'competitive_checkpoint',
+    ['config_id', 'checkpoint_id', 'seq', 'name', 'latitude', 'longitude', 'radius_meters'],
+    payload.competitive_checkpoint_configs.flatMap((c) =>
+      c.checkpoints.map((p, seq) => [c.id, p.checkpoint_id, seq, p.name, p.latitude, p.longitude, p.radius_meters]),
+    ),
+  );
+  await insertRows(
+    sql,
+    'attempt_segment_result',
+    [
+      'id',
+      'attempt_id',
+      'config_version',
+      'derivation_version',
+      'from_checkpoint_id',
+      'to_checkpoint_id',
+      'status',
+      'unavailable_reason',
+      'started_at_ms',
+      'ended_at_ms',
+      'duration_ms',
+      'derived_at_ms',
+    ],
+    payload.attempts.flatMap((a) =>
+      a.segment_results.map((r) => [
+        r.id,
+        a.id,
+        r.config_version,
+        r.derivation_version,
+        r.from_checkpoint_id,
+        r.to_checkpoint_id,
+        r.status,
+        r.unavailable_reason,
+        r.started_at_ms,
+        r.ended_at_ms,
+        r.duration_ms,
+        r.derived_at_ms,
+      ]),
+    ),
   );
   await insertRows(
     sql,
@@ -459,6 +606,9 @@ export async function restoreBackupPayload(sql: SqlExecutor, parsed: BackupPaylo
         route_reference_point: await tableCount(tx, 'route_reference_point'),
         route_checkpoint: await tableCount(tx, 'route_checkpoint'),
         attempt_checkpoint_crossing: await tableCount(tx, 'attempt_checkpoint_crossing'),
+        competitive_checkpoint_config: await tableCount(tx, 'competitive_checkpoint_config'),
+        competitive_checkpoint: await tableCount(tx, 'competitive_checkpoint'),
+        attempt_segment_result: await tableCount(tx, 'attempt_segment_result'),
         app_setting: await tableCount(tx, 'app_setting'),
       };
       if ((await tableCount(tx, 'recalc_job')) !== 0 || (await tableCount(tx, 'recalc_job_item')) !== 0) {
@@ -473,6 +623,9 @@ export async function restoreBackupPayload(sql: SqlExecutor, parsed: BackupPaylo
         actual.route_reference_point !== expected.route_reference_points ||
         actual.route_checkpoint !== expected.route_checkpoints ||
         actual.attempt_checkpoint_crossing !== expected.attempt_checkpoint_crossings ||
+        actual.competitive_checkpoint_config !== expected.competitive_checkpoint_configs ||
+        actual.competitive_checkpoint !== expected.competitive_checkpoints ||
+        actual.attempt_segment_result !== expected.attempt_segment_results ||
         actual.app_setting !== expected.settings
       ) {
         throw new BackupError('restore_failed', 'Restored record counts do not match the backup.');

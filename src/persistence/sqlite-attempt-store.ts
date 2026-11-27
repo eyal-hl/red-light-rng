@@ -1,4 +1,5 @@
 import {
+  parseAttemptKind,
   parseAttemptLocalTimeSource,
   type Attempt,
   type AttemptCheckpointCrossing,
@@ -7,7 +8,12 @@ import {
 } from '../domain/attempt';
 import { parseAttemptReconciliationStatus } from '../domain/attempt-reconciliation';
 import type { TransportationMode } from '../domain/route';
-import { OpenAttemptExistsError, type AttemptStore } from './attempt-store';
+import {
+  OpenAttemptExistsError,
+  type AttemptKindFilter,
+  type AttemptListOptions,
+  type AttemptStore,
+} from './attempt-store';
 import type { CompleteSessionInput } from './location-sample-store';
 import type { AttemptCheckpointCrossingRow, AttemptRow } from './schema';
 import type { SqlExecutor } from './sql-executor';
@@ -44,7 +50,19 @@ function mapAttempt(row: AttemptRow, crossings: AttemptCheckpointCrossing[]): At
     crossings,
     reconciliationStatus: parseAttemptReconciliationStatus(row.reconciliation_status),
     reconciliationVersion: row.reconciliation_version ?? 0,
+    kind: parseAttemptKind(row.kind),
+    startCheckpointId: row.start_checkpoint_id ?? null,
+    checkpointConfigVersion: row.checkpoint_config_version ?? null,
   };
+}
+
+/** SQL predicate for a kind filter; the default (and legacy NULL-safe) behaviour is `full` only. */
+function kindClause(options: AttemptListOptions | undefined, column = 'kind'): string {
+  const kind: AttemptKindFilter = options?.kind ?? 'full';
+  if (kind === 'all') {
+    return '1 = 1';
+  }
+  return kind === 'partial' ? `${column} = 'partial'` : `${column} = 'full'`;
 }
 
 /** Upserts one attempt and replaces its crossings on `sql`; callers own the transaction. */
@@ -54,8 +72,9 @@ export async function writeAttemptRecord(sql: SqlExecutor, attempt: Attempt): Pr
        id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
        lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
        started_utc_offset_minutes, started_timezone_id, started_local_time_source, result_acknowledged,
-       hidden_incomplete, reconciliation_status, reconciliation_version
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       hidden_incomplete, reconciliation_status, reconciliation_version,
+       kind, start_checkpoint_id, checkpoint_config_version
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        route_id = excluded.route_id,
        origin_place_id = excluded.origin_place_id,
@@ -71,7 +90,10 @@ export async function writeAttemptRecord(sql: SqlExecutor, attempt: Attempt): Pr
        result_acknowledged = excluded.result_acknowledged,
        hidden_incomplete = excluded.hidden_incomplete,
        reconciliation_status = excluded.reconciliation_status,
-       reconciliation_version = excluded.reconciliation_version`,
+       reconciliation_version = excluded.reconciliation_version,
+       kind = excluded.kind,
+       start_checkpoint_id = excluded.start_checkpoint_id,
+       checkpoint_config_version = excluded.checkpoint_config_version`,
     [
       attempt.id,
       attempt.routeId,
@@ -91,6 +113,9 @@ export async function writeAttemptRecord(sql: SqlExecutor, attempt: Attempt): Pr
       attempt.hiddenIncomplete === true ? 1 : 0,
       parseAttemptReconciliationStatus(attempt.reconciliationStatus),
       attempt.reconciliationVersion ?? 0,
+      parseAttemptKind(attempt.kind),
+      attempt.startCheckpointId ?? null,
+      attempt.checkpointConfigVersion ?? null,
     ],
   );
   await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attempt.id]);
@@ -195,9 +220,11 @@ export class SqliteAttemptStore implements AttemptStore {
     return mapAttempt(row, await this.loadCrossings(sql, row.id));
   }
 
-  async listAttempts(): Promise<Attempt[]> {
+  async listAttempts(options?: AttemptListOptions): Promise<Attempt[]> {
     const sql = await this.getSql();
-    const rows = await sql.getAll<AttemptRow>('SELECT * FROM attempt ORDER BY armed_at_ms DESC');
+    const rows = await sql.getAll<AttemptRow>(
+      `SELECT * FROM attempt WHERE ${kindClause(options)} ORDER BY armed_at_ms DESC`,
+    );
     const attempts: Attempt[] = [];
     for (const row of rows) {
       attempts.push(mapAttempt(row, await this.loadCrossings(sql, row.id)));
@@ -205,10 +232,10 @@ export class SqliteAttemptStore implements AttemptStore {
     return attempts;
   }
 
-  async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
+  async listAttemptsForRoute(routeId: string, options?: AttemptListOptions): Promise<Attempt[]> {
     const sql = await this.getSql();
     const rows = await sql.getAll<AttemptRow>(
-      'SELECT * FROM attempt WHERE route_id = ? ORDER BY armed_at_ms DESC',
+      `SELECT * FROM attempt WHERE route_id = ? AND ${kindClause(options)} ORDER BY armed_at_ms DESC`,
       [routeId],
     );
     const attempts: Attempt[] = [];
@@ -222,11 +249,13 @@ export class SqliteAttemptStore implements AttemptStore {
     originPlaceId: string,
     destinationPlaceId: string,
     transportationMode: string,
+    options?: AttemptListOptions,
   ): Promise<Attempt[]> {
     const sql = await this.getSql();
     const rows = await sql.getAll<AttemptRow>(
       `SELECT * FROM attempt
        WHERE origin_place_id = ? AND destination_place_id = ? AND transportation_mode = ?
+         AND ${kindClause(options)}
        ORDER BY armed_at_ms DESC`,
       [originPlaceId, destinationPlaceId, transportationMode],
     );
@@ -256,6 +285,7 @@ export class SqliteAttemptStore implements AttemptStore {
     const rows = await sql.getAll<AttemptRow>(
       `SELECT * FROM attempt
        WHERE lifecycle NOT IN ('armed', 'active')
+         AND kind = 'full'
          AND (
            reconciliation_status IN ('pending', 'failed')
            OR reconciliation_version IS NULL
@@ -275,7 +305,7 @@ export class SqliteAttemptStore implements AttemptStore {
     const sql = await this.getSql();
     const row = await sql.getFirst<{ id: string }>(
       `SELECT id FROM attempt
-       WHERE reconciliation_status = 'failed'
+       WHERE reconciliation_status = 'failed' AND kind = 'full'
        ORDER BY armed_at_ms DESC
        LIMIT 1`,
     );
@@ -286,6 +316,7 @@ export class SqliteAttemptStore implements AttemptStore {
     const sql = await this.getSql();
     await sql.withTransaction(async () => {
       await sql.run('DELETE FROM attempt_checkpoint_crossing WHERE attempt_id = ?', [attemptId]);
+      await sql.run('DELETE FROM attempt_segment_result WHERE attempt_id = ?', [attemptId]);
       await sql.run('DELETE FROM attempt WHERE id = ?', [attemptId]);
     });
   }

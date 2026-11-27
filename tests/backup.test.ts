@@ -281,7 +281,7 @@ describe('backup format and deterministic serialization', () => {
     assert.equal(document.backup_format_version, CURRENT_BACKUP_FORMAT_VERSION);
     assert.equal(document.created_at_ms, CREATED_AT_MS);
     assert.equal(document.created_at_utc, new Date(CREATED_AT_MS).toISOString());
-    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 13 });
+    assert.deepEqual(document.source, { app_version: '0.1.0', schema_version: 15 });
     assert.deepEqual(document.counts, {
       places: 3,
       routes: 2,
@@ -291,6 +291,9 @@ describe('backup format and deterministic serialization', () => {
       route_reference_points: document.payload.routes.reduce((n: number, r: any) => n + r.reference_path.length, 0),
       route_checkpoints: 2,
       attempt_checkpoint_crossings: 2,
+      competitive_checkpoint_configs: 0,
+      competitive_checkpoints: 0,
+      attempt_segment_results: 0,
       settings: 1,
     });
     assert.equal(document.integrity.algorithm, 'sha256');
@@ -594,7 +597,7 @@ describe('backup validation rejects bad files with zero writes', () => {
     {
       name: 'future format version',
       code: 'unsupported_version',
-      make: (text) => text.replace('"backup_format_version":2', '"backup_format_version":3'),
+      make: (text) => text.replace('"backup_format_version":3', '"backup_format_version":4'),
     },
     {
       name: 'future format version with valid checksum',
@@ -1346,8 +1349,8 @@ describe('independent Place departure and arrival radii (#77)', () => {
     };
   }
 
-  it('declares format version 2 and exports both radii (legacy column excluded)', async () => {
-    assert.equal(CURRENT_BACKUP_FORMAT_VERSION, 2);
+  it('exports both radii (legacy column excluded) in the current format', async () => {
+    assert.equal(CURRENT_BACKUP_FORMAT_VERSION, 3);
     const sql = await openMigratedDb();
     await seedRepresentativeHistory(sql);
     await sql.run(
@@ -1392,6 +1395,17 @@ describe('independent Place departure and arrival radii (#77)', () => {
     const legacy = structuredClone(current);
     legacy.backup_format_version = 1;
     legacy.source.schema_version = 11;
+    // A genuine format-1 file predates the #81 fields: strip them so the adapters are exercised.
+    delete legacy.payload.competitive_checkpoint_configs;
+    legacy.payload.attempts = legacy.payload.attempts.map((attempt: Record<string, any>) => {
+      const { kind: _k, start_checkpoint_id: _s, checkpoint_config_version: _c, segment_results: _r, ...rest } = attempt;
+      return rest;
+    });
+    legacy.counts = Object.fromEntries(
+      Object.entries(legacy.counts).filter(
+        ([key]) => !['competitive_checkpoint_configs', 'competitive_checkpoints', 'attempt_segment_results'].includes(key),
+      ),
+    );
     legacy.payload.places = legacy.payload.places.map((place: Record<string, any>) => {
       const { departure_radius_meters: radius, arrival_radius_meters: _arrival, ...rest } = place;
       return { ...rest, radius_meters: radius };
