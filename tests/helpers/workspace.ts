@@ -125,6 +125,7 @@ export function createMemoryWorkspace(options?: {
   };
   const segments = new CompetitiveSegmentsService(segmentDeps);
   const segmentRecalc = new SegmentRecalculationService(segmentDeps);
+  attemptRuntime.setCompetitiveCheckpoints(checkpoints);
   attemptRuntime.setOnAttemptCompleted((attempt) => {
     void segments.deriveForAttempt(attempt.id);
   });
@@ -225,6 +226,7 @@ export function createSqliteWorkspace(
   };
   const segments = new CompetitiveSegmentsService(segmentDeps);
   const segmentRecalc = new SegmentRecalculationService(segmentDeps);
+  attemptRuntime.setCompetitiveCheckpoints(checkpoints);
   attemptRuntime.setOnAttemptCompleted((attempt) => {
     void segments.deriveForAttempt(attempt.id);
   });

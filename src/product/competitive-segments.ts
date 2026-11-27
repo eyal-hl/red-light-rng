@@ -20,6 +20,8 @@ import {
   type SegmentRecalculationScope,
 } from '../domain/history-recalculation';
 import { createId } from '../domain/ids';
+import type { TransportationMode } from '../domain/route';
+import type { StartOptionsJourney } from '../domain/start-options';
 import { journeyPoolKey } from '../domain/journey';
 import {
   deriveSegments,
@@ -226,6 +228,38 @@ export class CompetitiveSegmentsService {
     }
     const config = await this.deps.checkpoints.getConfig(pool, attempt.checkpointConfigVersion);
     return config?.checkpoints.find((item) => item.id === attempt.startCheckpointId)?.name ?? null;
+  }
+
+  /**
+   * Journeys of `mode` with current competitive checkpoints, for the Home start panel. Empty (so the
+   * plain START flow is the only thing shown) when no journey is configured.
+   */
+  async listStartOptions(mode: TransportationMode): Promise<StartOptionsJourney[]> {
+    const configs = (await this.deps.checkpoints.listCurrentConfigs()).filter(
+      (config) => config.pool.transportationMode === mode && config.checkpoints.length > 0,
+    );
+    const journeys: StartOptionsJourney[] = [];
+    for (const config of configs) {
+      const [origin, destination] = await Promise.all([
+        this.deps.places.getPlace(config.pool.originPlaceId),
+        this.deps.places.getPlace(config.pool.destinationPlaceId),
+      ]);
+      if (!origin || !destination || origin.status !== 'active' || destination.status !== 'active') {
+        continue;
+      }
+      journeys.push({
+        pool: config.pool,
+        originName: origin.name,
+        destinationName: destination.name,
+        origin,
+        destination,
+        configVersion: config.version,
+        checkpoints: config.checkpoints,
+      });
+    }
+    return journeys.sort((a, b) =>
+      `${a.originName} ${a.destinationName}`.localeCompare(`${b.originName} ${b.destinationName}`),
+    );
   }
 
   async getCurrentConfig(pool: CompetitiveCheckpointPool): Promise<CompetitiveCheckpointConfig | null> {

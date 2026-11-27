@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import type { Attempt } from '../domain/attempt';
@@ -36,6 +36,8 @@ type HomeScreenProps = {
   onRecordPathVariant: () => void;
   onOpenPending: () => void;
   onRetryReconciliation: () => void;
+  /** Optional checkpoint start options (#81); absent/empty keeps the plain START flow exactly as is. */
+  startPanel?: ReactNode;
 };
 
 export function HomeScreen({
@@ -61,6 +63,7 @@ export function HomeScreen({
   onRecordPathVariant,
   onOpenPending,
   onRetryReconciliation,
+  startPanel,
 }: HomeScreenProps) {
   const startDisabled = busy || !canStartAttempt;
   const recordDisabled = busy || !canStartNewRecording;
@@ -113,6 +116,8 @@ export function HomeScreen({
             other saved place you enter.
           </Text>
         )}
+
+        {startPanel}
 
         <Text style={styles.sectionLabel}>JOURNEYS</Text>
         {journeys.length === 0 ? (

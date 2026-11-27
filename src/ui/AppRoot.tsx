@@ -109,6 +109,7 @@ import { styles } from './styles';
 import { resolveAttemptDisplayRoute } from './attempt-display-route';
 import { handleSystemBack, type AppScreenKind } from './system-back';
 import { CheckpointsScreen } from './CheckpointsScreen';
+import { CheckpointStartPanel } from './CheckpointStartPanel';
 import type { PartialRunRow } from '../product/competitive-segments-view';
 
 function beginPathAnalyticsSignal(
@@ -355,7 +356,14 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
 
   const showAttempt = useCallback(
     async (attempt: Attempt, signal?: AbortSignal) => {
-      if (attempt.originPlaceId) {
+      if (attempt.kind === 'partial') {
+        // A checkpoint start shows the checkpoint, not the journey's origin place.
+        const name = await workspace.segments?.resolveStartCheckpointName(attempt);
+        if (signal?.aborted) {
+          return;
+        }
+        setOriginName(name ?? null);
+      } else if (attempt.originPlaceId) {
         const origin = await workspace.getPlace(attempt.originPlaceId);
         if (signal?.aborted) {
           return;
@@ -615,7 +623,9 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
         setStartZoneStatus(processed.startZoneStatus);
         setGpsReadiness(processed.gpsReadiness);
         setLiveMap(processed.liveMap);
-        if (processed.attempt.originPlaceId) {
+        if (processed.attempt.kind === 'partial') {
+          setOriginName((await workspace.segments?.resolveStartCheckpointName(processed.attempt)) ?? null);
+        } else if (processed.attempt.originPlaceId) {
           const origin = await workspace.getPlace(processed.attempt.originPlaceId);
           setOriginName(origin?.name ?? processed.startZoneStatus.placeName);
         } else {
@@ -790,6 +800,31 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
       setBusy(false);
     }
   }, [showAttempt, workspace]);
+
+  const onStartAtCheckpoint = useCallback(
+    async (pool: JourneyPoolId, startCheckpointId: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await workspace.startAttempt({ partial: { pool, startCheckpointId } });
+        if (!result.ok) {
+          setError(result.reason);
+          return;
+        }
+        await showAttempt(result.attempt);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : 'Could not start.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [showAttempt, workspace],
+  );
+
+  const getStartPosition = useCallback(async () => {
+    const fix = await workspace.getCurrentPosition();
+    return fix ? { latitude: fix.latitude, longitude: fix.longitude } : null;
+  }, [workspace]);
 
   const onCancelAttempt = useCallback(async () => {
     setBusy(true);
@@ -1893,6 +1928,19 @@ export function AppRoot({ workspace, backupService }: AppRootProps) {
           onStart={() => {
             void onStartAttempt();
           }}
+          startPanel={
+            workspace.segments ? (
+              <CheckpointStartPanel
+                segments={workspace.segments}
+                mode={activeMode}
+                getCurrentPosition={getStartPosition}
+                disabled={busy || !canStartAttempt}
+                onStartAtCheckpoint={(pool, checkpointId) => {
+                  void onStartAtCheckpoint(pool, checkpointId);
+                }}
+              />
+            ) : undefined
+          }
           onOpenJourney={(originPlaceId, destinationPlaceId, mode) => {
             void onOpenJourney(originPlaceId, destinationPlaceId, mode);
           }}

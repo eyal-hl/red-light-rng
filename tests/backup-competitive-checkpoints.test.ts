@@ -334,3 +334,58 @@ describe('backup format 3: competitive checkpoints and partial attempts (#81)', 
     );
   });
 });
+
+describe('restored open partial attempts are replayed, not trusted (#81)', () => {
+  it('replays a checkpoint start from the backup configuration: a finished trace becomes a completed partial', async () => {
+    const sql = await openMigratedDb();
+    await seedRepresentativeHistory(sql);
+    const places = await new SqlitePlaceStore(async () => sql).listPlaces();
+    const checkpoints = new SqliteCompetitiveCheckpointStore(async () => sql);
+    await checkpoints.saveConfig({ pool: POOL, checkpoints: [cp('b', 500)], places, nowMs: BASE_MS + 1 });
+    // A trace from inside the checkpoint north to WORK (1000 m), 1 Hz.
+    const samples = [] as import('../src/domain/location-sample').LocationSample[];
+    for (let s = 0; s <= 100; s += 1) {
+      const at = offsetLatLng(HOME.center.latitude, HOME.center.longitude, Math.min(1010, 490 + s * 6), 0);
+      samples.push({
+        id: `open-${s}`,
+        sessionId: 's-open',
+        recordedAtMs: BASE_MS + 600_000 + s * 1000,
+        latitude: at.latitude,
+        longitude: at.longitude,
+        horizontalAccuracyMeters: 5,
+        speedMetersPerSecond: 6,
+        headingDegrees: 0,
+      });
+    }
+    await seedSession(
+      sql,
+      { id: 's-open', startedAtMs: BASE_MS + 600_000, stoppedAtMs: null, isActive: true, purpose: 'attempt', captureOutcome: 'active', reviewDisposition: 'pending' },
+      samples,
+    );
+    await new SqliteAttemptStore(async () => sql).saveAttempt(
+      baseAttempt({
+        id: 'open-partial-done',
+        sessionId: 's-open',
+        originPlaceId: HOME.id,
+        destinationPlaceId: WORK.id,
+        lifecycle: 'active',
+        validity: 'pending',
+        armedAtMs: BASE_MS + 599_000,
+        startedAtMs: BASE_MS + 601_000,
+        kind: 'partial',
+        startCheckpointId: 'b',
+        checkpointConfigVersion: 1,
+      }),
+    );
+    const { payload, report } = terminalizeRestoredLiveState(await readBackupSnapshot(sql));
+    const restored = payload.attempts.find((a) => a.id === 'open-partial-done')!;
+    assert.equal(restored.lifecycle, 'completed');
+    assert.equal(restored.validity, 'valid');
+    assert.equal(restored.kind, 'partial');
+    assert.equal(restored.origin_place_id, HOME.id);
+    assert.notEqual(restored.started_at_ms, null);
+    assert.notEqual(restored.finished_at_ms, null);
+    assert.equal(restored.reconciliation_status, 'reconciled', 'partial runs are never path-reconciled');
+    assert.ok(report.attempts.some((a) => a.attemptId === 'open-partial-done' && a.outcome === 'completed'));
+  });
+});

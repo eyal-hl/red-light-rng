@@ -54,6 +54,7 @@ const competitiveSegmentDeps = {
   places: placeStore,
   jobs: recalculationJobStore,
 };
+attemptRuntime.setCompetitiveCheckpoints(competitiveCheckpointStore);
 export const competitiveSegments = new CompetitiveSegmentsService(competitiveSegmentDeps);
 export const segmentRecalculation = new SegmentRecalculationService(competitiveSegmentDeps);
 // Derive checkpoint segments off the critical path once a run finishes; failures never affect the result.

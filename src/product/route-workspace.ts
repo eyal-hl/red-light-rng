@@ -75,6 +75,7 @@ import type { LocationPlatform, LocationFix, LocationTracker } from '../tracking
 import {
   AttemptRuntime,
   type ArmAttemptResult,
+  type PartialStartRequest,
   type HideIncompleteAttemptResult,
   type PathVariantRecomputeOptions,
   type PathVariantRecomputeResult,
@@ -622,8 +623,9 @@ export class RouteWorkspace {
     await this.settings.setActiveTransportationMode(mode);
   }
 
-  async startAttempt(): Promise<ArmAttemptResult> {
-    return this.attempts.start();
+  /** Plain START (full route) by default; `partial` arms a checkpoint start of a configured journey (#81). */
+  async startAttempt(options: { partial?: PartialStartRequest } = {}): Promise<ArmAttemptResult> {
+    return this.attempts.start(options);
   }
 
   async armRun(_routeId?: string): Promise<ArmAttemptResult> {
@@ -669,7 +671,10 @@ export class RouteWorkspace {
       this.navigationLoad.counters.inspectAttemptMisses += 1;
       const samples = await this.listAttemptSamples(attempt.sessionId);
       const inspectNow = isOpenAttempt(attempt) ? this.now() : (session?.stoppedAtMs ?? this.now());
-      const place = inspectPlaceAttemptRecord(attempt, places, samples, inspectNow);
+      const partial = await this.attempts.inspectPartialEngine(attempt, samples, inspectNow);
+      const place = partial
+        ? inspectPlaceAttemptRecord(attempt, partial.places, samples, inspectNow, partial.engine)
+        : inspectPlaceAttemptRecord(attempt, places, samples, inspectNow);
       let variant: AttemptDebugReport | null = null;
       if (route) {
         variant = inspectAttemptRecord(attempt, timingCourseFromRoute(route), samples);

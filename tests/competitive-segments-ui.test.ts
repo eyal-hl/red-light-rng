@@ -247,3 +247,47 @@ describe('UI wiring (#81)', () => {
     assert.match(context, /setOnAttemptCompleted/);
   });
 });
+
+describe('partial start UI wiring (#81)', () => {
+  const app = read('src/ui/AppRoot.tsx');
+  const home = read('src/ui/HomeScreen.tsx');
+  const panel = read('src/ui/CheckpointStartPanel.tsx');
+  const attemptScreen = read('src/ui/AttemptScreen.tsx');
+
+  it('the start panel renders nothing without configured journeys, so plain START is the default', () => {
+    assert.match(panel, /if \(!journeys \|\| journeys\.length === 0 \|\| !activeJourney \|\| activeKey == null\) \{\s*return null;/);
+    assert.match(home, /\{startPanel\}/);
+    assert.match(home, /<Text style=\{styles\.buttonText\}>START<\/Text>/, 'the original START button is untouched');
+    assert.match(app, /onStart=\{\(\) => \{\s*void onStartAttempt\(\);/);
+    assert.match(app, /workspace\.startAttempt\(\)/, 'plain START takes no options');
+  });
+
+  it('offers Full route vs Start at <checkpoint> with a suggestion, an override, the map and the board preview', () => {
+    assert.match(panel, /label: 'Full route'/);
+    assert.match(panel, /Start at \$\{item\.name\}/);
+    assert.match(panel, /suggestStartSelection/);
+    assert.match(panel, /setOverride/);
+    assert.match(panel, /startBoardPreview/);
+    assert.match(panel, /<RouteMap/);
+    assert.match(panel, /startZone=\{placeZone\(activeJourney\.origin/);
+    assert.match(panel, /finishZone=\{placeZone\(activeJourney\.destination/);
+    assert.match(panel, /checkpoints=\{activeJourney\.checkpoints\.map/);
+    assert.match(panel, /never counts on the full-route board/);
+    assert.match(panel, /passing other checkpoints never ends the run/);
+  });
+
+  it('arms through the workspace with the partial request and shows the checkpoint on the attempt screen', () => {
+    assert.match(app, /workspace\.startAttempt\(\{ partial: \{ pool, startCheckpointId \} \}\)/);
+    assert.match(app, /resolveStartCheckpointName\(attempt\)/);
+    assert.match(attemptScreen, /ARMED · CHECKPOINT START/);
+    assert.match(attemptScreen, /The walk to it is not timed/);
+    // Cancel / end are the unchanged controls.
+    assert.match(attemptScreen, /onPress=\{onCancel\}/);
+  });
+
+  it('the runtime and app context keep platform code out of the partial timing domain', () => {
+    const domain = read('src/domain/partial-timing.ts');
+    assert.doesNotMatch(domain, /^import .*(expo|react-native|tracking\/)/m);
+    assert.match(read('src/app-context.ts'), /attemptRuntime\.setCompetitiveCheckpoints\(competitiveCheckpointStore\)/);
+  });
+});

@@ -1,6 +1,7 @@
 import { EMPTY_ATTEMPT_LOCAL_START, type Attempt } from '../domain/attempt';
 import { reconstructAttemptLocalStart } from '../domain/attempt-local-time';
 import { CURRENT_ATTEMPT_RECONCILIATION_VERSION } from '../domain/attempt-reconciliation';
+import { partialTimingPlaces, replayPartialTrace } from '../domain/partial-timing';
 import { replayPlaceTrace, type PlaceTimingPlace } from '../domain/place-timing';
 import {
   BackupError,
@@ -77,26 +78,73 @@ export function terminalizeRestoredLiveState(payload: BackupPayload): {
     }
     const stoppedAtMs = stopTimeFor(attempt.session_id, attempt.armed_at_ms);
     if (attempt.kind === 'partial') {
-      // The place-timing replay below only knows origin-place starts. A formerly open partial run is
-      // never trusted as live and has no stored official start to keep: it becomes a clearly labeled
-      // partial non-result, keeping its checkpoint reference. (Replaying a checkpoint start is a
-      // later stage.)
-      lifecycleBySession.set(attempt.session_id, 'ended');
-      report.attempts.push({ attemptId: attempt.id, outcome: 'incomplete' });
+      // Replay a checkpoint start with the immutable configuration version stored on the attempt
+      // (the same engine as live timing). Without that configuration or destination it is a labeled
+      // partial non-result.
+      const config = payload.competitive_checkpoint_configs.find(
+        (item) =>
+          item.origin_place_id === attempt.origin_place_id &&
+          item.destination_place_id === attempt.destination_place_id &&
+          item.transportation_mode === attempt.transportation_mode &&
+          item.version === attempt.checkpoint_config_version,
+      );
+      const checkpoint = config?.checkpoints.find((item) => item.checkpoint_id === attempt.start_checkpoint_id);
+      const destinationRow = attempt.destination_place_id ? placesById.get(attempt.destination_place_id) : undefined;
+      let completedPartial = false;
+      let startedMs: number | null = null;
+      let finishedMs: number | null = null;
+      if (checkpoint && destinationRow) {
+        const partialPlaces = partialTimingPlaces(
+          {
+            id: checkpoint.checkpoint_id,
+            name: checkpoint.name,
+            center: { latitude: checkpoint.latitude, longitude: checkpoint.longitude },
+            radiusMeters: checkpoint.radius_meters,
+          },
+          {
+            id: destinationRow.id,
+            name: destinationRow.name,
+            center: { latitude: destinationRow.latitude, longitude: destinationRow.longitude },
+            departureRadiusMeters: destinationRow.departure_radius_meters,
+            arrivalRadiusMeters: destinationRow.arrival_radius_meters,
+          },
+        );
+        const partialSamples = [...(samplesBySession.get(attempt.session_id) ?? [])]
+          .sort((a, b) => a.recorded_at_ms - b.recorded_at_ms || a.id.localeCompare(b.id))
+          .map(mapLocationSampleRow);
+        const partialEngine = replayPartialTrace(
+          partialPlaces,
+          { latitude: destinationRow.latitude, longitude: destinationRow.longitude },
+          partialSamples,
+          { armedAtMs: attempt.armed_at_ms, nowMs: stoppedAtMs },
+        );
+        completedPartial =
+          partialEngine.lifecycle === 'completed' &&
+          partialEngine.validity === 'valid' &&
+          partialEngine.startedAtMs != null &&
+          partialEngine.finishedAtMs != null;
+        startedMs = partialEngine.startedAtMs;
+        finishedMs = completedPartial ? partialEngine.finishedAtMs : null;
+      }
+      const lifecycle: Attempt['lifecycle'] = completedPartial ? 'completed' : 'ended';
+      lifecycleBySession.set(attempt.session_id, lifecycle);
+      report.attempts.push({ attemptId: attempt.id, outcome: completedPartial ? 'completed' : 'incomplete' });
+      const local = startedMs == null ? EMPTY_ATTEMPT_LOCAL_START : reconstructAttemptLocalStart(startedMs);
       return {
         ...attempt,
-        lifecycle: 'ended',
-        validity: 'unranked',
-        started_at_ms: null,
-        finished_at_ms: null,
-        started_utc_offset_minutes: null,
-        started_timezone_id: null,
-        started_local_time_source: null,
-        result_acknowledged: 1,
+        lifecycle,
+        validity: completedPartial ? 'valid' : 'unranked',
+        started_at_ms: startedMs,
+        finished_at_ms: finishedMs,
+        started_utc_offset_minutes: local.startedUtcOffsetMinutes,
+        started_timezone_id: local.startedTimezoneId,
+        started_local_time_source: local.startedLocalTimeSource,
+        result_acknowledged: completedPartial ? attempt.result_acknowledged : 1,
         hidden_incomplete: 0,
         route_id: null,
         crossings: [],
         segment_results: [],
+        // Partial runs never take part in path-variant reconciliation.
         reconciliation_status: 'reconciled',
         reconciliation_version: CURRENT_ATTEMPT_RECONCILIATION_VERSION,
       };
