@@ -108,6 +108,9 @@ export function baseAttempt(overrides: Partial<Attempt> & Pick<Attempt, 'id' | '
     crossings: [],
     reconciliationStatus: 'reconciled',
     reconciliationVersion: 1,
+    kind: 'full',
+    startCheckpointId: null,
+    checkpointConfigVersion: null,
     ...overrides,
   };
 }

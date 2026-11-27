@@ -734,8 +734,8 @@ describe('history recalculation restore, migration and engine rules', () => {
   });
 
   it('migration 13 adds the job tables without touching existing data and enforces a single open job', async () => {
-    assert.equal(CURRENT_SCHEMA_VERSION, 13);
-    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, 13);
+    assert.ok(CURRENT_SCHEMA_VERSION >= 13);
+    assert.equal(MIGRATIONS[MIGRATIONS.length - 1]!.version, CURRENT_SCHEMA_VERSION);
     const sql = createMemorySqlExecutor();
     await sql.exec('PRAGMA foreign_keys = ON;');
     await sql.exec(LOCATION_SPIKE_SCHEMA);
@@ -764,7 +764,11 @@ describe('history recalculation restore, migration and engine rules', () => {
     );
     const before = await dumpDatabase(sql);
 
-    await applyMigrations(sql, 5_000);
+    // Apply exactly migration 13 (later migrations have their own tests).
+    await sql.withTransaction(async () => {
+      await MIGRATIONS.find((item) => item.version === 13)!.up(sql, 5_000);
+      await sql.exec('PRAGMA user_version = 13');
+    });
 
     assert.equal((await sql.getFirst<{ user_version: number }>('PRAGMA user_version'))!.user_version, 13);
     const after = await dumpDatabase(sql);

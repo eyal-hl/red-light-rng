@@ -1,4 +1,5 @@
 import {
+  attemptKind,
   isOpenAttempt,
   type Attempt,
   type AttemptCheckpointCrossing,
@@ -7,7 +8,12 @@ import {
   attemptNeedsReconciliation,
   parseAttemptReconciliationStatus,
 } from '../domain/attempt-reconciliation';
-import { OpenAttemptExistsError, type AttemptStore } from './attempt-store';
+import {
+  OpenAttemptExistsError,
+  type AttemptKindFilter,
+  type AttemptListOptions,
+  type AttemptStore,
+} from './attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from './location-sample-store';
 
 function cloneAttempt(attempt: Attempt): Attempt {
@@ -16,12 +22,26 @@ function cloneAttempt(attempt: Attempt): Attempt {
     hiddenIncomplete: attempt.hiddenIncomplete === true,
     reconciliationStatus: parseAttemptReconciliationStatus(attempt.reconciliationStatus),
     reconciliationVersion: attempt.reconciliationVersion ?? 0,
+    kind: attemptKind(attempt),
+    startCheckpointId: attempt.startCheckpointId ?? null,
+    checkpointConfigVersion: attempt.checkpointConfigVersion ?? null,
     crossings: attempt.crossings.map((crossing) => ({ ...crossing })),
   };
 }
 
+function matchesKind(attempt: Attempt, options: AttemptListOptions | undefined): boolean {
+  const kind: AttemptKindFilter = options?.kind ?? 'full';
+  return kind === 'all' || attemptKind(attempt) === kind;
+}
+
 export class MemoryAttemptStore implements AttemptStore {
   private readonly attempts = new Map<string, Attempt>();
+  private readonly deleteListeners = new Set<(attemptId: string) => void>();
+
+  /** Lets the memory segment-result store drop rows with their attempt (SQLite uses FK cascade). */
+  onAttemptDeleted(listener: (attemptId: string) => void): void {
+    this.deleteListeners.add(listener);
+  }
 
   constructor(private readonly sessions?: LocationSampleStore) {}
 
@@ -96,15 +116,16 @@ export class MemoryAttemptStore implements AttemptStore {
     return latest ? cloneAttempt(latest) : null;
   }
 
-  async listAttempts(): Promise<Attempt[]> {
+  async listAttempts(options?: AttemptListOptions): Promise<Attempt[]> {
     return [...this.attempts.values()]
+      .filter((attempt) => matchesKind(attempt, options))
       .sort((a, b) => b.armedAtMs - a.armedAtMs)
       .map((attempt) => cloneAttempt(attempt));
   }
 
-  async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
+  async listAttemptsForRoute(routeId: string, options?: AttemptListOptions): Promise<Attempt[]> {
     return [...this.attempts.values()]
-      .filter((attempt) => attempt.routeId === routeId)
+      .filter((attempt) => attempt.routeId === routeId && matchesKind(attempt, options))
       .sort((a, b) => b.armedAtMs - a.armedAtMs)
       .map((attempt) => cloneAttempt(attempt));
   }
@@ -113,10 +134,12 @@ export class MemoryAttemptStore implements AttemptStore {
     originPlaceId: string,
     destinationPlaceId: string,
     transportationMode: string,
+    options?: AttemptListOptions,
   ): Promise<Attempt[]> {
     return [...this.attempts.values()]
       .filter(
         (attempt) =>
+          matchesKind(attempt, options) &&
           attempt.originPlaceId === originPlaceId &&
           attempt.destinationPlaceId === destinationPlaceId &&
           attempt.transportationMode === transportationMode,
@@ -141,7 +164,9 @@ export class MemoryAttemptStore implements AttemptStore {
 
   async listAttemptsNeedingReconciliation(currentVersion: number): Promise<Attempt[]> {
     return [...this.attempts.values()]
-      .filter((attempt) => attemptNeedsReconciliation(attempt, currentVersion))
+      .filter(
+        (attempt) => attemptKind(attempt) === 'full' && attemptNeedsReconciliation(attempt, currentVersion),
+      )
       .sort((a, b) => b.armedAtMs - a.armedAtMs)
       .map((attempt) => cloneAttempt(attempt));
   }
@@ -149,7 +174,7 @@ export class MemoryAttemptStore implements AttemptStore {
   async peekFailedReconciliationAttemptId(): Promise<string | null> {
     let latest: Attempt | null = null;
     for (const attempt of this.attempts.values()) {
-      if (attempt.reconciliationStatus !== 'failed') {
+      if (attempt.reconciliationStatus !== 'failed' || attemptKind(attempt) !== 'full') {
         continue;
       }
       if (!latest || attempt.armedAtMs > latest.armedAtMs) {
@@ -161,6 +186,9 @@ export class MemoryAttemptStore implements AttemptStore {
 
   async deleteAttempt(attemptId: string): Promise<void> {
     this.attempts.delete(attemptId);
+    for (const listener of this.deleteListeners) {
+      listener(attemptId);
+    }
   }
 
   async acknowledgeResult(attemptId: string): Promise<void> {

@@ -1,5 +1,6 @@
 import {
   incompleteAttemptLabel,
+  isFullAttempt,
   isHiddenIncomplete,
   type Attempt,
   type IncompleteAttemptLabel,
@@ -30,7 +31,8 @@ export type AttemptUnavailabilityReason =
   | 'not_completed'
   | 'not_valid'
   | 'missing_start_coverage'
-  | 'replay_incomplete';
+  | 'replay_incomplete'
+  | 'partial_attempt';
 
 export type SegmentEndpoint =
   | { kind: 'start'; label: string }
@@ -227,6 +229,9 @@ export function deriveCurrentLayoutAttempt(
     segments: specs.map((spec) => unavailableSegment(spec)),
   });
 
+  if (!isFullAttempt(attempt)) {
+    return unavailable('partial_attempt');
+  }
   if (attempt.lifecycle !== 'completed') {
     return unavailable('not_completed');
   }
@@ -302,6 +307,9 @@ export function deriveAnchoredLayoutAttempt(
     segments: specs.map((spec) => unavailableSegment(spec)),
   });
 
+  if (!isFullAttempt(attempt)) {
+    return unavailable('partial_attempt');
+  }
   if (attempt.lifecycle !== 'completed' || attempt.startedAtMs == null || attempt.finishedAtMs == null) {
     return unavailable('not_completed');
   }
@@ -802,6 +810,8 @@ export function describeUnavailability(reason: AttemptUnavailabilityReason): str
       return 'Unranked — the course match was not reliable enough.';
     case 'not_completed':
       return 'This attempt is not an official run.';
+    case 'partial_attempt':
+      return 'Partial attempt: it only counts on checkpoint segment boards, not the full route.';
   }
 }
 

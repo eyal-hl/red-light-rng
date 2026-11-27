@@ -1,5 +1,6 @@
 import {
   incompleteAttemptLabel,
+  isFullAttempt,
   isHiddenIncomplete,
   isJourneyCompetitive,
   officialTimeMs,
@@ -40,9 +41,15 @@ export function tracesFromAttempts(attempts: readonly Attempt[]): JourneyAttempt
   return attempts.map((attempt) => ({ attempt, samples: [] }));
 }
 
+/**
+ * Full-route pool membership. Partial attempts (DEC-016) share the pool identity through
+ * `attemptJourneyPool`, but are not members of the full-route pool: rankings, PB, median,
+ * statistics, history and DNF rows all derive from this filter.
+ */
 export function attemptInPool(attempt: Attempt, pool: JourneyPoolId): boolean {
   const id = attemptJourneyPool(attempt);
   return (
+    isFullAttempt(attempt) &&
     id != null &&
     id.originPlaceId === pool.originPlaceId &&
     id.destinationPlaceId === pool.destinationPlaceId &&
@@ -171,7 +178,8 @@ export function listJourneyPools(
 ): JourneyPoolSummary[] {
   const keys = new Map<string, JourneyPoolId>();
   for (const trace of traces) {
-    const pool = attemptJourneyPool(trace.attempt);
+    // A pool only exists on the full-route board; partial attempts never create one (DEC-016).
+    const pool = isFullAttempt(trace.attempt) ? attemptJourneyPool(trace.attempt) : null;
     if (!pool) {
       continue;
     }

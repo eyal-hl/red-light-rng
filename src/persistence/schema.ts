@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_sample_session_time
   ON location_sample(session_id, recorded_at_ms);
 `;
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 export type AttemptRow = {
   id: string;
@@ -43,6 +43,10 @@ export type AttemptRow = {
   hidden_incomplete: number;
   reconciliation_status: string;
   reconciliation_version: number;
+  /** 'full' | 'partial' (schema v14; legacy rows are 'full'). */
+  kind: string;
+  start_checkpoint_id: string | null;
+  checkpoint_config_version: number | null;
 };
 
 export type AttemptCheckpointCrossingRow = {
@@ -184,4 +188,39 @@ export type RecalcJobItemRow = {
   base_started_at_ms: number | null;
   base_finished_at_ms: number | null;
   staged_json: string | null;
+};
+
+export type CompetitiveCheckpointConfigRow = {
+  id: string;
+  origin_place_id: string;
+  destination_place_id: string;
+  transportation_mode: string;
+  version: number;
+  status: string;
+  created_at_ms: number;
+};
+
+export type CompetitiveCheckpointRow = {
+  config_id: string;
+  checkpoint_id: string;
+  seq: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+};
+
+export type AttemptSegmentResultRow = {
+  id: string;
+  attempt_id: string;
+  config_version: number;
+  derivation_version: number;
+  from_checkpoint_id: string | null;
+  to_checkpoint_id: string | null;
+  status: string;
+  unavailable_reason: string | null;
+  started_at_ms: number | null;
+  ended_at_ms: number | null;
+  duration_ms: number | null;
+  derived_at_ms: number;
 };

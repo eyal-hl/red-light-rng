@@ -3,6 +3,9 @@ import {
   serializeBackup,
   type BackupAttempt,
   type BackupAttemptCrossing,
+  type BackupAttemptSegmentResult,
+  type BackupCompetitiveCheckpoint,
+  type BackupCompetitiveCheckpointConfig,
   type BackupLocationSample,
   type BackupPayload,
   type BackupPlace,
@@ -104,6 +107,41 @@ export const BACKUP_SCHEMA_COVERAGE: Record<string, Record<string, string>> = {
     hidden_incomplete: 'attempts[].hidden_incomplete',
     reconciliation_status: 'attempts[].reconciliation_status',
     reconciliation_version: 'attempts[].reconciliation_version',
+    kind: 'attempts[].kind',
+    start_checkpoint_id: 'attempts[].start_checkpoint_id',
+    checkpoint_config_version: 'attempts[].checkpoint_config_version',
+  },
+  competitive_checkpoint_config: {
+    id: 'competitive_checkpoint_configs[].id',
+    origin_place_id: 'competitive_checkpoint_configs[].origin_place_id',
+    destination_place_id: 'competitive_checkpoint_configs[].destination_place_id',
+    transportation_mode: 'competitive_checkpoint_configs[].transportation_mode',
+    version: 'competitive_checkpoint_configs[].version',
+    status: 'competitive_checkpoint_configs[].status',
+    created_at_ms: 'competitive_checkpoint_configs[].created_at_ms',
+  },
+  competitive_checkpoint: {
+    config_id: 'implicit: nested under competitive_checkpoint_configs[]',
+    checkpoint_id: 'competitive_checkpoint_configs[].checkpoints[].checkpoint_id',
+    seq: 'implicit: competitive_checkpoint_configs[].checkpoints array order',
+    name: 'competitive_checkpoint_configs[].checkpoints[].name',
+    latitude: 'competitive_checkpoint_configs[].checkpoints[].latitude',
+    longitude: 'competitive_checkpoint_configs[].checkpoints[].longitude',
+    radius_meters: 'competitive_checkpoint_configs[].checkpoints[].radius_meters',
+  },
+  attempt_segment_result: {
+    id: 'attempts[].segment_results[].id',
+    attempt_id: 'implicit: nested under attempts[]',
+    config_version: 'attempts[].segment_results[].config_version',
+    derivation_version: 'attempts[].segment_results[].derivation_version',
+    from_checkpoint_id: 'attempts[].segment_results[].from_checkpoint_id',
+    to_checkpoint_id: 'attempts[].segment_results[].to_checkpoint_id',
+    status: 'attempts[].segment_results[].status',
+    unavailable_reason: 'attempts[].segment_results[].unavailable_reason',
+    started_at_ms: 'attempts[].segment_results[].started_at_ms',
+    ended_at_ms: 'attempts[].segment_results[].ended_at_ms',
+    duration_ms: 'attempts[].segment_results[].duration_ms',
+    derived_at_ms: 'attempts[].segment_results[].derived_at_ms',
   },
   attempt_checkpoint_crossing: {
     id: 'attempts[].crossings[].id',
@@ -189,12 +227,27 @@ async function readPayload(sql: SqlExecutor): Promise<BackupPayload> {
     `SELECT id, route_id, origin_place_id, destination_place_id, transportation_mode, session_id,
             lifecycle, validity, armed_at_ms, started_at_ms, finished_at_ms,
             started_utc_offset_minutes, started_timezone_id, started_local_time_source,
-            result_acknowledged, hidden_incomplete, reconciliation_status, reconciliation_version
+            result_acknowledged, hidden_incomplete, reconciliation_status, reconciliation_version,
+            kind, start_checkpoint_id, checkpoint_config_version
      FROM attempt ORDER BY id`,
   );
   const crossingRows = await sql.getAll<BackupAttemptCrossing & { attempt_id: string }>(
     `SELECT id, attempt_id, checkpoint_id, checkpoint_name, checkpoint_progress_m, crossed_at_ms
      FROM attempt_checkpoint_crossing ORDER BY attempt_id, crossed_at_ms, checkpoint_progress_m, id`,
+  );
+  const segmentRows = await sql.getAll<BackupAttemptSegmentResult & { attempt_id: string }>(
+    `SELECT id, attempt_id, config_version, derivation_version, from_checkpoint_id, to_checkpoint_id,
+            status, unavailable_reason, started_at_ms, ended_at_ms, duration_ms, derived_at_ms
+     FROM attempt_segment_result ORDER BY attempt_id, id`,
+  );
+  const configRows = await sql.getAll<Omit<BackupCompetitiveCheckpointConfig, 'checkpoints'>>(
+    `SELECT id, origin_place_id, destination_place_id, transportation_mode, version, status, created_at_ms
+     FROM competitive_checkpoint_config
+     ORDER BY origin_place_id, destination_place_id, transportation_mode, version`,
+  );
+  const checkpointConfigRows = await sql.getAll<BackupCompetitiveCheckpoint & { config_id: string }>(
+    `SELECT config_id, checkpoint_id, name, latitude, longitude, radius_meters
+     FROM competitive_checkpoint ORDER BY config_id, seq, checkpoint_id`,
   );
   const settingRows = await sql.getAll<{ key: string; value: string }>(
     `SELECT key, value FROM app_setting ORDER BY key`,
@@ -217,6 +270,19 @@ async function readPayload(sql: SqlExecutor): Promise<BackupPayload> {
     const list = crossingsByAttempt.get(attemptId) ?? [];
     list.push(crossing);
     crossingsByAttempt.set(attemptId, list);
+  }
+
+  const segmentsByAttempt = new Map<string, BackupAttemptSegmentResult[]>();
+  for (const { attempt_id: attemptId, ...result } of segmentRows) {
+    const list = segmentsByAttempt.get(attemptId) ?? [];
+    list.push(result);
+    segmentsByAttempt.set(attemptId, list);
+  }
+  const checkpointsByConfig = new Map<string, BackupCompetitiveCheckpoint[]>();
+  for (const { config_id: configId, ...checkpoint } of checkpointConfigRows) {
+    const list = checkpointsByConfig.get(configId) ?? [];
+    list.push(checkpoint);
+    checkpointsByConfig.set(configId, list);
   }
 
   const settings: BackupSettings = {};
@@ -243,8 +309,13 @@ async function readPayload(sql: SqlExecutor): Promise<BackupPayload> {
         ({
           ...row,
           crossings: crossingsByAttempt.get(row.id as string) ?? [],
+          segment_results: segmentsByAttempt.get(row.id as string) ?? [],
         }) as unknown as BackupAttempt,
     ),
+    competitive_checkpoint_configs: configRows.map((row) => ({
+      ...row,
+      checkpoints: checkpointsByConfig.get(row.id) ?? [],
+    })),
     settings,
   };
 }

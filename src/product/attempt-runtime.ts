@@ -30,7 +30,7 @@ import { attemptJourneyPool } from '../domain/journey-analysis';
 import { PATH_VARIANT_CLASSIFICATION_VERSION, planPathVariantRecompute } from '../domain/path-variant-discovery';
 import type { TransportationMode } from '../domain/route';
 import { timingCourseFromRoute } from '../domain/attempt-analysis';
-import type { AttemptStore } from '../persistence/attempt-store';
+import type { AttemptListOptions, AttemptStore } from '../persistence/attempt-store';
 import type { CompleteSessionInput, LocationSampleStore } from '../persistence/location-sample-store';
 import type { PlaceStore } from '../persistence/place-store';
 import type { RouteStore } from '../persistence/route-store';
@@ -317,8 +317,9 @@ export class AttemptRuntime {
     return this.attempts.getAttempt(attemptId);
   }
 
-  async listAttempts(): Promise<Attempt[]> {
-    return this.attempts.listAttempts();
+  /** Defaults to full attempts only (DEC-016); pass `{ kind: 'all' }` for history that includes partials. */
+  async listAttempts(options?: AttemptListOptions): Promise<Attempt[]> {
+    return this.attempts.listAttempts(options);
   }
 
   async peekFailedReconciliationAttemptId(): Promise<string | null> {
@@ -331,16 +332,22 @@ export class AttemptRuntime {
     return this.attempts.listAttemptsNeedingReconciliation(currentVersion);
   }
 
-  async listAttemptsForRoute(routeId: string): Promise<Attempt[]> {
-    return this.attempts.listAttemptsForRoute(routeId);
+  async listAttemptsForRoute(routeId: string, options?: AttemptListOptions): Promise<Attempt[]> {
+    return this.attempts.listAttemptsForRoute(routeId, options);
   }
 
   async listAttemptsForJourney(
     originPlaceId: string,
     destinationPlaceId: string,
     transportationMode: TransportationMode,
+    options?: AttemptListOptions,
   ): Promise<Attempt[]> {
-    return this.attempts.listAttemptsForJourney(originPlaceId, destinationPlaceId, transportationMode);
+    return this.attempts.listAttemptsForJourney(
+      originPlaceId,
+      destinationPlaceId,
+      transportationMode,
+      options,
+    );
   }
 
   async countAttemptsReferencingPlace(placeId: string): Promise<number> {

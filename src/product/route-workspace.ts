@@ -583,7 +583,8 @@ export class RouteWorkspace {
       return { ok: false, reason: PLACE_RECALCULATION_JOB_REASON };
     }
 
-    const referencing = (await this.attempts.listAttempts()).filter((attempt) =>
+    // Partial attempts reference the same Places and must be removed with them.
+    const referencing = (await this.attempts.listAttempts({ kind: 'all' })).filter((attempt) =>
       attemptReferencesPlace(attempt, placeId),
     );
     const protectedSessionIds = new Set(
