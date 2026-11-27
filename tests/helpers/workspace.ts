@@ -140,6 +140,8 @@ export function createMemoryWorkspace(options?: {
     () => options?.routeId ?? 'route-1',
     () => options?.createPlaceId?.() ?? options?.placeId ?? `place-${++nextPlace}`,
     recalc,
+    segments,
+    segmentRecalc,
   );
   return {
     workspace,
@@ -238,6 +240,8 @@ export function createSqliteWorkspace(
     () => options?.routeId ?? 'sql-route',
     () => options?.createPlaceId?.() ?? `sql-place-${++nextPlace}`,
     recalc,
+    segments,
+    segmentRecalc,
   );
   return {
     workspace,

@@ -72,6 +72,8 @@ export const routeWorkspace = new RouteWorkspace(
   undefined,
   undefined,
   historyRecalculation,
+  competitiveSegments,
+  segmentRecalculation,
 );
 
 export const backupService = new BackupService(

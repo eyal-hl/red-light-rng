@@ -23,7 +23,9 @@ import { transportationModeIcon, transportationModeLabel } from '../domain/route
 import { delayHeatMapFeatures, delayHotspotMapMarkers } from '../map/hotspot-display';
 import { RouteMap } from '../map/RouteMap';
 import { pathVariantDisplayStyle, pathVariantDisplayStyles, pathVariantsToMapLines } from '../map/path-variant-display';
+import type { CompetitiveSegmentsService } from '../product/competitive-segments';
 import { DeferredMapSlot } from './DeferredMapSlot';
+import { JourneySegmentBoards } from './JourneySegmentBoards';
 import { JourneyDelayHeat } from './JourneyDelayHeat';
 import { JourneyDelayHotspots } from './JourneyDelayHotspots';
 import { JourneyWaitViewSwitch } from './JourneyWaitViewSwitch';
@@ -51,6 +53,11 @@ type JourneyDetailScreenProps = {
   onOpenGroupAttempts: (group: JourneyDepartureGroup) => void;
   onOpenPathVariant: (routeId: string) => void;
   onOpenHotspotAttempt: (attemptId: string) => void;
+  /** Competitive checkpoints (#81). Omitted: the screen is exactly the pre-feature screen. */
+  segments?: CompetitiveSegmentsService;
+  segmentsRefreshKey?: number;
+  onOpenCheckpoints?: () => void;
+  onOpenSegmentAttempt?: (attemptId: string, segmentKey: string) => void;
 };
 
 export function JourneyDetailScreen({
@@ -69,6 +76,10 @@ export function JourneyDetailScreen({
   onOpenGroupAttempts,
   onOpenPathVariant,
   onOpenHotspotAttempt,
+  segments,
+  segmentsRefreshKey,
+  onOpenCheckpoints,
+  onOpenSegmentAttempt,
 }: JourneyDetailScreenProps) {
   const [statsView, setStatsView] = useState<JourneyStatsView>('overall');
   const variantStyles = pathVariantDisplayStyles(pathVariants.map((item) => item.route.id));
@@ -180,6 +191,20 @@ export function JourneyDetailScreen({
         <JourneyStatRow label="PB" value={durationOrDash(statistics.pbTimeMs ?? summary.pbTimeMs)} />
         <JourneyStatRow label="Last" value={durationOrDash(statistics.latestTimeMs ?? summary.lastTimeMs)} />
         <JourneyStatRow label="Attempts" value={String(statistics.validAttemptCount)} />
+        {segments && onOpenCheckpoints && onOpenSegmentAttempt ? (
+          <JourneySegmentBoards
+            segments={segments}
+            pool={{
+              originPlaceId: origin.id,
+              destinationPlaceId: destination.id,
+              transportationMode: summary.transportationMode,
+            }}
+            grouping={grouping}
+            refreshKey={segmentsRefreshKey}
+            onOpenCheckpoints={onOpenCheckpoints}
+            onOpenAttempt={onOpenSegmentAttempt}
+          />
+        ) : null}
         <JourneyStatisticsDashboard
           statistics={statistics}
           grouping={grouping}
@@ -306,6 +331,16 @@ export function JourneyDetailScreen({
           >
             <Text style={styles.buttonText}>HISTORY</Text>
           </Pressable>
+          {onOpenCheckpoints ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={onOpenCheckpoints}
+              style={[styles.button, styles.secondaryButton, busy ? styles.disabledButton : null]}
+            >
+              <Text style={styles.buttonText}>CHECKPOINTS & SEGMENTS</Text>
+            </Pressable>
+          ) : null}
         </View>
       </ScrollView>
     </View>

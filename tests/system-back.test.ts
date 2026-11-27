@@ -43,6 +43,9 @@ function recordActions(): { calls: SystemBackAction[]; actions: SystemBackAction
       leaveAttemptDetailToHistory: () => {
         calls.push('leaveAttemptDetailToHistory');
       },
+      leaveCheckpointsToJourney: () => {
+        calls.push('leaveCheckpointsToJourney');
+      },
     },
   };
 }
@@ -106,6 +109,7 @@ describe('system back policy', () => {
     const nested: Array<[AppScreenKind, SystemBackAction]> = [
       ['history', 'leaveHistoryToDetail'],
       ['attempt-detail', 'leaveAttemptDetailToHistory'],
+      ['checkpoints', 'leaveCheckpointsToJourney'],
     ];
 
     for (const [kind, action] of nested) {

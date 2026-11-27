@@ -92,6 +92,8 @@ import {
   type SampleIdentity,
 } from './derived-view-cache';
 import type { HistoryRecalculationService } from './history-recalculation';
+import type { CompetitiveSegmentsService, SegmentRecalculationService } from './competitive-segments';
+import { partialRunRows, type PartialRunRow } from './competitive-segments-view';
 import {
   createNavigationLoadState,
   timeNavigationLoad,
@@ -143,6 +145,8 @@ export type LoadedJourney = {
   statistics: JourneyPoolStatistics;
   departureGrouping: JourneyDepartureGrouping;
   history: JourneyHistoryRow[];
+  /** Partial (checkpoint-start) runs of this journey: listed in history, never ranked or counted. */
+  partialRuns: PartialRunRow[];
   routes: Route[];
   pathVariants: JourneyPathVariantSummary[];
 };
@@ -180,8 +184,13 @@ export class RouteWorkspace {
     private readonly createPlaceId: () => string = createId,
     /** Manual history recalculation (#77); its job blocks Place centre/radius edits. */
     readonly recalculation?: HistoryRecalculationService,
+    /** Competitive checkpoint segments (#81): config, stale status, boards, results. */
+    readonly segments?: CompetitiveSegmentsService,
+    /** Manual "Recalculate segments" job (#81). */
+    readonly segmentRecalculation?: SegmentRecalculationService,
   ) {
     recalculation?.setOnPublished(() => this.invalidateDerivedCaches());
+    segmentRecalculation?.setOnPublished(() => this.invalidateDerivedCaches());
   }
 
   /** Drops every in-memory derived view, e.g. after a backup restore replaced the underlying data. */
@@ -281,7 +290,8 @@ export class RouteWorkspace {
         this.sessions.findPendingRouteCreation(),
         this.attempts.getOpenAttempt(),
         this.attempts.getUnacknowledgedResult(),
-        this.attempts.listAttempts(),
+        // Partial DNFs appear (labeled) in the incomplete list; pools and stats still ignore partials.
+        this.attempts.listAttempts({ kind: 'all' }),
         this.settings.getActiveTransportationMode(),
         this.attempts.peekFailedReconciliationAttemptId(),
       ]);
@@ -879,15 +889,19 @@ export class RouteWorkspace {
         this.navigationLoad.counters.loadJourneyMisses += 1;
         return { value: null, cacheHit: false };
       }
-      const [allAttempts, routes] = await Promise.all([
+      const [allAttempts, routes, partialAttempts] = await Promise.all([
         this.attempts.listAttempts(),
         this.routes.listRoutes(),
+        this.attempts.listAttemptsForJourney(pool.originPlaceId, pool.destinationPlaceId, pool.transportationMode, {
+          kind: 'partial',
+        }),
       ]);
       const asOfMs = this.now();
       const poolAttempts = allAttempts.filter((attempt) => attemptInPool(attempt, pool));
       const key = journeyDerivationKey({
         pool,
-        attempts: poolAttempts,
+        // Partials never enter statistics, but a change to them must refresh the cached history.
+        attempts: [...poolAttempts, ...partialAttempts],
         origin,
         destination,
         routes,
@@ -906,6 +920,10 @@ export class RouteWorkspace {
       }
       this.navigationLoad.counters.loadJourneyMisses += 1;
       const traces = tracesFromAttempts(poolAttempts);
+      const names = new Map<string, string | null>();
+      for (const attempt of partialAttempts) {
+        names.set(attempt.id, (await this.segments?.resolveStartCheckpointName(attempt)) ?? null);
+      }
       const loaded: LoadedJourney = {
         origin,
         destination,
@@ -913,6 +931,7 @@ export class RouteWorkspace {
         statistics: computeJourneyPoolStatistics(pool, traces, asOfMs),
         departureGrouping: computeJourneyPoolDepartureGrouping(pool, traces, asOfMs),
         history: journeyHistoryRows(pool, traces),
+        partialRuns: partialRunRows(partialAttempts, (attempt) => names.get(attempt.id) ?? null),
         routes,
         pathVariants: summarizeJourneyPathVariants(
           origin,

@@ -136,3 +136,12 @@ The long-term goal is to remove even the START step when confidence is high enou
 4. User opens the app only after arriving at another saved place.
 
 This is intentionally not required for V0.1. The armed START workflow exists so real-world data can be collected before solving passive recognition.
+
+## Checkpoints & segments (issue #81, DEC-016)
+
+- **Where:** a journey's detail screen has a secondary **CHECKPOINTS & SEGMENTS** button (no new main navigation). Journeys without checkpoints look and behave exactly as before; the full route stays the default board.
+- **Editor:** ordered, named checkpoints on the map (tap to place, or use the current location), editable radius 8-250 m, reorder, delete. The original start (green) and finish (red) are shown distinctly and are not editable here. The screen previews the segments a ride through them qualifies for, shows validation errors (radius, overlap with places or other checkpoints), and states that saving makes existing segment results stale (official times, PBs and rankings are unaffected). Editing is disabled, with the reason shown, while a run is armed/active or a recalculation job exists.
+- **Recalculate segments:** an explicit, confirmed, resumable action on the same screen. It shows how many past runs have no results for the current checkpoints, progress, cancel, retry and a manual Resume after a restart. Nothing runs automatically.
+- **Journey screen:** a segment selector (Full route by default) lists each segment with PB, rank, median and eligible count, the existing weekday/time-of-day filters and ranked/newest sort. Entries say whether they came from a full run or a partial start; tapping one opens the original attempt with that section highlighted on the map.
+- **History:** partial runs (and partial did-not-start/finish non-results) appear in their own labeled section; they are never ranked or counted in full-route statistics.
+- **After a run:** completed segment times, segment rank/PB and a NEW SEGMENT PB marker load in the background without delaying Done/Back; stale, unavailable and insufficient-data states are shown explicitly.

@@ -13,7 +13,8 @@ export type AppScreenKind =
   | 'history'
   | 'attempt'
   | 'attempt-result'
-  | 'attempt-detail';
+  | 'attempt-detail'
+  | 'checkpoints';
 
 export type SystemBackAction =
   | 'none'
@@ -25,7 +26,8 @@ export type SystemBackAction =
   | 'leaveHistoryToDetail'
   | 'inspectAttempt'
   | 'acknowledgeAttemptResult'
-  | 'leaveAttemptDetailToHistory';
+  | 'leaveAttemptDetailToHistory'
+  | 'leaveCheckpointsToJourney';
 
 export type SystemBackActions = {
   leaveToHome: () => void;
@@ -37,6 +39,7 @@ export type SystemBackActions = {
   inspectAttempt: () => void;
   acknowledgeAttemptResult: () => void;
   leaveAttemptDetailToHistory: () => void;
+  leaveCheckpointsToJourney: () => void;
 };
 
 export function isRootScreen(kind: AppScreenKind): boolean {
@@ -70,6 +73,8 @@ export function systemBackAction(kind: AppScreenKind): SystemBackAction {
       return 'acknowledgeAttemptResult';
     case 'attempt-detail':
       return 'leaveAttemptDetailToHistory';
+    case 'checkpoints':
+      return 'leaveCheckpointsToJourney';
   }
 }
 

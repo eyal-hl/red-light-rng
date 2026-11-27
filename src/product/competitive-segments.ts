@@ -43,6 +43,7 @@ import type {
   RecalculationJobStore,
 } from '../persistence/recalculation-job-store';
 import { yieldToEventLoop, type IdleYield } from './idle-yield';
+import { buildAttemptSegmentsView, type AttemptSegmentsView } from './competitive-segments-view';
 import {
   RECALCULATION_DEFAULT_CHUNK_SIZE,
   type RecalculationProgress,
@@ -173,6 +174,58 @@ export class CompetitiveSegmentsService {
     } catch {
       return { status: 'skipped', reason: 'error' };
     }
+  }
+
+  /**
+   * Segment section data for one attempt's result screen. Read-only except for ONE case:
+   * `deriveIfMissing` (the just-finished result screen only) derives that single run when the live
+   * hook has not stored its rows yet. Historical runs are never derived here; they report `stale`
+   * until the user runs Recalculate segments.
+   */
+  async loadAttemptSegments(
+    attemptId: string,
+    options: { deriveIfMissing?: boolean } = {},
+  ): Promise<AttemptSegmentsView> {
+    const attempt = await this.deps.attempts.getAttempt(attemptId);
+    const empty = (state: AttemptSegmentsView['state']): AttemptSegmentsView => ({
+      state,
+      message: null,
+      attemptKind: attempt?.kind === 'partial' ? 'partial' : 'full',
+      startCheckpointName: null,
+      rows: [],
+    });
+    const pool = attempt ? poolOf(attempt) : null;
+    if (!attempt || !pool) {
+      return empty('unconfigured');
+    }
+    const config = await this.deps.checkpoints.getCurrentConfig(pool);
+    if (!config || config.checkpoints.length === 0) {
+      return empty('unconfigured');
+    }
+    const eligible = isSegmentEligibleAttempt(attempt) && attemptMatchesConfig(attempt, config);
+    const readRows = async () =>
+      (await this.deps.checkpoints.listSegmentResults(attemptId)).filter(
+        (row) => !isSegmentResultStale(row, config.version),
+      );
+    let results = await readRows();
+    if (eligible && results.length === 0 && options.deriveIfMissing) {
+      await this.deriveForAttempt(attemptId);
+      results = await readRows();
+    }
+    const boards = eligible
+      ? (await this.loadSegmentBoards(pool)).boards
+      : [];
+    return buildAttemptSegmentsView({ attempt, config, results, boards, eligible });
+  }
+
+  /** Name of the checkpoint a partial attempt started at, resolved against its own configuration version. */
+  async resolveStartCheckpointName(attempt: Attempt): Promise<string | null> {
+    const pool = poolOf(attempt);
+    if (!pool || attempt.startCheckpointId == null || attempt.checkpointConfigVersion == null) {
+      return null;
+    }
+    const config = await this.deps.checkpoints.getConfig(pool, attempt.checkpointConfigVersion);
+    return config?.checkpoints.find((item) => item.id === attempt.startCheckpointId)?.name ?? null;
   }
 
   async getCurrentConfig(pool: CompetitiveCheckpointPool): Promise<CompetitiveCheckpointConfig | null> {
