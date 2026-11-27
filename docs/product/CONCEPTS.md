@@ -102,6 +102,10 @@ A manual, confirmed, resumable job (issue #81) that derives competitive segment 
 
 An attempt that starts at a competitive checkpoint instead of the origin Place (`kind = 'partial'`, with `start_checkpoint_id` and the checkpoint configuration version). It only competes on segment boards that start at its checkpoint or later and is never part of full-route ranking, PB, median, statistics or DNF accounting. All other attempts (including every pre-#81 attempt) are `full`.
 
+### Potential full-route record
+
+A display-only, hypothetical estimate shown for a completed partial attempt (DEC-016): fastest ("best case", optimistic) and median ("typical") actual start -> checkpoint prefix of eligible full runs of the same journey and checkpoint configuration, plus the partial's measured suffix, compared separately with the actual full-route PB. Best needs 1 sample, typical needs 3 (even N averages the middle two); N is shown. Never stored, never ranked, never awarded.
+
 ## Split
 
 A timing result associated with reaching a checkpoint on a compatible path variant. In UI language, "split" may refer to either cumulative elapsed time at a checkpoint or the segment between two adjacent checkpoints; when ambiguity matters, use **split elapsed time** and **segment time** explicitly.

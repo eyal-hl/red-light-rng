@@ -52,6 +52,7 @@ import {
 import { RouteMap, type RouteMapWaitMarkerTone } from '../map/RouteMap';
 import { DeferredMapSlot } from './DeferredMapSlot';
 import { AttemptSegmentsPanel } from './AttemptSegmentsPanel';
+import { PotentialRecordPanel } from './PotentialRecordPanel';
 import type { CompetitiveSegmentsService } from '../product/competitive-segments';
 import { segmentHighlightPath, type AttemptSegmentsView } from '../product/competitive-segments-view';
 import { GhostDeltaChart } from './GhostDeltaChart';
@@ -1071,6 +1072,9 @@ export function AttemptResultScreen({
             onSelectSegment={(key) => setSegmentKeyState({ attemptId: attempt.id, key })}
             onLoaded={onSegmentsLoaded}
           />
+        ) : null}
+        {segments && attempt.kind === 'partial' && completed ? (
+          <PotentialRecordPanel key={`potential-${attempt.id}`} service={segments} attempt={attempt} />
         ) : null}
         {onChangeMode ? (
           <View>

@@ -15,6 +15,7 @@ import {
   type AttemptSegmentResult,
   type SegmentUnavailableReason,
 } from '../domain/segment-derivation';
+import type { PotentialRecordResult } from '../domain/potential-record';
 import type { SegmentBoard, SegmentBoardEntry } from '../domain/segment-leaderboard';
 
 /**
@@ -487,5 +488,67 @@ export function segmentRecalcSummary(status: {
     headline: 'Past runs have no segment times for the current checkpoints yet.',
     offerRecalculate: true,
     staleLabel: `${status.staleAttemptCount} of ${status.eligibleAttemptCount} run${status.eligibleAttemptCount === 1 ? ' needs' : 's need'} recalculation`,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Potential full-route record (hypothetical, display only)
+// ---------------------------------------------------------------------------------------------
+
+export const POTENTIAL_RECORD_DISCLAIMER =
+  'Hypothetical estimate, not an official result and not guaranteed. Nothing here is saved or counted in rankings, personal bests or statistics.';
+export const POTENTIAL_NOT_APPLICABLE_MESSAGE = 'A potential full-route record is only shown for completed checkpoint-start runs.';
+export const POTENTIAL_CONFIG_CHANGED_MESSAGE =
+  'The checkpoints changed since this run, so earlier full runs are not comparable and no estimate is shown.';
+
+export type PotentialRowTone = 'record' | 'tie' | 'slower' | 'neutral' | 'unavailable';
+
+export type PotentialRow = {
+  kind: 'best_case' | 'typical';
+  title: string;
+  /** Total hypothetical full-route time, or null without an estimate. */
+  totalMs: number | null;
+  detail: string;
+  tone: PotentialRowTone;
+};
+
+export function describePotentialRecord(
+  result: PotentialRecordResult,
+  checkpointName: string,
+  formatMs: (ms: number) => string,
+): { rows: PotentialRow[]; pbLine: string; sampleLine: string } {
+  const pbLine =
+    result.fullPbMs == null ? 'No full-route PB yet to compare with.' : `Actual full-route PB ${formatMs(result.fullPbMs)}`;
+  const sampleLine =
+    result.sampleCount === 0
+      ? `No full runs with a timed start → ${checkpointName} yet.`
+      : `${result.sampleCount} full run${result.sampleCount === 1 ? '' : 's'} with a timed start → ${checkpointName}.`;
+  const row = (slot: PotentialRecordResult['best'], kind: PotentialRow['kind'], title: string): PotentialRow => {
+    if (slot.status === 'insufficient') {
+      return {
+        kind,
+        title,
+        totalMs: null,
+        tone: 'unavailable',
+        detail: `No estimate: needs at least ${slot.required} full run${slot.required === 1 ? '' : 's'} with a timed start → ${checkpointName} (have ${slot.sampleCount}).`,
+      };
+    }
+    const { estimate } = slot;
+    const parts = `${formatMs(estimate.prefixMs)} to ${checkpointName} + ${formatMs(estimate.suffixMs)} (this run), ${estimate.sampleCount} sample${estimate.sampleCount === 1 ? '' : 's'}`;
+    switch (estimate.comparison.kind) {
+      case 'potential_record':
+        return { kind, title, totalMs: estimate.totalMs, tone: 'record', detail: `${parts}. ${formatMs(estimate.comparison.fasterByMs)} faster than your PB: a potential record, not awarded.` };
+      case 'tie':
+        return { kind, title, totalMs: estimate.totalMs, tone: 'tie', detail: `${parts}. Ties your full-route PB.` };
+      case 'slower':
+        return { kind, title, totalMs: estimate.totalMs, tone: 'slower', detail: `${parts}. ${formatMs(estimate.comparison.slowerByMs)} slower than your PB.` };
+      default:
+        return { kind, title, totalMs: estimate.totalMs, tone: 'neutral', detail: `${parts}. No full-route PB to compare with yet.` };
+    }
+  };
+  return {
+    pbLine,
+    sampleLine,
+    rows: [row(result.best, 'best_case', 'Best case (optimistic)'), row(result.typical, 'typical', 'Typical (median)')],
   };
 }

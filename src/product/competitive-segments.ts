@@ -20,6 +20,13 @@ import {
   type SegmentRecalculationScope,
 } from '../domain/history-recalculation';
 import { createId } from '../domain/ids';
+import {
+  actualFullRoutePbMs,
+  computePotentialRecord,
+  selectPrefixReferences,
+  type PotentialRecordResult,
+} from '../domain/potential-record';
+import { officialTimeMs } from '../domain/attempt';
 import type { TransportationMode } from '../domain/route';
 import type { StartOptionsJourney } from '../domain/start-options';
 import { journeyPoolKey } from '../domain/journey';
@@ -104,6 +111,12 @@ export type SegmentPoolStatus = {
 export type SaveCheckpointsResult =
   | { ok: true; config: CompetitiveCheckpointConfig; changed: boolean }
   | { ok: false; reason: string; issues: CompetitiveCheckpointIssue[] };
+
+export type PotentialRecordView =
+  | { state: 'not_applicable' }
+  /** The configuration changed since the run: earlier full runs are not comparable. */
+  | { state: 'config_changed' }
+  | { state: 'ready'; checkpointName: string; result: PotentialRecordResult };
 
 export type SegmentBoardsResult = {
   config: CompetitiveCheckpointConfig | null;
@@ -218,6 +231,51 @@ export class CompetitiveSegmentsService {
       ? (await this.loadSegmentBoards(pool)).boards
       : [];
     return buildAttemptSegmentsView({ attempt, config, results, boards, eligible });
+  }
+
+  /**
+   * Hypothetical potential full-route record of a completed partial attempt, computed on demand from
+   * stored rows. Read-only: nothing is written, ranked or used as a reference sample.
+   */
+  async loadPotentialRecord(attemptId: string): Promise<PotentialRecordView> {
+    const attempt = await this.deps.attempts.getAttempt(attemptId);
+    const suffixMs = attempt ? officialTimeMs(attempt) : null;
+    if (
+      !attempt ||
+      attempt.kind !== 'partial' ||
+      attempt.lifecycle !== 'completed' ||
+      attempt.validity !== 'valid' ||
+      suffixMs == null ||
+      attempt.startCheckpointId == null ||
+      attempt.checkpointConfigVersion == null
+    ) {
+      return { state: 'not_applicable' };
+    }
+    const pool = poolOf(attempt);
+    const config = pool ? await this.deps.checkpoints.getCurrentConfig(pool) : null;
+    if (!pool || !config || config.version !== attempt.checkpointConfigVersion) {
+      return { state: 'config_changed' };
+    }
+    const checkpoint = config.checkpoints.find((item) => item.id === attempt.startCheckpointId);
+    if (!checkpoint) {
+      return { state: 'config_changed' };
+    }
+    const [attempts, results] = await Promise.all([
+      this.deps.attempts.listAttemptsForJourney(pool.originPlaceId, pool.destinationPlaceId, pool.transportationMode, {
+        kind: 'all',
+      }),
+      this.deps.checkpoints.listSegmentResultsForPool(pool, config.version),
+    ]);
+    const references = selectPrefixReferences({ partial: attempt, configVersion: config.version, attempts, results });
+    return {
+      state: 'ready',
+      checkpointName: checkpoint.name,
+      result: computePotentialRecord({
+        prefixDurationsMs: references.durationsMs,
+        suffixMs,
+        fullPbMs: actualFullRoutePbMs(attempts),
+      }),
+    };
   }
 
   /** Name of the checkpoint a partial attempt started at, resolved against its own configuration version. */
